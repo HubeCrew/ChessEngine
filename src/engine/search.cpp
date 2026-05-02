@@ -5,6 +5,7 @@
 
 #include "chess/core/movegen.h"
 #include "chess/engine/evaluation.h"
+#include "chess/engine/static_exchange.h"
 
 namespace chess::engine {
 
@@ -32,6 +33,30 @@ int mvv_lva_score(const Board& board, const Move& move) {
         return 0;
     }
     return 10 * material_value(type_of(victim)) - material_value(type_of(attacker));
+}
+
+int promotion_gain(const Move& move) {
+    if (!move.is_promotion()) {
+        return 0;
+    }
+    return material_value(move.promotion) - material_value(PieceType::Pawn);
+}
+
+int immediate_capture_gain(const Board& board, const Move& move) {
+    return material_value(type_of(captured_piece_for(board, move))) + promotion_gain(move);
+}
+
+bool needs_see_for_loss_detection(const Board& board, const Move& move) {
+    if (!move.is_capture() || move.is_promotion()) {
+        return false;
+    }
+
+    const Piece attacker = board.piece_at(move.from);
+    if (attacker == Piece::None) {
+        return false;
+    }
+
+    return material_value(type_of(captured_piece_for(board, move))) < material_value(type_of(attacker));
 }
 
 int score_to_tt(int score, int ply) {
@@ -63,6 +88,14 @@ bool same_move(const Move& lhs, const Move& rhs) {
 
 bool is_valid_move_shape(const Move& move) {
     return is_valid_square(move.from) && is_valid_square(move.to);
+}
+
+bool move_gives_check(Board& board, const Move& move) {
+    const Color moving_side = board.side_to_move();
+    const UndoState undo = board.make_move(move);
+    const bool gives_check = board.in_check(opposite(moving_side));
+    board.unmake_move(undo);
+    return gives_check;
 }
 
 }  // namespace
@@ -219,11 +252,14 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta) {
     }
     ++nodes_;
 
-    const int stand_pat = evaluate(board);
-    if (stand_pat >= beta) {
-        return beta;
+    const bool in_check = board.in_check(board.side_to_move());
+    if (!in_check) {
+        const int stand_pat = evaluate(board);
+        if (stand_pat >= beta) {
+            return beta;
+        }
+        alpha = std::max(alpha, stand_pat);
     }
-    alpha = std::max(alpha, stand_pat);
 
     Move tt_move;
     if (const TranspositionEntry* entry = tt_.probe(board.hash_key())) {
@@ -231,15 +267,24 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta) {
     }
 
     MoveList moves = generate_legal_moves(board);
-    moves.erase(
-        std::remove_if(moves.begin(), moves.end(), [](const Move& move) {
-            return !move.is_capture() && !move.is_promotion();
-        }),
-        moves.end()
-    );
+    if (!in_check) {
+        moves.erase(
+            std::remove_if(moves.begin(), moves.end(), [](const Move& move) {
+                return !move.is_capture() && !move.is_promotion();
+            }),
+            moves.end()
+        );
+    } else if (moves.empty()) {
+        return -kMateScore + ply;
+    }
     order_moves(board, moves, tt_move, ply);
 
     for (const Move& move : moves) {
+        if (!in_check && needs_see_for_loss_detection(board, move)
+            && static_exchange_eval(board, move) < 0 && !move_gives_check(board, move)) {
+            continue;
+        }
+
         const UndoState undo = board.make_move(move);
         const int score = -quiescence(board, ply + 1, -beta, -alpha);
         board.unmake_move(undo);
@@ -253,20 +298,35 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta) {
 
 void Searcher::order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const {
     const Color side = board.side_to_move();
-    std::stable_sort(moves.begin(), moves.end(), [&](const Move& lhs, const Move& rhs) {
-        auto score_move = [&](const Move& move) {
-            if (is_valid_move_shape(tt_move)
-                && move.from == tt_move.from
-                && move.to == tt_move.to
-                && move.promotion == tt_move.promotion) {
-                return 1'000'000;
-            }
-            int score = 0;
+
+    struct ScoredMove {
+        Move move;
+        int score = 0;
+    };
+
+    std::vector<ScoredMove> scored_moves;
+    scored_moves.reserve(moves.size());
+
+    for (const Move& move : moves) {
+        int score = 0;
+        if (is_valid_move_shape(tt_move)
+            && move.from == tt_move.from
+            && move.to == tt_move.to
+            && move.promotion == tt_move.promotion) {
+            score = 1'000'000;
+        } else {
             if (move.is_promotion()) {
-                score += 80'000 + material_value(move.promotion);
+                score += 90'000 + material_value(move.promotion);
             }
             if (move.is_capture()) {
-                score += 40'000 + mvv_lva_score(board, move);
+                const int see_score = needs_see_for_loss_detection(board, move)
+                    ? static_exchange_eval(board, move)
+                    : immediate_capture_gain(board, move);
+                if (see_score >= 0) {
+                    score += 70'000 + see_score + mvv_lva_score(board, move);
+                } else {
+                    score += 5'000 + see_score + mvv_lva_score(board, move);
+                }
             } else if (ply < kMaxPly) {
                 if (same_move(move, killer_moves_[ply][0])) {
                     score += 30'000;
@@ -275,10 +335,17 @@ void Searcher::order_moves(Board& board, MoveList& moves, const Move& tt_move, i
                 }
                 score += history_[color_index(side)][move.from][move.to];
             }
-            return score;
-        };
-        return score_move(lhs) > score_move(rhs);
+        }
+        scored_moves.push_back(ScoredMove{move, score});
+    }
+
+    std::stable_sort(scored_moves.begin(), scored_moves.end(), [](const ScoredMove& lhs, const ScoredMove& rhs) {
+        return lhs.score > rhs.score;
     });
+
+    for (std::size_t index = 0; index < moves.size(); ++index) {
+        moves[index] = scored_moves[index].move;
+    }
 }
 
 void Searcher::record_cutoff(const Move& move, int depth, int ply, Color side_to_move) {

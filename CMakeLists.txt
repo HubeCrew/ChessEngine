@@ -28,6 +28,7 @@ add_library(chess_engine
     src/engine/evaluation.cpp
     src/engine/position_suite.cpp
     src/engine/search.cpp
+    src/engine/static_exchange.cpp
     src/engine/transposition_table.cpp
 )
 target_link_libraries(chess_engine PUBLIC chess_core)

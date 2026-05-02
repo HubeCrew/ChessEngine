@@ -9,6 +9,7 @@
 #include "chess/engine/evaluation.h"
 #include "chess/engine/position_suite.h"
 #include "chess/engine/search.h"
+#include "chess/engine/static_exchange.h"
 #include "chess/engine/transposition_table.h"
 
 namespace {
@@ -20,6 +21,15 @@ bool is_legal_best_move(chess::Board& board, const chess::Move& best_move) {
             && move.to == best_move.to
             && move.promotion == best_move.promotion;
     });
+}
+
+chess::Move legal_move_by_uci(chess::Board& board, const std::string& uci) {
+    const chess::MoveList moves = chess::generate_legal_moves(board);
+    const auto found = std::find_if(moves.begin(), moves.end(), [&](const chess::Move& move) {
+        return chess::move_to_uci(move) == uci;
+    });
+    REQUIRE(found != moves.end());
+    return *found;
 }
 
 }  // namespace
@@ -157,6 +167,42 @@ TEST_CASE("search prefers winning free queen material") {
     const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{1});
 
     REQUIRE(chess::move_to_uci(result.best_move) == "h1h7");
+}
+
+TEST_CASE("static exchange evaluation scores free captures") {
+    chess::Board board = chess::board_from_fen("4k3/8/8/8/8/8/4q3/4R2K w - - 0 1");
+    const chess::Move move = legal_move_by_uci(board, "e1e2");
+
+    REQUIRE(chess::engine::static_exchange_eval(board, move) == 900);
+    REQUIRE(board.hash_key() == board.recompute_hash());
+}
+
+TEST_CASE("static exchange evaluation detects defended material losses") {
+    chess::Board board = chess::board_from_fen("k3r3/8/8/4p3/8/8/4Q3/K7 w - - 0 1");
+    const chess::Move move = legal_move_by_uci(board, "e2e5");
+
+    REQUIRE(chess::engine::static_exchange_eval(board, move) < 0);
+    REQUIRE(board.hash_key() == board.recompute_hash());
+}
+
+TEST_CASE("static exchange evaluation follows recapture chains") {
+    chess::Board board = chess::board_from_fen("k3r3/8/8/8/4n3/8/4Q1B1/K7 w - - 0 1");
+    const chess::Move move = legal_move_by_uci(board, "g2e4");
+
+    REQUIRE(chess::engine::static_exchange_eval(board, move) >= 300);
+    REQUIRE(board.hash_key() == board.recompute_hash());
+}
+
+TEST_CASE("static exchange evaluation handles en-passant and promotion captures") {
+    chess::Board en_passant = chess::board_from_fen("k7/8/8/3pP3/8/8/8/7K w - d6 0 1");
+    const chess::Move ep_move = legal_move_by_uci(en_passant, "e5d6");
+    REQUIRE(chess::engine::static_exchange_eval(en_passant, ep_move) == 100);
+    REQUIRE(en_passant.hash_key() == en_passant.recompute_hash());
+
+    chess::Board promotion = chess::board_from_fen("k6r/6P1/8/8/8/8/8/K7 w - - 0 1");
+    const chess::Move promotion_move = legal_move_by_uci(promotion, "g7h8q");
+    REQUIRE(chess::engine::static_exchange_eval(promotion, promotion_move) == 1300);
+    REQUIRE(promotion.hash_key() == promotion.recompute_hash());
 }
 
 TEST_CASE("benchmark suite positions search to legal moves") {
