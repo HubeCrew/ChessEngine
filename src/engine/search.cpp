@@ -17,6 +17,8 @@ constexpr int kMateScore = 900'000;
 constexpr int kMateWindow = 1'000;
 constexpr int kAspirationWindow = 50;
 constexpr int kHistoryLimit = 1'000'000;
+constexpr int kLmrMinDepth = 3;
+constexpr int kLmrMoveIndex = 4;
 constexpr std::size_t kMaxHistoryQuiets = 256;
 
 int color_index(Color color) {
@@ -268,15 +270,20 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
         return quiescence(board, ply, alpha, beta);
     }
 
+    const bool in_check = board.in_check(board.side_to_move());
     MoveList moves = generate_legal_moves(board);
     if (moves.empty()) {
-        return board.in_check(board.side_to_move()) ? -kMateScore + ply : 0;
+        return in_check ? -kMateScore + ply : 0;
     }
     order_moves(board, moves, tt_move, ply);
 
     Move best_move;
     int best_score = -kInfinity;
     int move_index = 0;
+    Move pv_move;
+    if (ply == 0 && !previous_iteration_pv_.empty()) {
+        pv_move = previous_iteration_pv_.front();
+    }
     std::array<Move, kMaxHistoryQuiets> quiets_tried_before_cutoff{};
     std::size_t quiet_count = 0;
     for (const Move& move : moves) {
@@ -286,7 +293,22 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
         if (move_index == 0) {
             score = -negamax(board, depth - 1, ply + 1, -beta, -alpha);
         } else {
-            score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha);
+            const bool gives_check = board.in_check(board.side_to_move());
+            const bool can_reduce = depth >= kLmrMinDepth
+                && move_index >= kLmrMoveIndex
+                && !in_check
+                && is_quiet_history_move(move)
+                && !gives_check
+                && !(is_valid_move_shape(tt_move) && same_move_identity(move, tt_move))
+                && !(is_valid_move_shape(pv_move) && same_move_identity(move, pv_move));
+            if (can_reduce) {
+                score = -negamax(board, depth - 2, ply + 1, -alpha - 1, -alpha);
+                if (score > alpha && !should_stop()) {
+                    score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha);
+                }
+            } else {
+                score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha);
+            }
             if (score > alpha && score < beta) {
                 score = -negamax(board, depth - 1, ply + 1, -beta, -alpha);
             }
