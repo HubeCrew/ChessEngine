@@ -1,0 +1,97 @@
+#include <catch2/catch_test_macros.hpp>
+
+#include <algorithm>
+
+#include "chess/core/fen.h"
+#include "chess/core/movegen.h"
+#include "chess/engine/search.h"
+#include "chess/engine/transposition_table.h"
+
+namespace {
+
+bool is_legal_best_move(chess::Board& board, const chess::Move& best_move) {
+    const chess::MoveList moves = chess::generate_legal_moves(board);
+    return std::any_of(moves.begin(), moves.end(), [&](const chess::Move& move) {
+        return move.from == best_move.from
+            && move.to == best_move.to
+            && move.promotion == best_move.promotion;
+    });
+}
+
+}  // namespace
+
+TEST_CASE("hash is restored after every root move") {
+    chess::Board board = chess::board_from_fen(
+        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"
+    );
+    const std::uint64_t original_hash = board.hash_key();
+
+    REQUIRE(original_hash == board.recompute_hash());
+    for (const chess::Move& move : chess::generate_legal_moves(board)) {
+        const chess::UndoState undo = board.make_move(move);
+        REQUIRE(board.hash_key() == board.recompute_hash());
+        board.unmake_move(undo);
+        REQUIRE(board.hash_key() == original_hash);
+        REQUIRE(board.hash_key() == board.recompute_hash());
+    }
+}
+
+TEST_CASE("hash changes for side, castling, and en-passant state") {
+    const auto base = chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").hash_key();
+    REQUIRE(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1").hash_key() != base);
+    REQUIRE(chess::board_from_fen("4k2r/8/8/8/8/8/8/4K2R w Kk - 0 1").hash_key() != base);
+    REQUIRE(chess::board_from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").hash_key() != base);
+}
+
+TEST_CASE("transposition table stores and probes bounds") {
+    chess::engine::TranspositionTable table{1};
+    const chess::Move move{chess::make_square(4, 1), chess::make_square(4, 3), chess::PieceType::None, chess::DoublePawnPush};
+    const std::uint64_t key = 0x123456789abcdef0ULL;
+
+    table.store(key, 5, 42, chess::engine::Bound::Exact, move);
+    const chess::engine::TranspositionEntry* entry = table.probe(key);
+    REQUIRE(entry != nullptr);
+    REQUIRE(entry->depth == 5);
+    REQUIRE(entry->score == 42);
+    REQUIRE(entry->bound == chess::engine::Bound::Exact);
+    REQUIRE(entry->best_move == move);
+    REQUIRE(table.probe(key ^ 1ULL) == nullptr);
+
+    table.store(key, 3, 10, chess::engine::Bound::Upper, {});
+    entry = table.probe(key);
+    REQUIRE(entry != nullptr);
+    REQUIRE(entry->depth == 5);
+    REQUIRE(entry->score == 42);
+}
+
+TEST_CASE("search returns legal moves and principal variation") {
+    chess::Board board = chess::Board::start_position();
+    chess::engine::Searcher searcher;
+    searcher.set_hash_size_mb(1);
+
+    const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{3});
+
+    REQUIRE(result.depth == 3);
+    REQUIRE(result.nodes > 0);
+    REQUIRE(result.nps > 0);
+    REQUIRE(is_legal_best_move(board, result.best_move));
+    REQUIRE_FALSE(result.principal_variation.empty());
+    REQUIRE(result.principal_variation.front() == result.best_move);
+}
+
+TEST_CASE("search keeps mate-in-one tactical behavior") {
+    chess::Board board = chess::board_from_fen("6k1/6pp/8/2B5/8/8/6PP/5RK1 w - - 0 1");
+    chess::engine::Searcher searcher;
+
+    const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{2});
+
+    REQUIRE(chess::move_to_uci(result.best_move) == "f1f8");
+}
+
+TEST_CASE("hash table can be resized and cleared through searcher") {
+    chess::engine::Searcher searcher;
+    searcher.set_hash_size_mb(2);
+    REQUIRE(searcher.hash_size_mb() == 2);
+    searcher.clear();
+    REQUIRE(searcher.hash_size_mb() == 2);
+}

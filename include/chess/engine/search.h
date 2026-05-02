@@ -1,9 +1,13 @@
 #pragma once
 
+#include <array>
 #include <chrono>
-#include <optional>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
 
 #include "chess/core/board.h"
+#include "chess/engine/transposition_table.h"
 
 namespace chess::engine {
 
@@ -17,22 +21,40 @@ struct SearchResult {
     int score_centipawns = 0;
     int depth = 0;
     std::uint64_t nodes = 0;
+    std::uint64_t tt_hits = 0;
+    std::chrono::milliseconds elapsed{0};
+    std::uint64_t nps = 0;
+    std::vector<Move> principal_variation;
 };
 
 class Searcher {
 public:
+    Searcher();
+
     SearchResult search(Board& board, const SearchLimits& limits);
+    void set_hash_size_mb(std::size_t megabytes);
+    [[nodiscard]] std::size_t hash_size_mb() const;
+    void clear();
 
 private:
-    std::uint64_t nodes_ = 0;
-    std::chrono::steady_clock::time_point deadline_{};
-    bool use_deadline_ = false;
+    static constexpr int kMaxPly = 128;
 
-    int negamax(Board& board, int depth, int alpha, int beta);
-    int quiescence(Board& board, int alpha, int beta);
+    std::uint64_t nodes_ = 0;
+    std::uint64_t tt_hits_ = 0;
+    std::chrono::steady_clock::time_point deadline_{};
+    std::chrono::steady_clock::time_point start_time_{};
+    bool use_deadline_ = false;
+    TranspositionTable tt_;
+    std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
+    std::array<std::array<std::array<int, 64>, 64>, 2> history_{};
+
+    int negamax(Board& board, int depth, int ply, int alpha, int beta);
+    int quiescence(Board& board, int ply, int alpha, int beta);
     int evaluate(const Board& board) const;
+    void order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const;
+    void record_cutoff(const Move& move, int depth, int ply, Color side_to_move);
+    std::vector<Move> extract_principal_variation(Board& board, int depth) const;
     bool should_stop() const;
 };
 
 }  // namespace chess::engine
-

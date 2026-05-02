@@ -12,6 +12,7 @@ namespace chess {
 struct UndoState {
     Move move;
     Piece captured = Piece::None;
+    std::uint64_t hash_key = 0;
     std::uint8_t castling_rights = 0;
     Square en_passant_square = kNoSquare;
     int halfmove_clock = 0;
@@ -37,6 +38,8 @@ public:
     [[nodiscard]] Square king_square(Color color) const;
     [[nodiscard]] bool is_square_attacked(Square square, Color by_color) const;
     [[nodiscard]] bool in_check(Color color) const;
+    [[nodiscard]] std::uint64_t hash_key() const;
+    [[nodiscard]] std::uint64_t recompute_hash() const;
     [[nodiscard]] std::string to_fen() const;
 
     void clear();
@@ -61,10 +64,11 @@ private:
     Square en_passant_square_ = kNoSquare;
     int halfmove_clock_ = 0;
     int fullmove_number_ = 1;
+    std::uint64_t hash_key_ = 0;
 
     void move_piece(Square from, Square to);
+    void refresh_hash();
     void update_castling_rights_for_move(Square from, Square to, Piece moved, Piece captured);
 };
 
 }  // namespace chess
-

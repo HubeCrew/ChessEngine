@@ -1,5 +1,7 @@
 #include "chess/core/fen.h"
 
+#include <charconv>
+#include <system_error>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -16,6 +18,17 @@ std::vector<std::string> split_fields(std::string_view value) {
         fields.push_back(field);
     }
     return fields;
+}
+
+int parse_int_field(const std::string& field, const char* field_name) {
+    int value = 0;
+    const char* begin = field.data();
+    const char* end = field.data() + field.size();
+    const auto [ptr, error] = std::from_chars(begin, end, value);
+    if (error != std::errc{} || ptr != end) {
+        throw std::invalid_argument(std::string("FEN ") + field_name + " field is invalid");
+    }
+    return value;
 }
 
 }  // namespace
@@ -86,22 +99,27 @@ Board board_from_fen(std::string_view fen) {
     std::uint8_t rights = 0;
     if (fields[2] != "-") {
         for (const char value : fields[2]) {
+            std::uint8_t right = 0;
             switch (value) {
                 case 'K':
-                    rights |= WhiteKingSide;
+                    right = WhiteKingSide;
                     break;
                 case 'Q':
-                    rights |= WhiteQueenSide;
+                    right = WhiteQueenSide;
                     break;
                 case 'k':
-                    rights |= BlackKingSide;
+                    right = BlackKingSide;
                     break;
                 case 'q':
-                    rights |= BlackQueenSide;
+                    right = BlackQueenSide;
                     break;
                 default:
                     throw std::invalid_argument("FEN castling rights field is invalid");
             }
+            if ((rights & right) != 0) {
+                throw std::invalid_argument("FEN castling rights field contains duplicate rights");
+            }
+            rights |= right;
         }
     }
     board.set_castling_rights(rights);
@@ -116,8 +134,8 @@ Board board_from_fen(std::string_view fen) {
         board.set_en_passant_square(ep);
     }
 
-    board.set_halfmove_clock(std::stoi(fields[4]));
-    board.set_fullmove_number(std::stoi(fields[5]));
+    board.set_halfmove_clock(parse_int_field(fields[4], "halfmove clock"));
+    board.set_fullmove_number(parse_int_field(fields[5], "fullmove number"));
     if (board.halfmove_clock() < 0 || board.fullmove_number() <= 0) {
         throw std::invalid_argument("FEN move counters are invalid");
     }
@@ -180,4 +198,3 @@ std::string Board::to_fen() const {
 }
 
 }  // namespace chess
-

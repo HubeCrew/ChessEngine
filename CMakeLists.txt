@@ -15,6 +15,7 @@ add_library(chess_core
     src/core/move.cpp
     src/core/movegen.cpp
     src/core/perft.cpp
+    src/core/zobrist.cpp
 )
 target_include_directories(chess_core PUBLIC include)
 target_compile_options(chess_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -24,6 +25,7 @@ endif()
 
 add_library(chess_engine
     src/engine/search.cpp
+    src/engine/transposition_table.cpp
 )
 target_link_libraries(chess_engine PUBLIC chess_core)
 target_compile_options(chess_engine PRIVATE -Wall -Wextra -Wpedantic)
@@ -55,6 +57,17 @@ if(BUILD_TESTING)
 
     add_executable(chess_core_tests tests/core_tests.cpp)
     target_link_libraries(chess_core_tests PRIVATE chess_core Catch2::Catch2WithMain)
+    add_executable(chess_engine_tests tests/engine_tests.cpp)
+    target_link_libraries(chess_engine_tests PRIVATE chess_engine Catch2::Catch2WithMain)
     include(Catch)
     catch_discover_tests(chess_core_tests)
+    catch_discover_tests(chess_engine_tests)
+
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME uci_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/uci_smoke_test.py $<TARGET_FILE:chess_uci>
+        )
+    endif()
 endif()

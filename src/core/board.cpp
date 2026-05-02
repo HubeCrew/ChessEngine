@@ -3,6 +3,7 @@
 #include <cassert>
 
 #include "chess/core/fen.h"
+#include "chess/core/zobrist.h"
 
 namespace chess {
 
@@ -170,6 +171,25 @@ bool Board::in_check(Color color) const {
     return is_valid_square(king) && is_square_attacked(king, opposite(color));
 }
 
+std::uint64_t Board::hash_key() const {
+    return hash_key_;
+}
+
+std::uint64_t Board::recompute_hash() const {
+    std::uint64_t key = 0;
+    for (Square square = 0; square < kBoardSquareCount; ++square) {
+        key ^= zobrist::piece_square(piece_at(square), square);
+    }
+    if (side_to_move_ == Color::Black) {
+        key ^= zobrist::side_to_move();
+    }
+    key ^= zobrist::castling(castling_rights_);
+    if (en_passant_square_ != kNoSquare) {
+        key ^= zobrist::en_passant_file(file_of(en_passant_square_));
+    }
+    return key;
+}
+
 void Board::clear() {
     squares_.fill(Piece::None);
     for (auto& color_pieces : pieces_) {
@@ -182,6 +202,7 @@ void Board::clear() {
     en_passant_square_ = kNoSquare;
     halfmove_clock_ = 0;
     fullmove_number_ = 1;
+    refresh_hash();
 }
 
 void Board::set_piece(Square square, Piece piece) {
@@ -198,6 +219,7 @@ void Board::set_piece(Square square, Piece piece) {
     pieces_[color_index(color)][type_index(type)] |= bit;
     occupancy_[color_index(color)] |= bit;
     all_occupancy_ |= bit;
+    refresh_hash();
 }
 
 void Board::remove_piece(Square square) {
@@ -214,18 +236,22 @@ void Board::remove_piece(Square square) {
     occupancy_[color_index(color)] &= ~bit;
     all_occupancy_ &= ~bit;
     squares_[square] = Piece::None;
+    refresh_hash();
 }
 
 void Board::set_side_to_move(Color color) {
     side_to_move_ = color;
+    refresh_hash();
 }
 
 void Board::set_castling_rights(std::uint8_t rights) {
     castling_rights_ = rights;
+    refresh_hash();
 }
 
 void Board::set_en_passant_square(Square square) {
     en_passant_square_ = square;
+    refresh_hash();
 }
 
 void Board::set_halfmove_clock(int value) {
@@ -240,6 +266,10 @@ void Board::move_piece(Square from, Square to) {
     const Piece piece = piece_at(from);
     remove_piece(from);
     set_piece(to, piece);
+}
+
+void Board::refresh_hash() {
+    hash_key_ = recompute_hash();
 }
 
 void Board::update_castling_rights_for_move(Square from, Square to, Piece moved, Piece captured) {
@@ -287,6 +317,7 @@ UndoState Board::make_move(const Move& move) {
     UndoState undo{
         move,
         captured,
+        hash_key_,
         castling_rights_,
         en_passant_square_,
         halfmove_clock_,
@@ -331,6 +362,7 @@ UndoState Board::make_move(const Move& move) {
         ++fullmove_number_;
     }
     side_to_move_ = opposite(side_to_move_);
+    refresh_hash();
     return undo;
 }
 
@@ -367,7 +399,9 @@ void Board::unmake_move(const UndoState& undo) {
     } else if (undo.captured != Piece::None) {
         set_piece(move.to, undo.captured);
     }
+
+    hash_key_ = undo.hash_key;
+    assert(hash_key_ == recompute_hash());
 }
 
 }  // namespace chess
-
