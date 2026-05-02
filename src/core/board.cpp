@@ -202,56 +202,55 @@ void Board::clear() {
     en_passant_square_ = kNoSquare;
     halfmove_clock_ = 0;
     fullmove_number_ = 1;
-    refresh_hash();
+    hash_key_ = zobrist::castling(castling_rights_);
 }
 
 void Board::set_piece(Square square, Piece piece) {
     assert(is_valid_square(square));
-    remove_piece(square);
-    squares_[square] = piece;
     if (piece == Piece::None) {
+        remove_piece(square);
         return;
     }
 
-    const auto color = color_of(piece);
-    const auto type = type_of(piece);
-    const Bitboard bit = square_bb(square);
-    pieces_[color_index(color)][type_index(type)] |= bit;
-    occupancy_[color_index(color)] |= bit;
-    all_occupancy_ |= bit;
-    refresh_hash();
+    take_piece(square);
+    put_piece(square, piece);
 }
 
 void Board::remove_piece(Square square) {
     assert(is_valid_square(square));
-    const Piece piece = squares_[square];
-    if (piece == Piece::None) {
-        return;
-    }
-
-    const auto color = color_of(piece);
-    const auto type = type_of(piece);
-    const Bitboard bit = square_bb(square);
-    pieces_[color_index(color)][type_index(type)] &= ~bit;
-    occupancy_[color_index(color)] &= ~bit;
-    all_occupancy_ &= ~bit;
-    squares_[square] = Piece::None;
-    refresh_hash();
+    take_piece(square);
 }
 
 void Board::set_side_to_move(Color color) {
-    side_to_move_ = color;
-    refresh_hash();
+    if (side_to_move_ != color) {
+        hash_key_ ^= zobrist::side_to_move();
+        side_to_move_ = color;
+    }
 }
 
 void Board::set_castling_rights(std::uint8_t rights) {
-    castling_rights_ = rights;
-    refresh_hash();
+    const std::uint8_t normalized = rights & 0x0fU;
+    if (castling_rights_ == normalized) {
+        return;
+    }
+
+    hash_key_ ^= zobrist::castling(castling_rights_);
+    castling_rights_ = normalized;
+    hash_key_ ^= zobrist::castling(castling_rights_);
 }
 
 void Board::set_en_passant_square(Square square) {
+    if (en_passant_square_ == square) {
+        return;
+    }
+
+    if (en_passant_square_ != kNoSquare) {
+        hash_key_ ^= zobrist::en_passant_file(file_of(en_passant_square_));
+    }
     en_passant_square_ = square;
-    refresh_hash();
+    if (en_passant_square_ != kNoSquare) {
+        hash_key_ ^= zobrist::en_passant_file(file_of(en_passant_square_));
+    }
 }
 
 void Board::set_halfmove_clock(int value) {
@@ -262,10 +261,44 @@ void Board::set_fullmove_number(int value) {
     fullmove_number_ = value;
 }
 
-void Board::move_piece(Square from, Square to) {
-    const Piece piece = piece_at(from);
-    remove_piece(from);
-    set_piece(to, piece);
+void Board::put_piece(Square square, Piece piece) {
+    assert(is_valid_square(square));
+    assert(piece != Piece::None);
+    assert(squares_[square] == Piece::None);
+
+    const auto color = color_of(piece);
+    const auto type = type_of(piece);
+    const Bitboard bit = square_bb(square);
+
+    squares_[square] = piece;
+    pieces_[color_index(color)][type_index(type)] |= bit;
+    occupancy_[color_index(color)] |= bit;
+    all_occupancy_ |= bit;
+    hash_key_ ^= zobrist::piece_square(piece, square);
+}
+
+Piece Board::take_piece(Square square) {
+    assert(is_valid_square(square));
+    const Piece piece = squares_[square];
+    if (piece == Piece::None) {
+        return Piece::None;
+    }
+
+    const auto color = color_of(piece);
+    const auto type = type_of(piece);
+    const Bitboard bit = square_bb(square);
+    pieces_[color_index(color)][type_index(type)] &= ~bit;
+    occupancy_[color_index(color)] &= ~bit;
+    all_occupancy_ &= ~bit;
+    squares_[square] = Piece::None;
+    hash_key_ ^= zobrist::piece_square(piece, square);
+    return piece;
+}
+
+void Board::move_piece_unchecked(Square from, Square to) {
+    const Piece piece = take_piece(from);
+    assert(piece != Piece::None);
+    put_piece(to, piece);
 }
 
 void Board::refresh_hash() {
@@ -273,37 +306,41 @@ void Board::refresh_hash() {
 }
 
 void Board::update_castling_rights_for_move(Square from, Square to, Piece moved, Piece captured) {
+    std::uint8_t rights = castling_rights_;
+
     if (type_of(moved) == PieceType::King) {
         if (color_of(moved) == Color::White) {
-            castling_rights_ &= static_cast<std::uint8_t>(~(WhiteKingSide | WhiteQueenSide));
+            rights &= static_cast<std::uint8_t>(~(WhiteKingSide | WhiteQueenSide));
         } else {
-            castling_rights_ &= static_cast<std::uint8_t>(~(BlackKingSide | BlackQueenSide));
+            rights &= static_cast<std::uint8_t>(~(BlackKingSide | BlackQueenSide));
         }
     }
 
     if (type_of(moved) == PieceType::Rook) {
         if (from == make_square(0, 0)) {
-            castling_rights_ &= static_cast<std::uint8_t>(~WhiteQueenSide);
+            rights &= static_cast<std::uint8_t>(~WhiteQueenSide);
         } else if (from == make_square(7, 0)) {
-            castling_rights_ &= static_cast<std::uint8_t>(~WhiteKingSide);
+            rights &= static_cast<std::uint8_t>(~WhiteKingSide);
         } else if (from == make_square(0, 7)) {
-            castling_rights_ &= static_cast<std::uint8_t>(~BlackQueenSide);
+            rights &= static_cast<std::uint8_t>(~BlackQueenSide);
         } else if (from == make_square(7, 7)) {
-            castling_rights_ &= static_cast<std::uint8_t>(~BlackKingSide);
+            rights &= static_cast<std::uint8_t>(~BlackKingSide);
         }
     }
 
     if (type_of(captured) == PieceType::Rook) {
         if (to == make_square(0, 0)) {
-            castling_rights_ &= static_cast<std::uint8_t>(~WhiteQueenSide);
+            rights &= static_cast<std::uint8_t>(~WhiteQueenSide);
         } else if (to == make_square(7, 0)) {
-            castling_rights_ &= static_cast<std::uint8_t>(~WhiteKingSide);
+            rights &= static_cast<std::uint8_t>(~WhiteKingSide);
         } else if (to == make_square(0, 7)) {
-            castling_rights_ &= static_cast<std::uint8_t>(~BlackQueenSide);
+            rights &= static_cast<std::uint8_t>(~BlackQueenSide);
         } else if (to == make_square(7, 7)) {
-            castling_rights_ &= static_cast<std::uint8_t>(~BlackKingSide);
+            rights &= static_cast<std::uint8_t>(~BlackKingSide);
         }
     }
+
+    set_castling_rights(rights);
 }
 
 UndoState Board::make_move(const Move& move) {
@@ -325,7 +362,7 @@ UndoState Board::make_move(const Move& move) {
         side_to_move_,
     };
 
-    en_passant_square_ = kNoSquare;
+    set_en_passant_square(kNoSquare);
     ++halfmove_clock_;
     if (type_of(moved) == PieceType::Pawn || captured != Piece::None) {
         halfmove_clock_ = 0;
@@ -333,36 +370,35 @@ UndoState Board::make_move(const Move& move) {
 
     update_castling_rights_for_move(move.from, move.to, moved, captured);
 
-    remove_piece(move.from);
+    take_piece(move.from);
     if ((move.flags & EnPassant) != 0) {
-        remove_piece(en_passant_capture_square);
+        take_piece(en_passant_capture_square);
     } else if (captured != Piece::None) {
-        remove_piece(move.to);
+        take_piece(move.to);
     }
 
     if ((move.flags & Promotion) != 0) {
-        set_piece(move.to, make_piece(moving_color, move.promotion));
+        put_piece(move.to, make_piece(moving_color, move.promotion));
     } else {
-        set_piece(move.to, moved);
+        put_piece(move.to, moved);
     }
 
     if ((move.flags & KingCastle) != 0) {
         const int rank = moving_color == Color::White ? 0 : 7;
-        move_piece(make_square(7, rank), make_square(5, rank));
+        move_piece_unchecked(make_square(7, rank), make_square(5, rank));
     } else if ((move.flags & QueenCastle) != 0) {
         const int rank = moving_color == Color::White ? 0 : 7;
-        move_piece(make_square(0, rank), make_square(3, rank));
+        move_piece_unchecked(make_square(0, rank), make_square(3, rank));
     }
 
     if ((move.flags & DoublePawnPush) != 0) {
-        en_passant_square_ = moving_color == Color::White ? move.from + 8 : move.from - 8;
+        set_en_passant_square(moving_color == Color::White ? move.from + 8 : move.from - 8);
     }
 
     if (moving_color == Color::Black) {
         ++fullmove_number_;
     }
-    side_to_move_ = opposite(side_to_move_);
-    refresh_hash();
+    set_side_to_move(opposite(side_to_move_));
     return undo;
 }
 
@@ -379,25 +415,25 @@ void Board::unmake_move(const UndoState& undo) {
 
     if ((move.flags & KingCastle) != 0) {
         const int rank = moving_color == Color::White ? 0 : 7;
-        move_piece(make_square(5, rank), make_square(7, rank));
+        move_piece_unchecked(make_square(5, rank), make_square(7, rank));
     } else if ((move.flags & QueenCastle) != 0) {
         const int rank = moving_color == Color::White ? 0 : 7;
-        move_piece(make_square(3, rank), make_square(0, rank));
+        move_piece_unchecked(make_square(3, rank), make_square(0, rank));
     }
 
     const Piece piece_on_to = piece_at(move.to);
-    remove_piece(move.to);
+    take_piece(move.to);
     if ((move.flags & Promotion) != 0) {
-        set_piece(move.from, moved);
+        put_piece(move.from, moved);
     } else {
-        set_piece(move.from, piece_on_to);
+        put_piece(move.from, piece_on_to);
     }
 
     if ((move.flags & EnPassant) != 0) {
         const Square captured_square = moving_color == Color::White ? move.to - 8 : move.to + 8;
-        set_piece(captured_square, undo.captured);
+        put_piece(captured_square, undo.captured);
     } else if (undo.captured != Piece::None) {
-        set_piece(move.to, undo.captured);
+        put_piece(move.to, undo.captured);
     }
 
     hash_key_ = undo.hash_key;

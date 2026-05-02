@@ -38,6 +38,43 @@ bool contains_move(chess::Board& board, std::string_view uci_move) {
     return false;
 }
 
+void require_board_invariants(const chess::Board& board) {
+    std::array<std::array<chess::Bitboard, 6>, 2> expected_pieces{};
+    std::array<chess::Bitboard, 2> expected_occupancy{};
+    chess::Bitboard expected_all = 0;
+
+    for (chess::Square square = 0; square < chess::kBoardSquareCount; ++square) {
+        const chess::Piece piece = board.piece_at(square);
+        if (piece == chess::Piece::None) {
+            continue;
+        }
+
+        const auto color = chess::color_of(piece);
+        const auto type = chess::type_of(piece);
+        const chess::Bitboard bit = chess::square_bb(square);
+        expected_pieces[static_cast<int>(color)][static_cast<int>(type)] |= bit;
+        expected_occupancy[static_cast<int>(color)] |= bit;
+        expected_all |= bit;
+    }
+
+    for (const chess::Color color : {chess::Color::White, chess::Color::Black}) {
+        REQUIRE(board.occupancy(color) == expected_occupancy[static_cast<int>(color)]);
+        for (const chess::PieceType type : {
+                 chess::PieceType::Pawn,
+                 chess::PieceType::Knight,
+                 chess::PieceType::Bishop,
+                 chess::PieceType::Rook,
+                 chess::PieceType::Queen,
+                 chess::PieceType::King,
+             }) {
+            REQUIRE(board.pieces(color, type) == expected_pieces[static_cast<int>(color)][static_cast<int>(type)]);
+        }
+    }
+
+    REQUIRE(board.occupancy() == expected_all);
+    REQUIRE(board.hash_key() == board.recompute_hash());
+}
+
 }  // namespace
 
 TEST_CASE("start position FEN round trips") {
@@ -219,21 +256,31 @@ TEST_CASE("make and unmake restore the full FEN") {
     chess::Board board = chess::Board::start_position();
     const std::string original = board.to_fen();
     const chess::Move move = chess::parse_uci_move(board, "e2e4");
+    require_board_invariants(board);
     const chess::UndoState undo = board.make_move(move);
+    require_board_invariants(board);
     board.unmake_move(undo);
     REQUIRE(board.to_fen() == original);
+    require_board_invariants(board);
 }
 
-TEST_CASE("every root legal move restores the full FEN") {
-    chess::Board board = chess::board_from_fen(
-        "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"
-    );
-    const std::string original = board.to_fen();
+TEST_CASE("every root legal move restores full board state") {
+    for (const char* fen : {
+             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+             "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+             "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+         }) {
+        chess::Board board = chess::board_from_fen(fen);
+        const std::string original = board.to_fen();
+        require_board_invariants(board);
 
-    for (const chess::Move& move : chess::generate_legal_moves(board)) {
-        const chess::UndoState undo = board.make_move(move);
-        board.unmake_move(undo);
-        REQUIRE(board.to_fen() == original);
+        for (const chess::Move& move : chess::generate_legal_moves(board)) {
+            const chess::UndoState undo = board.make_move(move);
+            require_board_invariants(board);
+            board.unmake_move(undo);
+            REQUIRE(board.to_fen() == original);
+            require_board_invariants(board);
+        }
     }
 }
 

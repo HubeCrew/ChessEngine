@@ -66,7 +66,9 @@ private:
     int fullmove_number_ = 1;
     std::uint64_t hash_key_ = 0;
 
-    void move_piece(Square from, Square to);
+    void put_piece(Square square, Piece piece);
+    Piece take_piece(Square square);
+    void move_piece_unchecked(Square from, Square to);
     void refresh_hash();
     void update_castling_rights_for_move(Square from, Square to, Piece moved, Piece captured);
 };
