@@ -1,0 +1,10 @@
+# General benchmark positions. EPD fields: board side castling ep plus operations.
+# acd is the target search depth used by chess_bench when no --depth override is supplied.
+rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - id "startpos"; theme "bench"; acd 5; hmvc 0; fmvn 1; c0 "Initial position";
+r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - id "kiwipete"; theme "bench"; acd 4; hmvc 0; fmvn 1; c0 "Castling, pins, discovered attacks";
+8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - id "endgame-pawns"; theme "bench"; acd 5; hmvc 0; fmvn 1; c0 "Endgame pawn races and rook checks";
+r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - id "promotion-race"; theme "bench"; acd 4; hmvc 0; fmvn 1; c0 "Promotions, castling rights, and exposed kings";
+r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - id "middlegame-tension"; theme "bench"; acd 4; hmvc 0; fmvn 10; c0 "Symmetric middlegame with bishop pins and castled kings";
+2r2rk1/pp2qppp/2n1bn2/3p4/3P4/2NBPN2/PPQ2PPP/2RR2K1 w - - id "queen-pressure"; theme "bench"; acd 4; hmvc 0; fmvn 13; c0 "Open files and loose heavy pieces";
+8/2k5/2p2p2/p1Pp1Pp1/P2P2P1/2K5/8/8 w - - id "minor-piece-endgame"; theme "bench"; acd 6; hmvc 0; fmvn 42; c0 "Minor pieces and passed pawns";
+r2q1rk1/ppp2ppp/2n2n2/3bp3/3P4/2PBPN2/PP3PPP/RNBQ1RK1 w - - id "king-safety"; theme "bench"; acd 4; hmvc 0; fmvn 8; c0 "King shelter and attacking chances";

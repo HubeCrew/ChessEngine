@@ -49,10 +49,26 @@ Run the benchmark and tactical suites:
 ./build/chess_bench --suite bench --depth 3 --csv
 ./build/chess_bench --suite tactics
 ./build/chess_bench --suite bench --depth 5 --disable-null-move
+./build/chess_bench --suite epd --epd data/suites/tactics.epd
+./build/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd
 ```
 
 `chess_bench` reports depth, best move, expected move for tactical cases, score, nodes, NPS, and elapsed time. The tactical suite currently contains 50 curated positions across mates, promotions, forks, hanging pieces, winning captures, pawn tactics, checks, and loose-piece tactics. Tactical runs return a non-zero exit code if any expected best move is missed.
 `--disable-null-move` is available for A/B checks when measuring the null-move pruning search feature.
+External suites use an EPD-style format: four FEN fields followed by operations such as `bm` for accepted UCI best moves, `acd` for search depth, `id`, `theme`, `c0`, `hmvc`, and `fmvn`. The checked-in file-backed suites live under `data/suites/`.
+
+Generate an imported Lichess tactical suite from the official CC0 puzzle database:
+
+```bash
+wget -c -O data/raw/lichess_db_puzzle.csv.zst https://database.lichess.org/lichess_db_puzzle.csv.zst
+python3 tools/import_lichess_puzzles.py \
+  --input data/raw/lichess_db_puzzle.csv.zst \
+  --output data/suites/lichess_tactics_250.epd \
+  --limit 250 \
+  --referee ./build/chess_referee
+```
+
+The raw database belongs in ignored `data/raw/`. `data/suites/lichess_tactics_250.epd` is an imported, traceable stress suite, not a hand-curated golden suite.
 
 Run a local UCI gauntlet:
 

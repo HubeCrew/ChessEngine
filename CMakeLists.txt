@@ -81,7 +81,14 @@ if(BUILD_TESTING)
         )
         add_test(
             NAME bench_smoke
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/bench_smoke_test.py $<TARGET_FILE:chess_bench>
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/bench_smoke_test.py
+                $<TARGET_FILE:chess_bench>
+                ${CMAKE_CURRENT_SOURCE_DIR}/data/suites/bench.epd
+        )
+        add_test(
+            NAME import_lichess_puzzles_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/import_lichess_puzzles_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/import_lichess_puzzles.py
         )
         add_test(
             NAME gauntlet_smoke

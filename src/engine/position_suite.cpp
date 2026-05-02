@@ -2,12 +2,175 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 
 #include "chess/core/fen.h"
 
 namespace chess::engine {
 
 namespace {
+
+std::string trim(std::string_view value) {
+    std::size_t first = 0;
+    while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first])) != 0) {
+        ++first;
+    }
+
+    std::size_t last = value.size();
+    while (last > first && std::isspace(static_cast<unsigned char>(value[last - 1])) != 0) {
+        --last;
+    }
+    return std::string(value.substr(first, last - first));
+}
+
+std::vector<std::string> split_epd_operations(std::string_view value) {
+    std::vector<std::string> operations;
+    std::string current;
+    bool in_quote = false;
+    bool escaped = false;
+
+    for (const char ch : value) {
+        if (escaped) {
+            current.push_back(ch);
+            escaped = false;
+            continue;
+        }
+        if (ch == '\\' && in_quote) {
+            current.push_back(ch);
+            escaped = true;
+            continue;
+        }
+        if (ch == '"') {
+            in_quote = !in_quote;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == ';' && !in_quote) {
+            std::string operation = trim(current);
+            if (!operation.empty()) {
+                operations.push_back(std::move(operation));
+            }
+            current.clear();
+            continue;
+        }
+        current.push_back(ch);
+    }
+
+    std::string operation = trim(current);
+    if (!operation.empty()) {
+        operations.push_back(std::move(operation));
+    }
+    return operations;
+}
+
+std::string parse_epd_string(std::string_view value) {
+    const std::string trimmed = trim(value);
+    if (trimmed.size() < 2 || trimmed.front() != '"' || trimmed.back() != '"') {
+        return trimmed;
+    }
+
+    std::string result;
+    result.reserve(trimmed.size() - 2);
+    bool escaped = false;
+    for (std::size_t index = 1; index + 1 < trimmed.size(); ++index) {
+        const char ch = trimmed[index];
+        if (escaped) {
+            result.push_back(ch);
+            escaped = false;
+        } else if (ch == '\\') {
+            escaped = true;
+        } else {
+            result.push_back(ch);
+        }
+    }
+    if (escaped) {
+        result.push_back('\\');
+    }
+    return result;
+}
+
+std::vector<std::string> parse_best_moves(std::string_view value) {
+    std::vector<std::string> moves;
+    std::istringstream input{parse_epd_string(value)};
+    std::string move;
+    while (input >> move) {
+        if (!move.empty() && move.back() == ',') {
+            move.pop_back();
+        }
+        if (!move.empty()) {
+            moves.push_back(std::move(move));
+        }
+    }
+    return moves;
+}
+
+std::unordered_map<std::string, std::string> parse_operations(std::string_view value) {
+    std::unordered_map<std::string, std::string> operations;
+    for (const std::string& operation : split_epd_operations(value)) {
+        std::istringstream input(operation);
+        std::string opcode;
+        input >> opcode;
+        if (opcode.empty()) {
+            continue;
+        }
+
+        std::string operand;
+        std::getline(input, operand);
+        operations[opcode] = trim(operand);
+    }
+    return operations;
+}
+
+SuitePosition parse_epd_line(std::string_view line, const std::filesystem::path& path, int line_number) {
+    std::istringstream input{std::string(line)};
+    std::array<std::string, 4> fen_fields{};
+    for (std::string& field : fen_fields) {
+        if (!(input >> field)) {
+            throw std::runtime_error(path.string() + ":" + std::to_string(line_number) + ": expected 4 EPD FEN fields");
+        }
+    }
+
+    std::string operations_text;
+    std::getline(input, operations_text);
+    const std::unordered_map<std::string, std::string> operations = parse_operations(operations_text);
+
+    int halfmove_clock = 0;
+    int fullmove_number = 1;
+    int depth = 1;
+
+    if (const auto found = operations.find("hmvc"); found != operations.end()) {
+        halfmove_clock = std::stoi(found->second);
+    }
+    if (const auto found = operations.find("fmvn"); found != operations.end()) {
+        fullmove_number = std::stoi(found->second);
+    }
+    if (const auto found = operations.find("acd"); found != operations.end()) {
+        depth = std::stoi(found->second);
+    }
+    if (depth <= 0) {
+        throw std::runtime_error(path.string() + ":" + std::to_string(line_number) + ": acd depth must be positive");
+    }
+
+    SuitePosition position;
+    position.fen = fen_fields[0] + ' ' + fen_fields[1] + ' ' + fen_fields[2] + ' ' + fen_fields[3]
+        + ' ' + std::to_string(halfmove_clock) + ' ' + std::to_string(fullmove_number);
+    position.depth = depth;
+    position.id = operations.contains("id") ? parse_epd_string(operations.at("id")) : path.stem().string() + "-" + std::to_string(line_number);
+    position.theme = operations.contains("theme") ? parse_epd_string(operations.at("theme")) : "epd";
+    position.description = operations.contains("c0") ? parse_epd_string(operations.at("c0")) : "";
+    if (const auto found = operations.find("bm"); found != operations.end()) {
+        position.expected_best_moves = parse_best_moves(found->second);
+    }
+
+    (void)board_from_fen(position.fen);
+    return position;
+}
 
 constexpr std::array<BenchmarkPosition, 8> kBenchmarkPositions{{
     {
@@ -529,6 +692,35 @@ bool is_expected_best_move(const TacticalPosition& position, std::string_view mo
         position.expected_best_moves.begin() + static_cast<std::ptrdiff_t>(position.expected_best_move_count),
         move
     ) != position.expected_best_moves.begin() + static_cast<std::ptrdiff_t>(position.expected_best_move_count);
+}
+
+bool is_expected_best_move(const SuitePosition& position, std::string_view move) {
+    return std::find(position.expected_best_moves.begin(), position.expected_best_moves.end(), move)
+        != position.expected_best_moves.end();
+}
+
+std::vector<SuitePosition> load_epd_suite(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    if (!input) {
+        throw std::runtime_error("failed to open EPD suite: " + path.string());
+    }
+
+    std::vector<SuitePosition> positions;
+    std::string line;
+    int line_number = 0;
+    while (std::getline(input, line)) {
+        ++line_number;
+        std::string trimmed = trim(line);
+        if (trimmed.empty() || trimmed.front() == '#') {
+            continue;
+        }
+        positions.push_back(parse_epd_line(trimmed, path, line_number));
+    }
+
+    if (positions.empty()) {
+        throw std::runtime_error("EPD suite is empty: " + path.string());
+    }
+    return positions;
 }
 
 }  // namespace chess::engine

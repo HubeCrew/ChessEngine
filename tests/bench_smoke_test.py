@@ -4,12 +4,13 @@ import sys
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: bench_smoke_test.py <chess_bench>", file=sys.stderr)
+    if len(sys.argv) != 3:
+        print("usage: bench_smoke_test.py <chess_bench> <bench_epd>", file=sys.stderr)
         return 2
 
+    command = [sys.argv[1], "--suite", "bench", "--depth", "1", "--hash", "1", "--csv"]
     completed = subprocess.run(
-        [sys.argv[1], "--suite", "bench", "--depth", "1", "--hash", "1", "--csv"],
+        command,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -58,9 +59,36 @@ def main() -> int:
             print(f"expected non-null bestmove: {row}", file=sys.stderr)
             return 1
 
+    epd_completed = subprocess.run(
+        [sys.argv[1], "--suite", "epd", "--epd", sys.argv[2], "--depth", "1", "--hash", "1", "--csv"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=10,
+    )
+    if epd_completed.returncode != 0:
+        print(epd_completed.stderr, file=sys.stderr)
+        print(epd_completed.stdout, file=sys.stderr)
+        return epd_completed.returncode
+
+    epd_rows = list(csv.DictReader(epd_completed.stdout.splitlines()))
+    if len(epd_rows) < 5:
+        print("expected multiple EPD benchmark rows", file=sys.stderr)
+        print(epd_completed.stdout, file=sys.stderr)
+        return 1
+    if set(epd_rows[0].keys()) != required_columns:
+        print(f"unexpected EPD columns: {epd_rows[0].keys()}", file=sys.stderr)
+        return 1
+    if any(row["theme"] != "bench" for row in epd_rows):
+        print(f"unexpected EPD themes: {epd_rows}", file=sys.stderr)
+        return 1
+    if any(int(row["depth"]) != 1 for row in epd_rows):
+        print(f"EPD depth override failed: {epd_rows}", file=sys.stderr)
+        return 1
+
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

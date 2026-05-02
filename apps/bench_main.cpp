@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
@@ -20,6 +21,7 @@ enum class SuiteSelection {
     Bench,
     Tactics,
     All,
+    Epd,
 };
 
 struct Options {
@@ -28,6 +30,7 @@ struct Options {
     std::size_t hash_mb = 64;
     bool csv = false;
     bool null_move_pruning = true;
+    std::vector<std::filesystem::path> epd_paths;
 };
 
 struct RunResult {
@@ -45,7 +48,7 @@ struct RunResult {
 };
 
 void print_usage(std::ostream& out) {
-    out << "usage: chess_bench [--suite bench|tactics|all] [--depth N] [--hash MB] [--disable-null-move] [--csv]\n";
+    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--disable-null-move] [--csv]\n";
 }
 
 SuiteSelection parse_suite(std::string_view value) {
@@ -58,7 +61,10 @@ SuiteSelection parse_suite(std::string_view value) {
     if (value == "all") {
         return SuiteSelection::All;
     }
-    throw std::invalid_argument("suite must be bench, tactics, or all");
+    if (value == "epd") {
+        return SuiteSelection::Epd;
+    }
+    throw std::invalid_argument("suite must be bench, tactics, all, or epd");
 }
 
 Options parse_options(int argc, char** argv) {
@@ -73,6 +79,11 @@ Options parse_options(int argc, char** argv) {
             options.csv = true;
         } else if (arg == "--disable-null-move") {
             options.null_move_pruning = false;
+        } else if (arg == "--epd") {
+            if (++index >= argc) {
+                throw std::invalid_argument("--epd requires a path");
+            }
+            options.epd_paths.emplace_back(argv[index]);
         } else if (arg == "--suite") {
             if (++index >= argc) {
                 throw std::invalid_argument("--suite requires a value");
@@ -100,6 +111,17 @@ Options parse_options(int argc, char** argv) {
         }
     }
     return options;
+}
+
+std::string expected_moves_string(const chess::engine::SuitePosition& position) {
+    std::string result;
+    for (const std::string& move : position.expected_best_moves) {
+        if (!result.empty()) {
+            result.push_back('|');
+        }
+        result += move;
+    }
+    return result;
 }
 
 std::string expected_moves_string(const chess::engine::TacticalPosition& position) {
@@ -208,6 +230,9 @@ void print_table_row(const RunResult& result) {
 int main(int argc, char** argv) {
     try {
         const Options options = parse_options(argc, argv);
+        if (options.suite == SuiteSelection::Epd && options.epd_paths.empty()) {
+            throw std::invalid_argument("--suite epd requires at least one --epd PATH");
+        }
         chess::engine::Searcher searcher;
         searcher.set_hash_size_mb(options.hash_mb);
         searcher.set_null_move_pruning(options.null_move_pruning);
@@ -236,6 +261,26 @@ int main(int argc, char** argv) {
                     expected_moves_string(position)
                 );
                 result.matched = chess::engine::is_expected_best_move(position, result.best_move);
+                results.push_back(std::move(result));
+            }
+        }
+
+        for (const std::filesystem::path& path : options.epd_paths) {
+            for (const chess::engine::SuitePosition& position : chess::engine::load_epd_suite(path)) {
+                searcher.clear();
+                const int depth = options.depth_override > 0 ? options.depth_override : position.depth;
+                RunResult result = run_search(
+                    searcher,
+                    position.id,
+                    position.theme,
+                    position.description,
+                    position.fen,
+                    depth,
+                    expected_moves_string(position)
+                );
+                if (!position.expected_best_moves.empty()) {
+                    result.matched = chess::engine::is_expected_best_move(position, result.best_move);
+                }
                 results.push_back(std::move(result));
             }
         }

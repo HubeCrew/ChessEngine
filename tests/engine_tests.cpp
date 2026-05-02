@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "chess/core/fen.h"
@@ -219,6 +221,32 @@ TEST_CASE("benchmark suite positions search to legal moves") {
         REQUIRE(result.nodes > 0);
         REQUIRE(is_legal_best_move(board, result.best_move));
     }
+}
+
+TEST_CASE("EPD suite loader parses metadata, depth, and best moves") {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "chess_engine_epd_loader_test.epd";
+    {
+        std::ofstream output(path);
+        output << "# comment lines are ignored\n";
+        output << "6k1/6pp/8/2B5/8/8/6PP/5RK1 w - - bm f1f8; id \"mate-in-one-back-rank\"; theme \"mate-in-1\"; acd 2; hmvc 0; fmvn 1; c0 \"Protected rook delivers mate\";\n";
+        output << "4k3/7q/8/8/8/8/8/4K2R w - - bm h1h7; id \"hanging-queen\"; theme \"hanging queen\"; acd 1;\n";
+    }
+
+    const std::vector<chess::engine::SuitePosition> positions = chess::engine::load_epd_suite(path);
+    std::filesystem::remove(path);
+
+    REQUIRE(positions.size() == 2);
+    REQUIRE(positions[0].id == "mate-in-one-back-rank");
+    REQUIRE(positions[0].theme == "mate-in-1");
+    REQUIRE(positions[0].description == "Protected rook delivers mate");
+    REQUIRE(positions[0].fen == "6k1/6pp/8/2B5/8/8/6PP/5RK1 w - - 0 1");
+    REQUIRE(positions[0].depth == 2);
+    REQUIRE(positions[0].expected_best_moves == std::vector<std::string>{"f1f8"});
+    REQUIRE(chess::engine::is_expected_best_move(positions[0], "f1f8"));
+    REQUIRE_FALSE(chess::engine::is_expected_best_move(positions[0], "c5f8"));
+
+    REQUIRE(positions[1].fen == "4k3/7q/8/8/8/8/8/4K2R w - - 0 1");
+    REQUIRE(positions[1].depth == 1);
 }
 
 TEST_CASE("tactical suite finds expected best moves") {
