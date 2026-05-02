@@ -21,6 +21,17 @@ def main() -> int:
             "",
         ]
     )
+    clock_commands = "\n".join(
+        [
+            "uci",
+            "isready",
+            "ucinewgame",
+            "position startpos moves d2d4 d7d5",
+            "go wtime 1000 btime 1000 winc 50 binc 50 movestogo 20",
+            "quit",
+            "",
+        ]
+    )
     completed = subprocess.run(
         [sys.argv[1]],
         input=commands,
@@ -62,6 +73,27 @@ def main() -> int:
     if bestmove_match is None:
         print("missing legal-shaped bestmove", file=sys.stderr)
         print(output, file=sys.stderr)
+        return 1
+
+    clock_completed = subprocess.run(
+        [sys.argv[1]],
+        input=clock_commands,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=10,
+    )
+    if clock_completed.returncode != 0:
+        print(clock_completed.stderr, file=sys.stderr)
+        return clock_completed.returncode
+    if re.search(r"info depth [1-9]\d* score cp -?\d+ nodes \d+ qnodes \d+ nps \d+ time \d+", clock_completed.stdout) is None:
+        print("missing time-control info output", file=sys.stderr)
+        print(clock_completed.stdout, file=sys.stderr)
+        return 1
+    if re.search(r"bestmove ([a-h][1-8][a-h][1-8][nbrq]?|0000)", clock_completed.stdout) is None:
+        print("missing time-control bestmove", file=sys.stderr)
+        print(clock_completed.stdout, file=sys.stderr)
         return 1
 
     return 0

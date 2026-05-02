@@ -25,6 +25,9 @@ constexpr int kNullMoveMinMaterial = 500;
 constexpr int kMaxExtensionsPerLine = 6;
 constexpr int kMaxQuiescenceQuietCheckPly = 1;
 constexpr int kDeltaPruningMargin = 200;
+constexpr int kDefaultMovesToGo = 30;
+constexpr int kMinAllocatedMoveTimeMs = 10;
+constexpr int kMoveTimeSafetyMs = 20;
 constexpr std::size_t kMaxHistoryQuiets = 256;
 
 int color_index(Color color) {
@@ -197,6 +200,32 @@ int clamp_history(int value) {
     return std::clamp(value, -kHistoryLimit, kHistoryLimit);
 }
 
+std::chrono::milliseconds allocated_time(const Board& board, const SearchLimits& limits) {
+    if (limits.move_time.count() > 0) {
+        return limits.move_time;
+    }
+
+    const bool white_to_move = board.side_to_move() == Color::White;
+    const std::chrono::milliseconds remaining = white_to_move ? limits.white_time : limits.black_time;
+    const std::chrono::milliseconds increment = white_to_move ? limits.white_increment : limits.black_increment;
+    if (remaining.count() <= 0) {
+        return std::chrono::milliseconds{0};
+    }
+
+    const int moves_to_go = limits.moves_to_go > 0 ? limits.moves_to_go : kDefaultMovesToGo;
+    const std::int64_t safety = std::min<std::int64_t>(kMoveTimeSafetyMs, std::max<std::int64_t>(0, remaining.count() / 10));
+    const std::int64_t usable = std::max<std::int64_t>(1, remaining.count() - safety);
+    const std::int64_t base = usable / moves_to_go;
+    const std::int64_t increment_part = increment.count() * 3 / 4;
+    const std::int64_t cap = std::max<std::int64_t>(1, usable / 4);
+    const std::int64_t allocated = std::clamp<std::int64_t>(
+        base + increment_part,
+        std::min<std::int64_t>(kMinAllocatedMoveTimeMs, usable),
+        cap
+    );
+    return std::chrono::milliseconds{allocated};
+}
+
 }  // namespace
 
 Searcher::Searcher() {
@@ -207,9 +236,10 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     nodes_ = 0;
     qnodes_ = 0;
     tt_hits_ = 0;
-    use_deadline_ = limits.move_time.count() > 0;
+    const std::chrono::milliseconds effective_move_time = allocated_time(board, limits);
+    use_deadline_ = effective_move_time.count() > 0;
     start_time_ = std::chrono::steady_clock::now();
-    deadline_ = start_time_ + limits.move_time;
+    deadline_ = start_time_ + effective_move_time;
     tt_.new_search();
     age_history();
     previous_iteration_pv_.clear();

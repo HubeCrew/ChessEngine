@@ -39,6 +39,7 @@ uci
 isready
 position startpos moves e2e4 e7e5
 go depth 3
+go wtime 60000 btime 60000 winc 500 binc 500
 quit
 ```
 
@@ -60,6 +61,8 @@ Run the benchmark and tactical suites:
 `--disable-extensions` is available for A/B checks when measuring bounded search extensions.
 `--progress` writes per-position progress updates to stderr, so normal table and CSV output on stdout remain clean.
 External suites use an EPD-style format: four FEN fields followed by operations such as `bm` for accepted UCI best moves, `acd` for search depth, `id`, `theme`, `c0`, `hmvc`, and `fmvn`. The checked-in file-backed suites live under `data/suites/`.
+
+UCI `movetime` still takes priority for fixed-time tests. Without `movetime`, the engine allocates a conservative move budget from `wtime`, `btime`, `winc`, `binc`, and optional `movestogo`.
 
 Generate an imported Lichess tactical suite from the official CC0 puzzle database:
 

@@ -1,4 +1,5 @@
 #include <iostream>
+#include <algorithm>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -12,6 +13,12 @@ namespace {
 
 bool parse_bool(std::string_view value) {
     return value == "true" || value == "1" || value == "on";
+}
+
+std::chrono::milliseconds parse_milliseconds(std::istringstream& input) {
+    int milliseconds = 0;
+    input >> milliseconds;
+    return std::chrono::milliseconds{std::max(0, milliseconds)};
 }
 
 chess::Board parse_position(std::istringstream& input) {
@@ -130,9 +137,17 @@ int main() {
                     if (token == "depth") {
                         input >> limits.depth;
                     } else if (token == "movetime") {
-                        int milliseconds = 0;
-                        input >> milliseconds;
-                        limits.move_time = std::chrono::milliseconds(milliseconds);
+                        limits.move_time = parse_milliseconds(input);
+                    } else if (token == "wtime") {
+                        limits.white_time = parse_milliseconds(input);
+                    } else if (token == "btime") {
+                        limits.black_time = parse_milliseconds(input);
+                    } else if (token == "winc") {
+                        limits.white_increment = parse_milliseconds(input);
+                    } else if (token == "binc") {
+                        limits.black_increment = parse_milliseconds(input);
+                    } else if (token == "movestogo") {
+                        input >> limits.moves_to_go;
                     }
                 }
                 const chess::engine::SearchResult result = searcher.search(board, limits);
