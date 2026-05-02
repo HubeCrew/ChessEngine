@@ -29,6 +29,7 @@ struct Options {
     int depth_override = 0;
     std::size_t hash_mb = 64;
     bool csv = false;
+    bool progress = false;
     bool null_move_pruning = true;
     std::vector<std::filesystem::path> epd_paths;
 };
@@ -47,8 +48,16 @@ struct RunResult {
     std::int64_t time_ms = 0;
 };
 
+struct ProgressState {
+    std::size_t completed = 0;
+    std::size_t matched = 0;
+    std::uint64_t total_nodes = 0;
+    std::int64_t total_time_ms = 0;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+};
+
 void print_usage(std::ostream& out) {
-    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--disable-null-move] [--csv]\n";
+    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--disable-null-move] [--progress] [--csv]\n";
 }
 
 SuiteSelection parse_suite(std::string_view value) {
@@ -77,6 +86,8 @@ Options parse_options(int argc, char** argv) {
         }
         if (arg == "--csv") {
             options.csv = true;
+        } else if (arg == "--progress") {
+            options.progress = true;
         } else if (arg == "--disable-null-move") {
             options.null_move_pruning = false;
         } else if (arg == "--epd") {
@@ -225,6 +236,37 @@ void print_table_row(const RunResult& result) {
               << '\n';
 }
 
+void print_progress_update(const RunResult& result, std::size_t total, ProgressState& progress) {
+    ++progress.completed;
+    if (result.matched) {
+        ++progress.matched;
+    }
+    progress.total_nodes += result.nodes;
+    progress.total_time_ms += result.time_ms;
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - progress.start
+    ).count();
+    const std::size_t missed = progress.completed - progress.matched;
+
+    std::cerr << '[' << progress.completed << '/' << total << "] "
+              << result.id
+              << " theme=" << result.theme
+              << " depth=" << result.depth
+              << " best=" << result.best_move;
+    if (!result.expected.empty()) {
+        std::cerr << " expected=" << result.expected;
+    }
+    std::cerr << " ok=" << (result.matched ? "yes" : "NO")
+              << " score=" << result.score
+              << " nodes=" << result.nodes
+              << " time_ms=" << result.time_ms
+              << " matched=" << progress.matched
+              << " missed=" << missed
+              << " elapsed_s=" << elapsed
+              << '\n';
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -238,12 +280,35 @@ int main(int argc, char** argv) {
         searcher.set_null_move_pruning(options.null_move_pruning);
 
         std::vector<RunResult> results;
+        std::size_t total_positions = 0;
+        if (options.suite == SuiteSelection::Bench || options.suite == SuiteSelection::All) {
+            total_positions += chess::engine::benchmark_positions().size();
+        }
+        if (options.suite == SuiteSelection::Tactics || options.suite == SuiteSelection::All) {
+            total_positions += chess::engine::tactical_positions().size();
+        }
+
+        std::vector<std::vector<chess::engine::SuitePosition>> epd_suites;
+        epd_suites.reserve(options.epd_paths.size());
+        for (const std::filesystem::path& path : options.epd_paths) {
+            epd_suites.push_back(chess::engine::load_epd_suite(path));
+            total_positions += epd_suites.back().size();
+        }
+
+        ProgressState progress;
+        if (options.progress) {
+            std::cerr << "progress start positions=" << total_positions << '\n';
+        }
 
         if (options.suite == SuiteSelection::Bench || options.suite == SuiteSelection::All) {
             for (const chess::engine::BenchmarkPosition& position : chess::engine::benchmark_positions()) {
                 searcher.clear();
                 const int depth = options.depth_override > 0 ? options.depth_override : position.depth;
-                results.push_back(run_search(searcher, position.id, "bench", position.description, position.fen, depth));
+                RunResult result = run_search(searcher, position.id, "bench", position.description, position.fen, depth);
+                if (options.progress) {
+                    print_progress_update(result, total_positions, progress);
+                }
+                results.push_back(std::move(result));
             }
         }
 
@@ -261,12 +326,15 @@ int main(int argc, char** argv) {
                     expected_moves_string(position)
                 );
                 result.matched = chess::engine::is_expected_best_move(position, result.best_move);
+                if (options.progress) {
+                    print_progress_update(result, total_positions, progress);
+                }
                 results.push_back(std::move(result));
             }
         }
 
-        for (const std::filesystem::path& path : options.epd_paths) {
-            for (const chess::engine::SuitePosition& position : chess::engine::load_epd_suite(path)) {
+        for (const std::vector<chess::engine::SuitePosition>& suite : epd_suites) {
+            for (const chess::engine::SuitePosition& position : suite) {
                 searcher.clear();
                 const int depth = options.depth_override > 0 ? options.depth_override : position.depth;
                 RunResult result = run_search(
@@ -280,6 +348,9 @@ int main(int argc, char** argv) {
                 );
                 if (!position.expected_best_moves.empty()) {
                     result.matched = chess::engine::is_expected_best_move(position, result.best_move);
+                }
+                if (options.progress) {
+                    print_progress_update(result, total_positions, progress);
                 }
                 results.push_back(std::move(result));
             }

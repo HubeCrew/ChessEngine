@@ -87,6 +87,42 @@ def main() -> int:
         print(f"EPD depth override failed: {epd_rows}", file=sys.stderr)
         return 1
 
+    progress_completed = subprocess.run(
+        [
+            sys.argv[1],
+            "--suite",
+            "epd",
+            "--epd",
+            sys.argv[2],
+            "--depth",
+            "1",
+            "--hash",
+            "1",
+            "--csv",
+            "--progress",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=10,
+    )
+    if progress_completed.returncode != 0:
+        print(progress_completed.stderr, file=sys.stderr)
+        print(progress_completed.stdout, file=sys.stderr)
+        return progress_completed.returncode
+
+    progress_rows = list(csv.DictReader(progress_completed.stdout.splitlines()))
+    if len(progress_rows) != len(epd_rows):
+        print("progress run changed CSV row count", file=sys.stderr)
+        return 1
+    if not progress_completed.stderr.startswith("progress start positions="):
+        print(f"missing progress start line: {progress_completed.stderr}", file=sys.stderr)
+        return 1
+    if "[1/" not in progress_completed.stderr or "matched=" not in progress_completed.stderr:
+        print(f"missing progress update details: {progress_completed.stderr}", file=sys.stderr)
+        return 1
+
     return 0
 
 
