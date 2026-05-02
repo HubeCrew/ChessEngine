@@ -49,6 +49,7 @@ Run the benchmark and tactical suites:
 ./build-release/chess_bench --suite bench --depth 3 --csv
 ./build-release/chess_bench --suite tactics
 ./build-release/chess_bench --suite bench --depth 5 --disable-null-move
+./build-release/chess_bench --suite bench --depth 5 --disable-extensions
 ./build-release/chess_bench --suite epd --epd data/suites/tactics.epd
 ./build-release/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd
 ./build-release/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd --progress
@@ -56,6 +57,7 @@ Run the benchmark and tactical suites:
 
 `chess_bench` reports depth, best move, expected move for tactical cases, score, nodes, NPS, and elapsed time. The tactical suite currently contains 50 curated positions across mates, promotions, forks, hanging pieces, winning captures, pawn tactics, checks, and loose-piece tactics. Tactical runs return a non-zero exit code if any expected best move is missed.
 `--disable-null-move` is available for A/B checks when measuring the null-move pruning search feature.
+`--disable-extensions` is available for A/B checks when measuring bounded search extensions.
 `--progress` writes per-position progress updates to stderr, so normal table and CSV output on stdout remain clean.
 External suites use an EPD-style format: four FEN fields followed by operations such as `bm` for accepted UCI best moves, `acd` for search depth, `id`, `theme`, `c0`, `hmvc`, and `fmvn`. The checked-in file-backed suites live under `data/suites/`.
 
@@ -122,7 +124,7 @@ The gauntlet launches both engines as UCI subprocesses, alternates colors, uses 
 
 - `chess_core`: board state, bitboards, FEN, legal move generation, make/unmake, perft.
 - `chess_engine`: alpha-beta negamax search, quiescence, transposition table support, and static evaluation.
-- Search infrastructure: deterministic Zobrist hashing, transposition table, PVS, aspiration windows, SEE-assisted move ordering, killer/history move ordering, LMR, conservative null-move pruning, and standard UCI search info.
+- Search infrastructure: deterministic Zobrist hashing, transposition table, PVS, aspiration windows, SEE-assisted move ordering, killer/history move ordering, LMR, conservative null-move pruning, bounded search extensions, and standard UCI search info.
 - Evaluation: tapered material/PST scoring, mobility, bishop pair, pawn structure, passed pawns, and basic king terms.
 - `chess_perft`: command-line perft divide tool.
 - `chess_uci`: minimal UCI protocol entrypoint.

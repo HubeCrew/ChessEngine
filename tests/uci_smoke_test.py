@@ -12,6 +12,7 @@ def main() -> int:
         [
             "uci",
             "setoption name Hash value 2",
+            "setoption name SearchExtensions value true",
             "isready",
             "ucinewgame",
             "position startpos moves e2e4 e7e5",
@@ -38,6 +39,7 @@ def main() -> int:
     required_fragments = [
         "id name ChessEngine 0.1",
         "option name Hash type spin default 64 min 1 max 4096",
+        "option name SearchExtensions type check default true",
         "uciok",
         "readyok",
         "bestmove ",
@@ -67,4 +69,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

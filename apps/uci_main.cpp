@@ -76,6 +76,8 @@ void apply_setoption(chess::engine::Searcher& searcher, std::istringstream& inpu
         searcher.set_hash_size_mb(static_cast<std::size_t>(std::stoul(value)));
     } else if (name == "NullMovePruning" && !value.empty()) {
         searcher.set_null_move_pruning(parse_bool(value));
+    } else if (name == "SearchExtensions" && !value.empty()) {
+        searcher.set_search_extensions(parse_bool(value));
     }
 }
 
@@ -110,6 +112,7 @@ int main() {
                 std::cout << "id author HubeKnaepkens\n";
                 std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
                 std::cout << "option name NullMovePruning type check default true\n";
+                std::cout << "option name SearchExtensions type check default true\n";
                 std::cout << "uciok\n";
             } else if (command == "isready") {
                 std::cout << "readyok\n";

@@ -108,8 +108,13 @@ TEST_CASE("hash table can be resized and cleared through searcher") {
     chess::engine::Searcher searcher;
     searcher.set_hash_size_mb(2);
     REQUIRE(searcher.hash_size_mb() == 2);
+    searcher.set_search_extensions(false);
+    REQUIRE_FALSE(searcher.search_extensions());
+    searcher.set_search_extensions(true);
+    REQUIRE(searcher.search_extensions());
     searcher.clear();
     REQUIRE(searcher.hash_size_mb() == 2);
+    REQUIRE(searcher.search_extensions());
 }
 
 TEST_CASE("evaluation scores king-only positions near equal") {

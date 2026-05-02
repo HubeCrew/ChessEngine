@@ -22,6 +22,7 @@ constexpr int kLmrMoveIndex = 4;
 constexpr int kNullMoveMinDepth = 4;
 constexpr int kNullMoveReduction = 3;
 constexpr int kNullMoveMinMaterial = 500;
+constexpr int kMaxExtensionsPerLine = 6;
 constexpr std::size_t kMaxHistoryQuiets = 256;
 
 int color_index(Color color) {
@@ -142,6 +143,50 @@ bool move_gives_check(Board& board, const Move& move) {
     return gives_check;
 }
 
+bool is_passed_pawn_after_move(const Board& board, Square square, Color color) {
+    const Color enemy = opposite(color);
+    const int direction = color == Color::White ? 1 : -1;
+    for (int file = std::max(0, file_of(square) - 1); file <= std::min(7, file_of(square) + 1); ++file) {
+        for (int rank = rank_of(square) + direction; rank >= 0 && rank < 8; rank += direction) {
+            if (board.piece_at(make_square(file, rank)) == make_piece(enemy, PieceType::Pawn)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool is_advanced_passed_pawn_move(const Board& board_after_move, const Move& move, Color moving_side) {
+    const Piece moved_piece = board_after_move.piece_at(move.to);
+    if (moved_piece != make_piece(moving_side, PieceType::Pawn)) {
+        return false;
+    }
+
+    const int advanced_rank = moving_side == Color::White ? rank_of(move.to) : 7 - rank_of(move.to);
+    return advanced_rank >= 5 && is_passed_pawn_after_move(board_after_move, move.to, moving_side);
+}
+
+int extension_for_move(
+    const Board& board_after_move,
+    const Move& move,
+    bool parent_in_check,
+    bool /*gives_check*/,
+    Color moving_side,
+    int depth,
+    int extensions_used
+) {
+    if (extensions_used >= kMaxExtensionsPerLine || depth <= 1) {
+        return 0;
+    }
+    if (parent_in_check) {
+        return 1;
+    }
+    if (is_advanced_passed_pawn_move(board_after_move, move, moving_side)) {
+        return 1;
+    }
+    return 0;
+}
+
 int clamp_history(int value) {
     return std::clamp(value, -kHistoryLimit, kHistoryLimit);
 }
@@ -191,7 +236,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
 
         int score = 0;
         while (true) {
-            score = negamax(board, depth, 0, alpha, beta, true);
+            score = negamax(board, depth, 0, alpha, beta, true, 0);
             if (should_stop() || (score > alpha && score < beta)) {
                 break;
             }
@@ -257,6 +302,14 @@ bool Searcher::null_move_pruning() const {
     return null_move_pruning_;
 }
 
+void Searcher::set_search_extensions(bool enabled) {
+    search_extensions_ = enabled;
+}
+
+bool Searcher::search_extensions() const {
+    return search_extensions_;
+}
+
 void Searcher::clear() {
     tt_.clear();
     for (auto& ply_killers : killer_moves_) {
@@ -270,7 +323,7 @@ void Searcher::clear() {
     previous_iteration_pv_.clear();
 }
 
-int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move) {
+int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move, int extensions_used) {
     if (should_stop()) {
         return evaluate(board);
     }
@@ -313,7 +366,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
         && evaluate(board) >= beta) {
         const UndoState undo = board.make_null_move();
         const int null_depth = std::max(0, depth - 1 - kNullMoveReduction);
-        const int score = -negamax(board, null_depth, ply + 1, -beta, -beta + 1, false);
+        const int score = -negamax(board, null_depth, ply + 1, -beta, -beta + 1, false, extensions_used);
         board.unmake_null_move(undo);
         if (should_stop()) {
             return evaluate(board);
@@ -338,28 +391,34 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
     for (const Move& move : moves) {
         const Color moving_side = board.side_to_move();
         const UndoState undo = board.make_move(move);
+        const bool gives_check = board.in_check(board.side_to_move());
+        const int extension = search_extensions_
+            ? extension_for_move(board, move, in_check, gives_check, moving_side, depth, extensions_used)
+            : 0;
+        const int child_depth = depth - 1 + extension;
+        const int child_extensions_used = extensions_used + extension;
         int score = 0;
         if (move_index == 0) {
-            score = -negamax(board, depth - 1, ply + 1, -beta, -alpha, true);
+            score = -negamax(board, child_depth, ply + 1, -beta, -alpha, true, child_extensions_used);
         } else {
-            const bool gives_check = board.in_check(board.side_to_move());
             const bool can_reduce = depth >= kLmrMinDepth
                 && move_index >= kLmrMoveIndex
                 && !in_check
+                && extension == 0
                 && is_quiet_history_move(move)
                 && !gives_check
                 && !(is_valid_move_shape(tt_move) && same_move_identity(move, tt_move))
                 && !(is_valid_move_shape(pv_move) && same_move_identity(move, pv_move));
             if (can_reduce) {
-                score = -negamax(board, depth - 2, ply + 1, -alpha - 1, -alpha, true);
+                score = -negamax(board, depth - 2, ply + 1, -alpha - 1, -alpha, true, child_extensions_used);
                 if (score > alpha && !should_stop()) {
-                    score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha, true);
+                    score = -negamax(board, child_depth, ply + 1, -alpha - 1, -alpha, true, child_extensions_used);
                 }
             } else {
-                score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha, true);
+                score = -negamax(board, child_depth, ply + 1, -alpha - 1, -alpha, true, child_extensions_used);
             }
             if (score > alpha && score < beta) {
-                score = -negamax(board, depth - 1, ply + 1, -beta, -alpha, true);
+                score = -negamax(board, child_depth, ply + 1, -beta, -alpha, true, child_extensions_used);
             }
         }
         board.unmake_move(undo);

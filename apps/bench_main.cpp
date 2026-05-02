@@ -31,6 +31,7 @@ struct Options {
     bool csv = false;
     bool progress = false;
     bool null_move_pruning = true;
+    bool search_extensions = true;
     std::vector<std::filesystem::path> epd_paths;
 };
 
@@ -57,7 +58,7 @@ struct ProgressState {
 };
 
 void print_usage(std::ostream& out) {
-    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--disable-null-move] [--progress] [--csv]\n";
+    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--disable-null-move] [--disable-extensions] [--progress] [--csv]\n";
 }
 
 SuiteSelection parse_suite(std::string_view value) {
@@ -90,6 +91,8 @@ Options parse_options(int argc, char** argv) {
             options.progress = true;
         } else if (arg == "--disable-null-move") {
             options.null_move_pruning = false;
+        } else if (arg == "--disable-extensions") {
+            options.search_extensions = false;
         } else if (arg == "--epd") {
             if (++index >= argc) {
                 throw std::invalid_argument("--epd requires a path");
@@ -278,6 +281,7 @@ int main(int argc, char** argv) {
         chess::engine::Searcher searcher;
         searcher.set_hash_size_mb(options.hash_mb);
         searcher.set_null_move_pruning(options.null_move_pruning);
+        searcher.set_search_extensions(options.search_extensions);
 
         std::vector<RunResult> results;
         std::size_t total_positions = 0;
