@@ -121,7 +121,25 @@ Run against Stockfish at its lowest built-in limited Elo:
   --csv
 ```
 
-The gauntlet launches both engines as UCI subprocesses, alternates colors, uses a built-in balanced opening suite with color reversal, validates every move through `chess_referee`, writes PGNs to `gauntlet-results/`, and reports score plus a rough Elo difference. Non-clean games, such as crashes, timeouts, protocol failures, or illegal moves, are separated from normal chess results.
+Run a clock-based gauntlet instead of fixed per-move time:
+
+```bash
+./tools/gauntlet.py \
+  --engine-a ./build-release/chess_uci \
+  --engine-b /usr/games/stockfish \
+  --name-a current-release \
+  --name-b stockfish-1320 \
+  --referee ./build-release/chess_referee \
+  --games 200 \
+  --time 60000 \
+  --increment 500 \
+  --moves-to-go 30 \
+  --option-b UCI_LimitStrength=true \
+  --option-b UCI_Elo=1320 \
+  --csv
+```
+
+The gauntlet launches both engines as UCI subprocesses, alternates colors, uses a built-in balanced opening suite with color reversal, validates every move through `chess_referee`, writes PGNs to `gauntlet-results/`, and reports score plus a rough Elo difference. It supports either fixed `movetime` or clock-based `wtime/btime/winc/binc` games. Non-clean games, such as crashes, timeouts, protocol failures, or illegal moves, are separated from normal chess results.
 
 ## Architecture
 

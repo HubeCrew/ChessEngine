@@ -49,6 +49,17 @@ class GameResult:
     clean: bool
 
 
+@dataclass
+class TimeControl:
+    movetime_ms: int = 0
+    initial_ms: int = 0
+    increment_ms: int = 0
+    moves_to_go: int = 0
+
+    def uses_clock(self) -> bool:
+        return self.initial_ms > 0
+
+
 class UciError(RuntimeError):
     pass
 
@@ -90,13 +101,41 @@ class UciEngine:
         self._send("isready")
         self._read_until("readyok", self.protocol_timeout)
 
-    def bestmove(self, fen: str, moves: list[str], movetime_ms: int) -> str:
+    def bestmove_fixed(self, fen: str, moves: list[str], movetime_ms: int) -> str:
         command = f"position fen {fen}"
         if moves:
             command += " moves " + " ".join(moves)
         self._send(command)
         self._send(f"go movetime {movetime_ms}")
         deadline = time.monotonic() + max(self.protocol_timeout, movetime_ms / 1000.0 + self.protocol_timeout)
+        return self._read_bestmove(deadline)
+
+    def bestmove_clock(
+        self,
+        fen: str,
+        moves: list[str],
+        white_time_ms: int,
+        black_time_ms: int,
+        white_increment_ms: int,
+        black_increment_ms: int,
+        moves_to_go: int,
+        expected_budget_ms: int,
+    ) -> str:
+        command = f"position fen {fen}"
+        if moves:
+            command += " moves " + " ".join(moves)
+        self._send(command)
+        go_command = (
+            f"go wtime {max(0, white_time_ms)} btime {max(0, black_time_ms)} "
+            f"winc {max(0, white_increment_ms)} binc {max(0, black_increment_ms)}"
+        )
+        if moves_to_go > 0:
+            go_command += f" movestogo {moves_to_go}"
+        self._send(go_command)
+        deadline = time.monotonic() + max(self.protocol_timeout, expected_budget_ms / 1000.0 + self.protocol_timeout)
+        return self._read_bestmove(deadline)
+
+    def _read_bestmove(self, deadline: float) -> str:
         while True:
             line = self._readline(deadline)
             if line.startswith("bestmove "):
@@ -209,6 +248,18 @@ def forfeit_outcome(side: str) -> str:
     return "black_win" if side == "white" else "white_win"
 
 
+def allocated_budget_ms(remaining_ms: int, increment_ms: int, moves_to_go: int) -> int:
+    if remaining_ms <= 0:
+        return 0
+    expected_moves = moves_to_go if moves_to_go > 0 else 30
+    safety = min(20, max(0, remaining_ms // 10))
+    usable = max(1, remaining_ms - safety)
+    base = usable // expected_moves
+    increment_part = increment_ms * 3 // 4
+    cap = max(1, usable // 4)
+    return max(1, min(cap, base + increment_part))
+
+
 def write_pgn(path: Path, game: GameResult, start_fen: str) -> None:
     headers = {
         "Event": "ChessEngine Gauntlet",
@@ -262,18 +313,48 @@ def play_game(
     white: UciEngine,
     black: UciEngine,
     referee: Path,
-    movetime_ms: int,
+    time_control: TimeControl,
     max_plies: int,
     referee_timeout: float,
 ) -> GameResult:
     moves: list[str] = []
+    clocks = {"white": time_control.initial_ms, "black": time_control.initial_ms}
     status = run_referee(referee, start_fen, moves, referee_timeout)
 
     while status["outcome"] == "ongoing" and len(moves) < max_plies:
         side = status["side"]
         engine = white if side == "white" else black
         try:
-            move = engine.bestmove(start_fen, moves, movetime_ms)
+            if time_control.uses_clock():
+                increment = time_control.increment_ms
+                budget_ms = allocated_budget_ms(clocks[side], increment, time_control.moves_to_go)
+                started = time.monotonic()
+                move = engine.bestmove_clock(
+                    start_fen,
+                    moves,
+                    clocks["white"],
+                    clocks["black"],
+                    increment,
+                    increment,
+                    time_control.moves_to_go,
+                    budget_ms,
+                )
+                elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
+                clocks[side] = clocks[side] - elapsed_ms + increment
+                if clocks[side] < 0:
+                    return GameResult(
+                        game_number,
+                        opening_name,
+                        white.config.name,
+                        black.config.name,
+                        forfeit_result(side),
+                        f"{forfeit_outcome(side)}:timeout",
+                        len(moves),
+                        moves,
+                        False,
+                    )
+            else:
+                move = engine.bestmove_fixed(start_fen, moves, time_control.movetime_ms)
         except UciError:
             return GameResult(
                 game_number,
@@ -390,7 +471,10 @@ def main() -> int:
     parser.add_argument("--name-b", default="engine_b")
     parser.add_argument("--referee", default="./build/chess_referee")
     parser.add_argument("--games", type=int, default=20)
-    parser.add_argument("--movetime", type=int, default=100, help="milliseconds per move")
+    parser.add_argument("--movetime", type=int, default=100, help="fixed milliseconds per move")
+    parser.add_argument("--time", type=int, default=0, help="initial clock in milliseconds for both engines")
+    parser.add_argument("--increment", type=int, default=0, help="increment in milliseconds for both engines")
+    parser.add_argument("--moves-to-go", type=int, default=0, help="movestogo value sent with clock-based UCI go commands")
     parser.add_argument("--hash", type=int, default=16, help="Hash option in MB for both engines")
     parser.add_argument(
         "--option-a",
@@ -418,9 +502,19 @@ def main() -> int:
     if args.games <= 0:
         print("--games must be positive", file=sys.stderr)
         return 2
-    if args.movetime <= 0:
-        print("--movetime must be positive", file=sys.stderr)
+    if args.time < 0 or args.increment < 0 or args.moves_to_go < 0:
+        print("--time, --increment, and --moves-to-go cannot be negative", file=sys.stderr)
         return 2
+    if args.time <= 0 and args.movetime <= 0:
+        print("--movetime must be positive when --time is not set", file=sys.stderr)
+        return 2
+
+    time_control = TimeControl(
+        movetime_ms=args.movetime,
+        initial_ms=args.time,
+        increment_ms=args.increment,
+        moves_to_go=args.moves_to_go,
+    )
 
     referee = Path(args.referee)
     output_dir = Path(args.output_dir)
@@ -451,7 +545,7 @@ def main() -> int:
                 white,
                 black,
                 referee,
-                args.movetime,
+                time_control,
                 args.max_plies,
                 args.protocol_timeout,
             )
