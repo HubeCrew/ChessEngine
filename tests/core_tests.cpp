@@ -193,6 +193,18 @@ TEST_CASE("promotion moves include all choices") {
     REQUIRE(promotions == 4);
 }
 
+TEST_CASE("legal move generation never captures the enemy king") {
+    chess::Board board = chess::board_from_fen("7k/6P1/8/8/8/8/8/4K3 w - - 0 1");
+    const chess::MoveList moves = chess::generate_legal_moves(board);
+
+    for (const chess::Move& move : moves) {
+        REQUIRE(chess::move_to_uci(move) != "g7h8q");
+        REQUIRE(chess::move_to_uci(move) != "g7h8r");
+        REQUIRE(chess::move_to_uci(move) != "g7h8b");
+        REQUIRE(chess::move_to_uci(move) != "g7h8n");
+    }
+}
+
 TEST_CASE("FEN parser rejects malformed positions") {
     for (const std::string& fen : {
              "8/8/8/8/8/8/8/8 w - - 0 1",

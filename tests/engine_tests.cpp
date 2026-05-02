@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 #include "chess/core/fen.h"
 #include "chess/core/movegen.h"
 #include "chess/engine/evaluation.h"
+#include "chess/engine/position_suite.h"
 #include "chess/engine/search.h"
 #include "chess/engine/transposition_table.h"
 
@@ -155,4 +157,37 @@ TEST_CASE("search prefers winning free queen material") {
     const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{1});
 
     REQUIRE(chess::move_to_uci(result.best_move) == "h1h7");
+}
+
+TEST_CASE("benchmark suite positions search to legal moves") {
+    chess::engine::Searcher searcher;
+    searcher.set_hash_size_mb(2);
+
+    for (const chess::engine::BenchmarkPosition& position : chess::engine::benchmark_positions()) {
+        INFO(position.id);
+        chess::Board board = chess::board_from_fen(position.fen);
+        searcher.clear();
+        const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{2});
+
+        REQUIRE(result.depth == 2);
+        REQUIRE(result.nodes > 0);
+        REQUIRE(is_legal_best_move(board, result.best_move));
+    }
+}
+
+TEST_CASE("tactical suite finds expected best moves") {
+    chess::engine::Searcher searcher;
+    searcher.set_hash_size_mb(2);
+
+    for (const chess::engine::TacticalPosition& position : chess::engine::tactical_positions()) {
+        INFO(position.id);
+        chess::Board board = chess::board_from_fen(position.fen);
+        searcher.clear();
+        const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{position.depth});
+        const std::string best_move = chess::move_to_uci(result.best_move);
+
+        REQUIRE(result.depth == position.depth);
+        REQUIRE(is_legal_best_move(board, result.best_move));
+        REQUIRE(chess::engine::is_expected_best_move(position, best_move));
+    }
 }

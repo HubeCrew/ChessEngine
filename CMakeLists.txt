@@ -25,6 +25,7 @@ endif()
 
 add_library(chess_engine
     src/engine/evaluation.cpp
+    src/engine/position_suite.cpp
     src/engine/search.cpp
     src/engine/transposition_table.cpp
 )
@@ -39,6 +40,9 @@ target_link_libraries(chess_perft PRIVATE chess_core)
 
 add_executable(chess_uci apps/uci_main.cpp)
 target_link_libraries(chess_uci PRIVATE chess_engine)
+
+add_executable(chess_bench apps/bench_main.cpp)
+target_link_libraries(chess_bench PRIVATE chess_engine)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -69,6 +73,10 @@ if(BUILD_TESTING)
         add_test(
             NAME uci_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/uci_smoke_test.py $<TARGET_FILE:chess_uci>
+        )
+        add_test(
+            NAME bench_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/bench_smoke_test.py $<TARGET_FILE:chess_bench>
         )
     endif()
 endif()

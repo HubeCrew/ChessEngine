@@ -19,6 +19,13 @@ bool has_enemy_piece(const Board& board, Square square, Color color) {
         && color_of(board.piece_at(square)) != color;
 }
 
+bool is_enemy_king(const Board& board, Square square, Color color) {
+    return is_valid_square(square)
+        && board.piece_at(square) != Piece::None
+        && color_of(board.piece_at(square)) != color
+        && type_of(board.piece_at(square)) == PieceType::King;
+}
+
 void add_promotion_moves(MoveList& moves, Square from, Square to, std::uint8_t flags) {
     for (const PieceType promotion : {
              PieceType::Queen,
@@ -67,7 +74,7 @@ void add_pawn_moves(const Board& board, MoveList& moves, Square from, Color colo
             continue;
         }
 
-        if (has_enemy_piece(board, to, color)) {
+        if (has_enemy_piece(board, to, color) && !is_enemy_king(board, to, color)) {
             if (rank == promotion_from_rank) {
                 add_promotion_moves(moves, from, to, Capture);
             } else {
@@ -92,7 +99,7 @@ void add_knight_moves(const Board& board, MoveList& moves, Square from, Color co
             continue;
         }
         const Square to = make_square(file, rank);
-        if (has_own_piece(board, to, color)) {
+        if (has_own_piece(board, to, color) || is_enemy_king(board, to, color)) {
             continue;
         }
         moves.push_back(Move{
@@ -117,6 +124,9 @@ void add_slider_moves(
         while (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
             const Square to = make_square(file, rank);
             if (has_own_piece(board, to, color)) {
+                break;
+            }
+            if (is_enemy_king(board, to, color)) {
                 break;
             }
             moves.push_back(Move{
@@ -147,7 +157,7 @@ void add_king_moves(const Board& board, MoveList& moves, Square from, Color colo
             continue;
         }
         const Square to = make_square(file, rank);
-        if (has_own_piece(board, to, color)) {
+        if (has_own_piece(board, to, color) || is_enemy_king(board, to, color)) {
             continue;
         }
         moves.push_back(Move{
@@ -293,4 +303,3 @@ Move parse_uci_move(Board& board, std::string_view text) {
 }
 
 }  // namespace chess
-
