@@ -40,6 +40,7 @@ def main() -> int:
         "nps",
         "time_ms",
         "description",
+        "qnodes",
     }
     if set(rows[0].keys()) != required_columns:
         print(f"unexpected columns: {rows[0].keys()}", file=sys.stderr)
@@ -54,6 +55,9 @@ def main() -> int:
             return 1
         if int(row["nodes"]) <= 0:
             print(f"expected nodes > 0: {row}", file=sys.stderr)
+            return 1
+        if int(row["qnodes"]) <= 0:
+            print(f"expected qnodes > 0: {row}", file=sys.stderr)
             return 1
         if row["bestmove"] == "0000":
             print(f"expected non-null bestmove: {row}", file=sys.stderr)
@@ -119,7 +123,7 @@ def main() -> int:
     if not progress_completed.stderr.startswith("progress start positions="):
         print(f"missing progress start line: {progress_completed.stderr}", file=sys.stderr)
         return 1
-    if "[1/" not in progress_completed.stderr or "matched=" not in progress_completed.stderr:
+    if "[1/" not in progress_completed.stderr or "matched=" not in progress_completed.stderr or "qnodes=" not in progress_completed.stderr:
         print(f"missing progress update details: {progress_completed.stderr}", file=sys.stderr)
         return 1
 

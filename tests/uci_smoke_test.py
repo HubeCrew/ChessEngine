@@ -51,7 +51,7 @@ def main() -> int:
             return 1
 
     info_pattern = re.compile(
-        r"info depth 3 score cp -?\d+ nodes \d+ nps \d+ time \d+( pv [a-h][1-8][a-h][1-8][nbrq]?( [a-h][1-8][a-h][1-8][nbrq]?)*)?"
+        r"info depth 3 score cp -?\d+ nodes \d+ qnodes \d+ nps \d+ time \d+( pv [a-h][1-8][a-h][1-8][nbrq]?( [a-h][1-8][a-h][1-8][nbrq]?)*)?"
     )
     if info_pattern.search(output) is None:
         print("missing standard depth-3 info output", file=sys.stderr)

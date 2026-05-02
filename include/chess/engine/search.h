@@ -21,6 +21,7 @@ struct SearchResult {
     int score_centipawns = 0;
     int depth = 0;
     std::uint64_t nodes = 0;
+    std::uint64_t qnodes = 0;
     std::uint64_t tt_hits = 0;
     std::chrono::milliseconds elapsed{0};
     std::uint64_t nps = 0;
@@ -44,6 +45,7 @@ private:
     static constexpr int kMaxPly = 128;
 
     std::uint64_t nodes_ = 0;
+    std::uint64_t qnodes_ = 0;
     std::uint64_t tt_hits_ = 0;
     std::chrono::steady_clock::time_point deadline_{};
     std::chrono::steady_clock::time_point start_time_{};
@@ -56,7 +58,7 @@ private:
     std::vector<Move> previous_iteration_pv_;
 
     int negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move, int extensions_used);
-    int quiescence(Board& board, int ply, int alpha, int beta);
+    int quiescence(Board& board, int ply, int alpha, int beta, int qply);
     void order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const;
     void age_history();
     void record_cutoff(

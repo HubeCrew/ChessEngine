@@ -23,6 +23,8 @@ constexpr int kNullMoveMinDepth = 4;
 constexpr int kNullMoveReduction = 3;
 constexpr int kNullMoveMinMaterial = 500;
 constexpr int kMaxExtensionsPerLine = 6;
+constexpr int kMaxQuiescenceQuietCheckPly = 1;
+constexpr int kDeltaPruningMargin = 200;
 constexpr std::size_t kMaxHistoryQuiets = 256;
 
 int color_index(Color color) {
@@ -166,6 +168,10 @@ bool is_advanced_passed_pawn_move(const Board& board_after_move, const Move& mov
     return advanced_rank >= 5 && is_passed_pawn_after_move(board_after_move, move.to, moving_side);
 }
 
+bool is_quiescence_candidate(Board& board, const Move& move, bool allow_quiet_checks) {
+    return move.is_capture() || move.is_promotion() || (allow_quiet_checks && move_gives_check(board, move));
+}
+
 int extension_for_move(
     const Board& board_after_move,
     const Move& move,
@@ -199,6 +205,7 @@ Searcher::Searcher() {
 
 SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     nodes_ = 0;
+    qnodes_ = 0;
     tt_hits_ = 0;
     use_deadline_ = limits.move_time.count() > 0;
     start_time_ = std::chrono::steady_clock::now();
@@ -265,6 +272,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
             result.score_centipawns = score;
             result.depth = depth;
             result.nodes = nodes_;
+            result.qnodes = qnodes_;
             result.tt_hits = tt_hits_;
             result.principal_variation = extract_principal_variation(board, depth);
             if (!result.principal_variation.empty()) {
@@ -352,7 +360,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
     }
 
     if (depth == 0 || ply >= kMaxPly - 1) {
-        return quiescence(board, ply, alpha, beta);
+        return quiescence(board, ply, alpha, beta, 0);
     }
 
     const bool in_check = board.in_check(board.side_to_move());
@@ -452,15 +460,17 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
     return best_score;
 }
 
-int Searcher::quiescence(Board& board, int ply, int alpha, int beta) {
+int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
     if (should_stop()) {
         return evaluate(board);
     }
     ++nodes_;
+    ++qnodes_;
 
     const bool in_check = board.in_check(board.side_to_move());
+    int stand_pat = -kInfinity;
     if (!in_check) {
-        const int stand_pat = evaluate(board);
+        stand_pat = evaluate(board);
         if (stand_pat >= beta) {
             return beta;
         }
@@ -474,9 +484,13 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta) {
 
     MoveList moves = generate_legal_moves(board);
     if (!in_check) {
+        const bool allow_quiet_checks = qply < kMaxQuiescenceQuietCheckPly
+            && ply < kMaxPly - 1
+            && alpha > -kMateScore + kMateWindow
+            && beta < kMateScore - kMateWindow;
         moves.erase(
-            std::remove_if(moves.begin(), moves.end(), [](const Move& move) {
-                return !move.is_capture() && !move.is_promotion();
+            std::remove_if(moves.begin(), moves.end(), [&](const Move& move) {
+                return !is_quiescence_candidate(board, move, allow_quiet_checks);
             }),
             moves.end()
         );
@@ -486,13 +500,21 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta) {
     order_moves(board, moves, tt_move, ply);
 
     for (const Move& move : moves) {
-        if (!in_check && needs_see_for_loss_detection(board, move)
-            && static_exchange_eval(board, move) < 0 && !move_gives_check(board, move)) {
-            continue;
+        bool gives_check = false;
+        if (!in_check) {
+            gives_check = move_gives_check(board, move);
+            if (move.is_capture() && !move.is_promotion() && !gives_check
+                && stand_pat + immediate_capture_gain(board, move) + kDeltaPruningMargin <= alpha) {
+                continue;
+            }
+            if (needs_see_for_loss_detection(board, move)
+                && static_exchange_eval(board, move) < 0 && !gives_check) {
+                continue;
+            }
         }
 
         const UndoState undo = board.make_move(move);
-        const int score = -quiescence(board, ply + 1, -beta, -alpha);
+        const int score = -quiescence(board, ply + 1, -beta, -alpha, qply + 1);
         board.unmake_move(undo);
         if (score >= beta) {
             return beta;

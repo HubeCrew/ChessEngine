@@ -45,6 +45,7 @@ struct RunResult {
     bool matched = true;
     int score = 0;
     std::uint64_t nodes = 0;
+    std::uint64_t qnodes = 0;
     std::uint64_t nps = 0;
     std::int64_t time_ms = 0;
 };
@@ -53,6 +54,7 @@ struct ProgressState {
     std::size_t completed = 0;
     std::size_t matched = 0;
     std::uint64_t total_nodes = 0;
+    std::uint64_t total_qnodes = 0;
     std::int64_t total_time_ms = 0;
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 };
@@ -170,13 +172,14 @@ RunResult run_search(
     result.expected = std::move(expected);
     result.score = search_result.score_centipawns;
     result.nodes = search_result.nodes;
+    result.qnodes = search_result.qnodes;
     result.nps = search_result.nps;
     result.time_ms = search_result.elapsed.count();
     return result;
 }
 
 void print_csv_header() {
-    std::cout << "id,theme,depth,bestmove,expected,matched,score_cp,nodes,nps,time_ms,description\n";
+    std::cout << "id,theme,depth,bestmove,expected,matched,score_cp,nodes,nps,time_ms,description,qnodes\n";
 }
 
 std::string csv_escape(const std::string& value) {
@@ -204,7 +207,8 @@ void print_csv_row(const RunResult& result) {
               << result.nodes << ','
               << result.nps << ','
               << result.time_ms << ','
-              << csv_escape(result.description) << '\n';
+              << csv_escape(result.description) << ','
+              << result.qnodes << '\n';
 }
 
 void print_table_header() {
@@ -218,6 +222,7 @@ void print_table_header() {
               << std::setw(8) << "ok"
               << std::setw(10) << "score"
               << std::setw(14) << "nodes"
+              << std::setw(14) << "qnodes"
               << std::setw(14) << "nps"
               << std::setw(10) << "ms"
               << '\n';
@@ -234,6 +239,7 @@ void print_table_row(const RunResult& result) {
               << std::setw(8) << (result.matched ? "yes" : "NO")
               << std::setw(10) << result.score
               << std::setw(14) << result.nodes
+              << std::setw(14) << result.qnodes
               << std::setw(14) << result.nps
               << std::setw(10) << result.time_ms
               << '\n';
@@ -245,6 +251,7 @@ void print_progress_update(const RunResult& result, std::size_t total, ProgressS
         ++progress.matched;
     }
     progress.total_nodes += result.nodes;
+    progress.total_qnodes += result.qnodes;
     progress.total_time_ms += result.time_ms;
 
     const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
@@ -263,6 +270,7 @@ void print_progress_update(const RunResult& result, std::size_t total, ProgressS
     std::cerr << " ok=" << (result.matched ? "yes" : "NO")
               << " score=" << result.score
               << " nodes=" << result.nodes
+              << " qnodes=" << result.qnodes
               << " time_ms=" << result.time_ms
               << " matched=" << progress.matched
               << " missed=" << missed
@@ -362,10 +370,12 @@ int main(int argc, char** argv) {
 
         bool all_matched = true;
         std::uint64_t total_nodes = 0;
+        std::uint64_t total_qnodes = 0;
         std::int64_t total_time_ms = 0;
         for (const RunResult& result : results) {
             all_matched = all_matched && result.matched;
             total_nodes += result.nodes;
+            total_qnodes += result.qnodes;
             total_time_ms += result.time_ms;
         }
 
@@ -382,6 +392,7 @@ int main(int argc, char** argv) {
             const auto total_nps = total_nodes * 1000ULL / static_cast<std::uint64_t>(std::max<std::int64_t>(1, total_time_ms));
             std::cout << "\npositions " << results.size()
                       << " total_nodes " << total_nodes
+                      << " total_qnodes " << total_qnodes
                       << " total_time_ms " << total_time_ms
                       << " total_nps " << total_nps << '\n';
         }

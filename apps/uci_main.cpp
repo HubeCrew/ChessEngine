@@ -139,6 +139,7 @@ int main() {
                 std::cout << "info depth " << result.depth
                           << " score cp " << result.score_centipawns
                           << " nodes " << result.nodes
+                          << " qnodes " << result.qnodes
                           << " nps " << result.nps
                           << " time " << result.elapsed.count();
                 if (!result.principal_variation.empty()) {
