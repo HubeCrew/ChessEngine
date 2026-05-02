@@ -14,6 +14,7 @@ namespace {
 constexpr int kInfinity = 1'000'000;
 constexpr int kMateScore = 900'000;
 constexpr int kMateWindow = 1'000;
+constexpr int kAspirationWindow = 50;
 
 int color_index(Color color) {
     return static_cast<int>(color);
@@ -90,6 +91,10 @@ bool is_valid_move_shape(const Move& move) {
     return is_valid_square(move.from) && is_valid_square(move.to);
 }
 
+bool is_mate_score(int score) {
+    return std::abs(score) > kMateScore - kMateWindow;
+}
+
 bool move_gives_check(Board& board, const Move& move) {
     const Color moving_side = board.side_to_move();
     const UndoState undo = board.make_move(move);
@@ -129,7 +134,35 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
             break;
         }
 
-        const int score = negamax(board, depth, 0, -kInfinity, kInfinity);
+        int alpha = -kInfinity;
+        int beta = kInfinity;
+        int window = kAspirationWindow;
+        if (depth > 1 && !is_mate_score(result.score_centipawns)) {
+            alpha = std::max(-kInfinity, result.score_centipawns - window);
+            beta = std::min(kInfinity, result.score_centipawns + window);
+        }
+
+        int score = 0;
+        while (true) {
+            score = negamax(board, depth, 0, alpha, beta);
+            if (should_stop() || (score > alpha && score < beta)) {
+                break;
+            }
+
+            if (alpha == -kInfinity && beta == kInfinity) {
+                break;
+            }
+
+            window *= 2;
+            if (window >= kInfinity / 2 || is_mate_score(score)) {
+                alpha = -kInfinity;
+                beta = kInfinity;
+            } else {
+                alpha = std::max(-kInfinity, score - window);
+                beta = std::min(kInfinity, score + window);
+            }
+        }
+
         if (!should_stop()) {
             const TranspositionEntry* root_entry = tt_.probe(board.hash_key());
             if (root_entry != nullptr && is_valid_move_shape(root_entry->best_move)) {
@@ -187,6 +220,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
     ++nodes_;
 
     const int original_alpha = alpha;
+    const int original_beta = beta;
     Move tt_move;
     if (const TranspositionEntry* entry = tt_.probe(board.hash_key())) {
         tt_move = entry->best_move;
@@ -219,11 +253,21 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
 
     Move best_move;
     int best_score = -kInfinity;
+    int move_index = 0;
     for (const Move& move : moves) {
         const Color moving_side = board.side_to_move();
         const UndoState undo = board.make_move(move);
-        const int score = -negamax(board, depth - 1, ply + 1, -beta, -alpha);
+        int score = 0;
+        if (move_index == 0) {
+            score = -negamax(board, depth - 1, ply + 1, -beta, -alpha);
+        } else {
+            score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha);
+            if (score > alpha && score < beta) {
+                score = -negamax(board, depth - 1, ply + 1, -beta, -alpha);
+            }
+        }
         board.unmake_move(undo);
+        ++move_index;
 
         if (score > best_score) {
             best_score = score;
@@ -239,7 +283,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
     Bound bound = Bound::Exact;
     if (best_score <= original_alpha) {
         bound = Bound::Upper;
-    } else if (best_score >= beta) {
+    } else if (best_score >= original_beta) {
         bound = Bound::Lower;
     }
     tt_.store(board.hash_key(), depth, score_to_tt(best_score, ply), bound, best_move);
