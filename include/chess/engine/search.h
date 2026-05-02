@@ -50,7 +50,6 @@ private:
 
     int negamax(Board& board, int depth, int ply, int alpha, int beta);
     int quiescence(Board& board, int ply, int alpha, int beta);
-    int evaluate(const Board& board) const;
     void order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const;
     void record_cutoff(const Move& move, int depth, int ply, Color side_to_move);
     std::vector<Move> extract_principal_variation(Board& board, int depth) const;

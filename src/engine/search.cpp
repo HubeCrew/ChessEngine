@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "chess/core/movegen.h"
+#include "chess/engine/evaluation.h"
 
 namespace chess::engine {
 
@@ -12,25 +13,6 @@ namespace {
 constexpr int kInfinity = 1'000'000;
 constexpr int kMateScore = 900'000;
 constexpr int kMateWindow = 1'000;
-
-int piece_value(PieceType type) {
-    switch (type) {
-        case PieceType::Pawn:
-            return 100;
-        case PieceType::Knight:
-            return 320;
-        case PieceType::Bishop:
-            return 330;
-        case PieceType::Rook:
-            return 500;
-        case PieceType::Queen:
-            return 900;
-        case PieceType::King:
-        case PieceType::None:
-            return 0;
-    }
-    return 0;
-}
 
 int color_index(Color color) {
     return static_cast<int>(color);
@@ -49,7 +31,7 @@ int mvv_lva_score(const Board& board, const Move& move) {
     if (victim == Piece::None) {
         return 0;
     }
-    return 10 * piece_value(type_of(victim)) - piece_value(type_of(attacker));
+    return 10 * material_value(type_of(victim)) - material_value(type_of(attacker));
 }
 
 int score_to_tt(int score, int ply) {
@@ -269,26 +251,6 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta) {
     return alpha;
 }
 
-int Searcher::evaluate(const Board& board) const {
-    int white_score = 0;
-    int black_score = 0;
-    for (Square square = 0; square < kBoardSquareCount; ++square) {
-        const Piece piece = board.piece_at(square);
-        if (piece == Piece::None) {
-            continue;
-        }
-        const int value = piece_value(type_of(piece));
-        if (color_of(piece) == Color::White) {
-            white_score += value;
-        } else {
-            black_score += value;
-        }
-    }
-
-    const int score = white_score - black_score;
-    return board.side_to_move() == Color::White ? score : -score;
-}
-
 void Searcher::order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const {
     const Color side = board.side_to_move();
     std::stable_sort(moves.begin(), moves.end(), [&](const Move& lhs, const Move& rhs) {
@@ -301,7 +263,7 @@ void Searcher::order_moves(Board& board, MoveList& moves, const Move& tt_move, i
             }
             int score = 0;
             if (move.is_promotion()) {
-                score += 80'000 + piece_value(move.promotion);
+                score += 80'000 + material_value(move.promotion);
             }
             if (move.is_capture()) {
                 score += 40'000 + mvv_lva_score(board, move);
@@ -366,4 +328,3 @@ bool Searcher::should_stop() const {
 }
 
 }  // namespace chess::engine
-

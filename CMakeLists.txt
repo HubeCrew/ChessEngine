@@ -24,6 +24,7 @@ if(CHESSENGINE_WARNINGS_AS_ERRORS)
 endif()
 
 add_library(chess_engine
+    src/engine/evaluation.cpp
     src/engine/search.cpp
     src/engine/transposition_table.cpp
 )

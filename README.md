@@ -16,7 +16,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 The test suite uses Catch2 and validates FEN round trips, legal move generation, make/unmake restoration, special move edge cases, and standard perft positions.
-It also includes engine-search tests for Zobrist hashing, transposition table behavior, principal variation output, and UCI smoke coverage.
+It also includes engine tests for Zobrist hashing, transposition table behavior, evaluation features, principal variation output, and UCI smoke coverage.
 
 ## Tools
 
@@ -45,11 +45,12 @@ quit
 ## Architecture
 
 - `chess_core`: board state, bitboards, FEN, legal move generation, make/unmake, perft.
-- `chess_engine`: simple alpha-beta negamax search with quiescence and material evaluation.
+- `chess_engine`: alpha-beta negamax search, quiescence, transposition table support, and static evaluation.
 - Search infrastructure: deterministic Zobrist hashing, transposition table, killer/history move ordering, and standard UCI search info.
+- Evaluation: tapered material/PST scoring, mobility, bishop pair, pawn structure, passed pawns, and basic king terms.
 - `chess_perft`: command-line perft divide tool.
 - `chess_uci`: minimal UCI protocol entrypoint.
 
 ## Next Engine Work
 
-The next quality step is evaluation strength: piece-square tables, game-phase aware evaluation, safer quiescence pruning, and benchmark positions before UI work.
+The next quality step is measurement and tuning: benchmark positions, tactical suites, safer quiescence pruning, and controlled value tuning before UI work.

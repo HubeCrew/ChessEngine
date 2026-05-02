@@ -1,9 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 #include "chess/core/fen.h"
 #include "chess/core/movegen.h"
+#include "chess/engine/evaluation.h"
 #include "chess/engine/search.h"
 #include "chess/engine/transposition_table.h"
 
@@ -94,4 +96,63 @@ TEST_CASE("hash table can be resized and cleared through searcher") {
     REQUIRE(searcher.hash_size_mb() == 2);
     searcher.clear();
     REQUIRE(searcher.hash_size_mb() == 2);
+}
+
+TEST_CASE("evaluation scores king-only positions near equal") {
+    const chess::Board board = chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1");
+    REQUIRE(std::abs(chess::engine::evaluate_white_perspective(board)) <= 5);
+}
+
+TEST_CASE("evaluation rewards extra material") {
+    const chess::Board board = chess::board_from_fen("4k3/8/8/8/8/8/8/R3K3 w - - 0 1");
+    REQUIRE(chess::engine::evaluate_white_perspective(board) > 450);
+}
+
+TEST_CASE("evaluation mirrors color and board orientation") {
+    const chess::Board white_knight = chess::board_from_fen("4k3/8/8/8/3N4/8/8/4K3 w - - 0 1");
+    const chess::Board black_knight = chess::board_from_fen("4k3/8/8/3n4/8/8/8/4K3 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(white_knight)
+            == -chess::engine::evaluate_white_perspective(black_knight));
+}
+
+TEST_CASE("evaluation rewards bishop pair") {
+    const chess::Board bishop_pair = chess::board_from_fen("4k3/8/8/8/8/8/8/2BBK3 w - - 0 1");
+    const chess::Board bishop_and_knight = chess::board_from_fen("4k3/8/8/8/8/8/8/2BNK3 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(bishop_pair)
+            > chess::engine::evaluate_white_perspective(bishop_and_knight));
+}
+
+TEST_CASE("evaluation rewards passed pawns over stopped pawns") {
+    const chess::Board passed = chess::board_from_fen("4k3/p7/8/4P3/8/8/8/4K3 w - - 0 1");
+    const chess::Board stopped = chess::board_from_fen("4k3/8/3p4/4P3/8/8/8/4K3 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(passed)
+            > chess::engine::evaluate_white_perspective(stopped));
+}
+
+TEST_CASE("evaluation penalizes doubled isolated pawns") {
+    const chess::Board connected = chess::board_from_fen("4k3/8/8/8/8/8/2PP4/4K3 w - - 0 1");
+    const chess::Board doubled = chess::board_from_fen("4k3/8/8/8/8/2P5/2P5/4K3 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(connected)
+            > chess::engine::evaluate_white_perspective(doubled));
+}
+
+TEST_CASE("evaluation rewards king centralization in endgames") {
+    const chess::Board central = chess::board_from_fen("7k/8/8/8/3K4/8/8/8 w - - 0 1");
+    const chess::Board corner = chess::board_from_fen("7k/8/8/8/8/8/8/K7 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(central)
+            > chess::engine::evaluate_white_perspective(corner));
+}
+
+TEST_CASE("search prefers winning free queen material") {
+    chess::Board board = chess::board_from_fen("4k3/7q/8/8/8/8/8/4K2R w - - 0 1");
+    chess::engine::Searcher searcher;
+
+    const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{1});
+
+    REQUIRE(chess::move_to_uci(result.best_move) == "h1h7");
 }
