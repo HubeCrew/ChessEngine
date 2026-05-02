@@ -1,6 +1,7 @@
 #include "chess/engine/search.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 #include "chess/core/movegen.h"
@@ -15,6 +16,8 @@ constexpr int kInfinity = 1'000'000;
 constexpr int kMateScore = 900'000;
 constexpr int kMateWindow = 1'000;
 constexpr int kAspirationWindow = 50;
+constexpr int kHistoryLimit = 1'000'000;
+constexpr std::size_t kMaxHistoryQuiets = 256;
 
 int color_index(Color color) {
     return static_cast<int>(color);
@@ -97,6 +100,10 @@ bool is_valid_move_shape(const Move& move) {
     return is_valid_square(move.from) && is_valid_square(move.to);
 }
 
+bool is_quiet_history_move(const Move& move) {
+    return !move.is_capture() && !move.is_promotion();
+}
+
 bool is_mate_score(int score) {
     return std::abs(score) > kMateScore - kMateWindow;
 }
@@ -107,6 +114,10 @@ bool move_gives_check(Board& board, const Move& move) {
     const bool gives_check = board.in_check(opposite(moving_side));
     board.unmake_move(undo);
     return gives_check;
+}
+
+int clamp_history(int value) {
+    return std::clamp(value, -kHistoryLimit, kHistoryLimit);
 }
 
 }  // namespace
@@ -122,6 +133,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     start_time_ = std::chrono::steady_clock::now();
     deadline_ = start_time_ + limits.move_time;
     tt_.new_search();
+    age_history();
     previous_iteration_pv_.clear();
 
     SearchResult result;
@@ -221,6 +233,7 @@ void Searcher::clear() {
             from_history.fill(0);
         }
     }
+    previous_iteration_pv_.clear();
 }
 
 int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
@@ -264,6 +277,8 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
     Move best_move;
     int best_score = -kInfinity;
     int move_index = 0;
+    std::array<Move, kMaxHistoryQuiets> quiets_tried_before_cutoff{};
+    std::size_t quiet_count = 0;
     for (const Move& move : moves) {
         const Color moving_side = board.side_to_move();
         const UndoState undo = board.make_move(move);
@@ -284,9 +299,16 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
             best_move = move;
         }
         alpha = std::max(alpha, score);
-        if (alpha >= beta || should_stop()) {
-            record_cutoff(move, depth, ply, moving_side);
+        if (alpha >= beta) {
+            record_cutoff(move, depth, ply, moving_side, quiets_tried_before_cutoff.data(), quiet_count);
             break;
+        }
+        if (should_stop()) {
+            break;
+        }
+        if (is_quiet_history_move(move) && quiet_count < quiets_tried_before_cutoff.size()) {
+            quiets_tried_before_cutoff[quiet_count] = move;
+            ++quiet_count;
         }
     }
 
@@ -405,7 +427,24 @@ void Searcher::order_moves(Board& board, MoveList& moves, const Move& tt_move, i
     }
 }
 
-void Searcher::record_cutoff(const Move& move, int depth, int ply, Color side_to_move) {
+void Searcher::age_history() {
+    for (auto& color_history : history_) {
+        for (auto& from_history : color_history) {
+            for (int& score : from_history) {
+                score /= 2;
+            }
+        }
+    }
+}
+
+void Searcher::record_cutoff(
+    const Move& move,
+    int depth,
+    int ply,
+    Color side_to_move,
+    const Move* quiets_tried_before_cutoff,
+    std::size_t quiet_count
+) {
     if (move.is_capture() || move.is_promotion() || ply >= kMaxPly) {
         return;
     }
@@ -415,9 +454,19 @@ void Searcher::record_cutoff(const Move& move, int depth, int ply, Color side_to
         killer_moves_[ply][0] = move;
     }
 
+    const int bonus = depth * depth;
+    const int malus = bonus;
     int& history_score = history_[color_index(side_to_move)][move.from][move.to];
-    history_score += depth * depth;
-    history_score = std::min(history_score, 1'000'000);
+    history_score = clamp_history(history_score + bonus);
+
+    for (std::size_t index = 0; index < quiet_count; ++index) {
+        const Move& quiet = quiets_tried_before_cutoff[index];
+        if (same_move_identity(quiet, move)) {
+            continue;
+        }
+        int& failed_score = history_[color_index(side_to_move)][quiet.from][quiet.to];
+        failed_score = clamp_history(failed_score - malus);
+    }
 }
 
 std::vector<Move> Searcher::extract_principal_variation(Board& board, int depth) const {

@@ -52,7 +52,15 @@ private:
     int negamax(Board& board, int depth, int ply, int alpha, int beta);
     int quiescence(Board& board, int ply, int alpha, int beta);
     void order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const;
-    void record_cutoff(const Move& move, int depth, int ply, Color side_to_move);
+    void age_history();
+    void record_cutoff(
+        const Move& move,
+        int depth,
+        int ply,
+        Color side_to_move,
+        const Move* quiets_tried_before_cutoff,
+        std::size_t quiet_count
+    );
     std::vector<Move> extract_principal_variation(Board& board, int depth) const;
     bool should_stop() const;
 };
