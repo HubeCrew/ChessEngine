@@ -19,6 +19,9 @@ constexpr int kAspirationWindow = 50;
 constexpr int kHistoryLimit = 1'000'000;
 constexpr int kLmrMinDepth = 3;
 constexpr int kLmrMoveIndex = 4;
+constexpr int kNullMoveMinDepth = 4;
+constexpr int kNullMoveReduction = 3;
+constexpr int kNullMoveMinMaterial = 500;
 constexpr std::size_t kMaxHistoryQuiets = 256;
 
 int color_index(Color color) {
@@ -110,6 +113,27 @@ bool is_mate_score(int score) {
     return std::abs(score) > kMateScore - kMateWindow;
 }
 
+int non_pawn_material(const Board& board, Color side) {
+    int total = 0;
+    total += __builtin_popcountll(board.pieces(side, PieceType::Knight)) * material_value(PieceType::Knight);
+    total += __builtin_popcountll(board.pieces(side, PieceType::Bishop)) * material_value(PieceType::Bishop);
+    total += __builtin_popcountll(board.pieces(side, PieceType::Rook)) * material_value(PieceType::Rook);
+    total += __builtin_popcountll(board.pieces(side, PieceType::Queen)) * material_value(PieceType::Queen);
+    return total;
+}
+
+bool can_try_null_move(const Board& board, int depth, int ply, int alpha, int beta, bool in_check, bool allow_null_move) {
+    const bool is_pv_node = beta - alpha > 1;
+    return allow_null_move
+        && !is_pv_node
+        && !in_check
+        && ply > 0
+        && depth >= kNullMoveMinDepth
+        && beta < kMateScore - kMateWindow
+        && alpha > -kMateScore + kMateWindow
+        && non_pawn_material(board, board.side_to_move()) >= kNullMoveMinMaterial;
+}
+
 bool move_gives_check(Board& board, const Move& move) {
     const Color moving_side = board.side_to_move();
     const UndoState undo = board.make_move(move);
@@ -167,7 +191,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
 
         int score = 0;
         while (true) {
-            score = negamax(board, depth, 0, alpha, beta);
+            score = negamax(board, depth, 0, alpha, beta, true);
             if (should_stop() || (score > alpha && score < beta)) {
                 break;
             }
@@ -225,6 +249,14 @@ std::size_t Searcher::hash_size_mb() const {
     return tt_.size_mb();
 }
 
+void Searcher::set_null_move_pruning(bool enabled) {
+    null_move_pruning_ = enabled;
+}
+
+bool Searcher::null_move_pruning() const {
+    return null_move_pruning_;
+}
+
 void Searcher::clear() {
     tt_.clear();
     for (auto& ply_killers : killer_moves_) {
@@ -238,7 +270,7 @@ void Searcher::clear() {
     previous_iteration_pv_.clear();
 }
 
-int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
+int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move) {
     if (should_stop()) {
         return evaluate(board);
     }
@@ -275,6 +307,23 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
     if (moves.empty()) {
         return in_check ? -kMateScore + ply : 0;
     }
+
+    if (null_move_pruning_
+        && can_try_null_move(board, depth, ply, alpha, beta, in_check, allow_null_move)
+        && evaluate(board) >= beta) {
+        const UndoState undo = board.make_null_move();
+        const int null_depth = std::max(0, depth - 1 - kNullMoveReduction);
+        const int score = -negamax(board, null_depth, ply + 1, -beta, -beta + 1, false);
+        board.unmake_null_move(undo);
+        if (should_stop()) {
+            return evaluate(board);
+        }
+        if (score >= beta) {
+            tt_.store(board.hash_key(), depth, score_to_tt(beta, ply), Bound::Lower, Move{});
+            return beta;
+        }
+    }
+
     order_moves(board, moves, tt_move, ply);
 
     Move best_move;
@@ -291,7 +340,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
         const UndoState undo = board.make_move(move);
         int score = 0;
         if (move_index == 0) {
-            score = -negamax(board, depth - 1, ply + 1, -beta, -alpha);
+            score = -negamax(board, depth - 1, ply + 1, -beta, -alpha, true);
         } else {
             const bool gives_check = board.in_check(board.side_to_move());
             const bool can_reduce = depth >= kLmrMinDepth
@@ -302,15 +351,15 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta) {
                 && !(is_valid_move_shape(tt_move) && same_move_identity(move, tt_move))
                 && !(is_valid_move_shape(pv_move) && same_move_identity(move, pv_move));
             if (can_reduce) {
-                score = -negamax(board, depth - 2, ply + 1, -alpha - 1, -alpha);
+                score = -negamax(board, depth - 2, ply + 1, -alpha - 1, -alpha, true);
                 if (score > alpha && !should_stop()) {
-                    score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha);
+                    score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha, true);
                 }
             } else {
-                score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha);
+                score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha, true);
             }
             if (score > alpha && score < beta) {
-                score = -negamax(board, depth - 1, ply + 1, -beta, -alpha);
+                score = -negamax(board, depth - 1, ply + 1, -beta, -alpha, true);
             }
         }
         board.unmake_move(undo);

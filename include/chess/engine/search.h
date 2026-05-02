@@ -34,6 +34,8 @@ public:
     SearchResult search(Board& board, const SearchLimits& limits);
     void set_hash_size_mb(std::size_t megabytes);
     [[nodiscard]] std::size_t hash_size_mb() const;
+    void set_null_move_pruning(bool enabled);
+    [[nodiscard]] bool null_move_pruning() const;
     void clear();
 
 private:
@@ -44,12 +46,13 @@ private:
     std::chrono::steady_clock::time_point deadline_{};
     std::chrono::steady_clock::time_point start_time_{};
     bool use_deadline_ = false;
+    bool null_move_pruning_ = true;
     TranspositionTable tt_;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
     std::array<std::array<std::array<int, 64>, 64>, 2> history_{};
     std::vector<Move> previous_iteration_pv_;
 
-    int negamax(Board& board, int depth, int ply, int alpha, int beta);
+    int negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move);
     int quiescence(Board& board, int ply, int alpha, int beta);
     void order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const;
     void age_history();

@@ -27,6 +27,7 @@ struct Options {
     int depth_override = 0;
     std::size_t hash_mb = 64;
     bool csv = false;
+    bool null_move_pruning = true;
 };
 
 struct RunResult {
@@ -44,7 +45,7 @@ struct RunResult {
 };
 
 void print_usage(std::ostream& out) {
-    out << "usage: chess_bench [--suite bench|tactics|all] [--depth N] [--hash MB] [--csv]\n";
+    out << "usage: chess_bench [--suite bench|tactics|all] [--depth N] [--hash MB] [--disable-null-move] [--csv]\n";
 }
 
 SuiteSelection parse_suite(std::string_view value) {
@@ -70,6 +71,8 @@ Options parse_options(int argc, char** argv) {
         }
         if (arg == "--csv") {
             options.csv = true;
+        } else if (arg == "--disable-null-move") {
+            options.null_move_pruning = false;
         } else if (arg == "--suite") {
             if (++index >= argc) {
                 throw std::invalid_argument("--suite requires a value");
@@ -207,6 +210,7 @@ int main(int argc, char** argv) {
         const Options options = parse_options(argc, argv);
         chess::engine::Searcher searcher;
         searcher.set_hash_size_mb(options.hash_mb);
+        searcher.set_null_move_pruning(options.null_move_pruning);
 
         std::vector<RunResult> results;
 

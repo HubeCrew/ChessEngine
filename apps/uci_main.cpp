@@ -10,6 +10,10 @@
 
 namespace {
 
+bool parse_bool(std::string_view value) {
+    return value == "true" || value == "1" || value == "on";
+}
+
 chess::Board parse_position(std::istringstream& input) {
     std::string token;
     input >> token;
@@ -70,6 +74,8 @@ void apply_setoption(chess::engine::Searcher& searcher, std::istringstream& inpu
 
     if (name == "Hash" && !value.empty()) {
         searcher.set_hash_size_mb(static_cast<std::size_t>(std::stoul(value)));
+    } else if (name == "NullMovePruning" && !value.empty()) {
+        searcher.set_null_move_pruning(parse_bool(value));
     }
 }
 
@@ -103,6 +109,7 @@ int main() {
                 std::cout << "id name ChessEngine 0.1\n";
                 std::cout << "id author HubeKnaepkens\n";
                 std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
+                std::cout << "option name NullMovePruning type check default true\n";
                 std::cout << "uciok\n";
             } else if (command == "isready") {
                 std::cout << "readyok\n";

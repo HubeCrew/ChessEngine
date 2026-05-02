@@ -48,9 +48,11 @@ Run the benchmark and tactical suites:
 ./build/chess_bench --suite all --hash 64
 ./build/chess_bench --suite bench --depth 3 --csv
 ./build/chess_bench --suite tactics
+./build/chess_bench --suite bench --depth 5 --disable-null-move
 ```
 
 `chess_bench` reports depth, best move, expected move for tactical cases, score, nodes, NPS, and elapsed time. The tactical suite currently contains 50 curated positions across mates, promotions, forks, hanging pieces, winning captures, pawn tactics, checks, and loose-piece tactics. Tactical runs return a non-zero exit code if any expected best move is missed.
+`--disable-null-move` is available for A/B checks when measuring the null-move pruning search feature.
 
 Run a local UCI gauntlet:
 
@@ -88,7 +90,7 @@ The gauntlet launches both engines as UCI subprocesses, alternates colors, uses 
 
 - `chess_core`: board state, bitboards, FEN, legal move generation, make/unmake, perft.
 - `chess_engine`: alpha-beta negamax search, quiescence, transposition table support, and static evaluation.
-- Search infrastructure: deterministic Zobrist hashing, transposition table, killer/history move ordering, and standard UCI search info.
+- Search infrastructure: deterministic Zobrist hashing, transposition table, PVS, aspiration windows, SEE-assisted move ordering, killer/history move ordering, LMR, conservative null-move pruning, and standard UCI search info.
 - Evaluation: tapered material/PST scoring, mobility, bishop pair, pawn structure, passed pawns, and basic king terms.
 - `chess_perft`: command-line perft divide tool.
 - `chess_uci`: minimal UCI protocol entrypoint.
@@ -98,4 +100,4 @@ The gauntlet launches both engines as UCI subprocesses, alternates colors, uses 
 
 ## Next Engine Work
 
-The next quality step is controlled search improvement: safer quiescence pruning, aspiration windows, and null-move/LMR experiments measured against both `chess_bench` and gauntlet A/B matches.
+The next quality step is benchmark infrastructure: move the tactical suite to a standard EPD-style data file, support larger 200+ position suites without bloating C++ source, and add deeper tactical/stress sets before the next long gauntlet.

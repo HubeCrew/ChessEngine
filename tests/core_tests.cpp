@@ -264,6 +264,28 @@ TEST_CASE("make and unmake restore the full FEN") {
     require_board_invariants(board);
 }
 
+TEST_CASE("null move updates side and en-passant then restores full board state") {
+    chess::Board board = chess::board_from_fen(
+        "r3k2r/ppp2ppp/2n5/3pP3/8/2N2N2/PPP2PPP/R3K2R w KQkq d6 0 12"
+    );
+    const std::string original = board.to_fen();
+    const std::uint64_t original_hash = board.hash_key();
+
+    const chess::UndoState undo = board.make_null_move();
+
+    REQUIRE(board.side_to_move() == chess::Color::Black);
+    REQUIRE(board.en_passant_square() == chess::kNoSquare);
+    REQUIRE(board.castling_rights() == (chess::WhiteKingSide | chess::WhiteQueenSide | chess::BlackKingSide | chess::BlackQueenSide));
+    REQUIRE(board.hash_key() == board.recompute_hash());
+    require_board_invariants(board);
+
+    board.unmake_null_move(undo);
+
+    REQUIRE(board.to_fen() == original);
+    REQUIRE(board.hash_key() == original_hash);
+    require_board_invariants(board);
+}
+
 TEST_CASE("every root legal move restores full board state") {
     for (const char* fen : {
              "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",

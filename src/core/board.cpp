@@ -440,4 +440,37 @@ void Board::unmake_move(const UndoState& undo) {
     assert(hash_key_ == recompute_hash());
 }
 
+UndoState Board::make_null_move() {
+    assert(!in_check(side_to_move_));
+
+    UndoState undo{
+        Move{},
+        Piece::None,
+        hash_key_,
+        castling_rights_,
+        en_passant_square_,
+        halfmove_clock_,
+        fullmove_number_,
+        side_to_move_,
+    };
+
+    set_en_passant_square(kNoSquare);
+    ++halfmove_clock_;
+    if (side_to_move_ == Color::Black) {
+        ++fullmove_number_;
+    }
+    set_side_to_move(opposite(side_to_move_));
+    return undo;
+}
+
+void Board::unmake_null_move(const UndoState& undo) {
+    side_to_move_ = undo.side_to_move;
+    castling_rights_ = undo.castling_rights;
+    en_passant_square_ = undo.en_passant_square;
+    halfmove_clock_ = undo.halfmove_clock;
+    fullmove_number_ = undo.fullmove_number;
+    hash_key_ = undo.hash_key;
+    assert(hash_key_ == recompute_hash());
+}
+
 }  // namespace chess

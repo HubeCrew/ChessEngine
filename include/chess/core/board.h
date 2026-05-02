@@ -53,6 +53,8 @@ public:
 
     UndoState make_move(const Move& move);
     void unmake_move(const UndoState& undo);
+    UndoState make_null_move();
+    void unmake_null_move(const UndoState& undo);
 
 private:
     std::array<Piece, kBoardSquareCount> squares_{};
