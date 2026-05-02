@@ -69,6 +69,27 @@ def write_logging_engine(path: Path) -> None:
     )
 
 
+def write_silent_engine(path: Path) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "import sys",
+                "for line in sys.stdin:",
+                "    command = line.strip()",
+                "    if command == 'uci':",
+                "        print('id name SilentEngine', flush=True)",
+                "        print('uciok', flush=True)",
+                "    elif command == 'isready':",
+                "        print('readyok', flush=True)",
+                "    elif command == 'quit':",
+                "        break",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def require_successful_self_play(gauntlet: Path, chess_uci: Path, referee: Path) -> int:
     with tempfile.TemporaryDirectory() as temp_dir:
         output_dir = Path(temp_dir) / "self-play"
@@ -114,6 +135,53 @@ def require_successful_self_play(gauntlet: Path, chess_uci: Path, referee: Path)
             return 1
         if not (output_dir / "game-0001.pgn").exists():
             print("missing PGN output", file=sys.stderr)
+            return 1
+
+    return 0
+
+
+def require_engine_failure_details(gauntlet: Path, chess_uci: Path, referee: Path) -> int:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        dummy = Path(temp_dir) / "silent_engine.py"
+        output_dir = Path(temp_dir) / "silent"
+        write_silent_engine(dummy)
+        completed = run_command(
+            [
+                sys.executable,
+                str(gauntlet),
+                "--engine-a",
+                f"{sys.executable} {dummy}",
+                "--engine-b",
+                str(chess_uci),
+                "--name-a",
+                "silent",
+                "--name-b",
+                "current",
+                "--referee",
+                str(referee),
+                "--games",
+                "1",
+                "--movetime",
+                "1",
+                "--max-plies",
+                "2",
+                "--hash",
+                "1",
+                "--protocol-timeout",
+                "0.1",
+                "--output-dir",
+                str(output_dir),
+                "--no-pgn",
+            ]
+        )
+        if completed.returncode == 0:
+            print("expected gauntlet to fail for silent engine", file=sys.stderr)
+            print(completed.stdout, file=sys.stderr)
+            return 1
+        if "engine_failure:" not in completed.stdout or "protocol_timeout" not in completed.stdout:
+            print("expected detailed engine failure reason", file=sys.stderr)
+            print(completed.stdout, file=sys.stderr)
+            print(completed.stderr, file=sys.stderr)
             return 1
 
     return 0
@@ -287,6 +355,9 @@ def main() -> int:
     referee = Path(sys.argv[3])
 
     result = require_successful_self_play(gauntlet, chess_uci, referee)
+    if result != 0:
+        return result
+    result = require_engine_failure_details(gauntlet, chess_uci, referee)
     if result != 0:
         return result
     result = require_clock_self_play(gauntlet, chess_uci, referee)

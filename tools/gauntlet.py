@@ -248,6 +248,11 @@ def forfeit_outcome(side: str) -> str:
     return "black_win" if side == "white" else "white_win"
 
 
+def sanitize_reason(value: str) -> str:
+    sanitized = value.replace("\n", " ").replace("\r", " ").strip()
+    return sanitized.replace(" ", "_")
+
+
 def allocated_budget_ms(remaining_ms: int, increment_ms: int, moves_to_go: int) -> int:
     if remaining_ms <= 0:
         return 0
@@ -355,14 +360,14 @@ def play_game(
                     )
             else:
                 move = engine.bestmove_fixed(start_fen, moves, time_control.movetime_ms)
-        except UciError:
+        except UciError as error:
             return GameResult(
                 game_number,
                 opening_name,
                 white.config.name,
                 black.config.name,
                 forfeit_result(side),
-                f"{forfeit_outcome(side)}:engine_failure",
+                f"{forfeit_outcome(side)}:engine_failure:{sanitize_reason(str(error))}",
                 len(moves),
                 moves,
                 False,
