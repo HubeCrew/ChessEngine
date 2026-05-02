@@ -87,6 +87,12 @@ bool same_move(const Move& lhs, const Move& rhs) {
         && lhs.flags == rhs.flags;
 }
 
+bool same_move_identity(const Move& lhs, const Move& rhs) {
+    return lhs.from == rhs.from
+        && lhs.to == rhs.to
+        && lhs.promotion == rhs.promotion;
+}
+
 bool is_valid_move_shape(const Move& move) {
     return is_valid_square(move.from) && is_valid_square(move.to);
 }
@@ -116,6 +122,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     start_time_ = std::chrono::steady_clock::now();
     deadline_ = start_time_ + limits.move_time;
     tt_.new_search();
+    previous_iteration_pv_.clear();
 
     SearchResult result;
     MoveList moves = generate_legal_moves(board);
@@ -133,6 +140,8 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
         if (should_stop()) {
             break;
         }
+
+        previous_iteration_pv_ = result.principal_variation;
 
         int alpha = -kInfinity;
         int beta = kInfinity;
@@ -178,6 +187,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
             if (!result.principal_variation.empty()) {
                 result.best_move = result.principal_variation.front();
             }
+            previous_iteration_pv_ = result.principal_variation;
         }
     }
 
@@ -342,6 +352,10 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta) {
 
 void Searcher::order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const {
     const Color side = board.side_to_move();
+    Move pv_move;
+    if (ply == 0 && !previous_iteration_pv_.empty()) {
+        pv_move = previous_iteration_pv_.front();
+    }
 
     struct ScoredMove {
         Move move;
@@ -353,10 +367,9 @@ void Searcher::order_moves(Board& board, MoveList& moves, const Move& tt_move, i
 
     for (const Move& move : moves) {
         int score = 0;
-        if (is_valid_move_shape(tt_move)
-            && move.from == tt_move.from
-            && move.to == tt_move.to
-            && move.promotion == tt_move.promotion) {
+        if (is_valid_move_shape(pv_move) && same_move_identity(move, pv_move)) {
+            score = 1'100'000;
+        } else if (is_valid_move_shape(tt_move) && same_move_identity(move, tt_move)) {
             score = 1'000'000;
         } else {
             if (move.is_promotion()) {

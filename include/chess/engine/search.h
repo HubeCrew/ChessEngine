@@ -47,6 +47,7 @@ private:
     TranspositionTable tt_;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
     std::array<std::array<std::array<int, 64>, 64>, 2> history_{};
+    std::vector<Move> previous_iteration_pv_;
 
     int negamax(Board& board, int depth, int ply, int alpha, int beta);
     int quiescence(Board& board, int ply, int alpha, int beta);
