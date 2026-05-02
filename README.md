@@ -52,6 +52,22 @@ Run the benchmark and tactical suites:
 
 `chess_bench` reports depth, best move, expected move for tactical cases, score, nodes, NPS, and elapsed time. The tactical suite currently contains 50 curated positions across mates, promotions, forks, hanging pieces, winning captures, pawn tactics, checks, and loose-piece tactics. Tactical runs return a non-zero exit code if any expected best move is missed.
 
+Run a local UCI gauntlet:
+
+```bash
+./tools/gauntlet.py \
+  --engine-a ./build/chess_uci \
+  --engine-b ./build/chess_uci \
+  --name-a current \
+  --name-b candidate \
+  --referee ./build/chess_referee \
+  --games 20 \
+  --movetime 100 \
+  --csv
+```
+
+The gauntlet launches both engines as UCI subprocesses, alternates colors, uses a built-in balanced opening suite with color reversal, validates every move through `chess_referee`, writes PGNs to `gauntlet-results/`, and reports score plus a rough Elo difference. Non-clean games, such as crashes, timeouts, protocol failures, or illegal moves, are separated from normal chess results.
+
 ## Architecture
 
 - `chess_core`: board state, bitboards, FEN, legal move generation, make/unmake, perft.
@@ -61,7 +77,9 @@ Run the benchmark and tactical suites:
 - `chess_perft`: command-line perft divide tool.
 - `chess_uci`: minimal UCI protocol entrypoint.
 - `chess_bench`: repeatable benchmark/tactical harness for measuring strength and speed changes.
+- `chess_referee`: machine-readable game adjudicator used by the gauntlet.
+- `tools/gauntlet.py`: UCI engine-vs-engine gauntlet with PGN/CSV output and rough Elo reporting.
 
 ## Next Engine Work
 
-The next quality step is controlled search improvement: safer quiescence pruning, aspiration windows, and null-move/LMR experiments measured against `chess_bench`.
+The next quality step is controlled search improvement: safer quiescence pruning, aspiration windows, and null-move/LMR experiments measured against both `chess_bench` and gauntlet A/B matches.

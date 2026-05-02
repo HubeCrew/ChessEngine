@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "chess/core/fen.h"
+#include "chess/core/game_status.h"
 #include "chess/core/move.h"
 #include "chess/core/movegen.h"
 #include "chess/core/perft.h"
@@ -156,6 +157,61 @@ TEST_CASE("terminal positions distinguish checkmate and stalemate") {
         REQUIRE_FALSE(board.in_check(chess::Color::Black));
         REQUIRE(chess::generate_legal_moves(board).empty());
         REQUIRE(chess::perft(board, 1) == 0);
+    }
+}
+
+TEST_CASE("game adjudication reports terminal outcomes") {
+    SECTION("checkmate awards the side that delivered mate") {
+        chess::Board board = chess::board_from_fen(
+            "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"
+        );
+        const chess::GameStatus status = chess::adjudicate(board, {board.hash_key()});
+        REQUIRE(status.outcome == chess::GameOutcome::BlackWin);
+        REQUIRE(status.reason == chess::GameReason::Checkmate);
+        REQUIRE(status.legal_moves == 0);
+    }
+
+    SECTION("stalemate is a draw") {
+        chess::Board board = chess::board_from_fen("7k/5K2/6Q1/8/8/8/8/8 b - - 0 1");
+        const chess::GameStatus status = chess::adjudicate(board, {board.hash_key()});
+        REQUIRE(status.outcome == chess::GameOutcome::Draw);
+        REQUIRE(status.reason == chess::GameReason::Stalemate);
+        REQUIRE(status.legal_moves == 0);
+    }
+}
+
+TEST_CASE("game adjudication reports rule-based draws") {
+    SECTION("fifty-move rule") {
+        chess::Board board = chess::board_from_fen("8/8/8/8/8/8/6k1/4K2R w - - 100 80");
+        const chess::GameStatus status = chess::adjudicate(board, {board.hash_key()});
+        REQUIRE(status.outcome == chess::GameOutcome::Draw);
+        REQUIRE(status.reason == chess::GameReason::FiftyMoveRule);
+    }
+
+    SECTION("threefold repetition") {
+        chess::Board board = chess::Board::start_position();
+        std::vector<std::uint64_t> repetitions{board.hash_key()};
+        for (const std::string& uci : {"g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1", "f6g8"}) {
+            const chess::Move move = chess::parse_uci_move(board, uci);
+            board.make_move(move);
+            repetitions.push_back(board.hash_key());
+        }
+        const chess::GameStatus status = chess::adjudicate(board, repetitions);
+        REQUIRE(status.outcome == chess::GameOutcome::Draw);
+        REQUIRE(status.reason == chess::GameReason::ThreefoldRepetition);
+    }
+
+    SECTION("insufficient material") {
+        chess::Board board = chess::board_from_fen("8/8/8/8/8/8/6k1/4K2B w - - 0 1");
+        const chess::GameStatus status = chess::adjudicate(board, {board.hash_key()});
+        REQUIRE(status.outcome == chess::GameOutcome::Draw);
+        REQUIRE(status.reason == chess::GameReason::InsufficientMaterial);
+        REQUIRE(chess::has_insufficient_material(board));
+    }
+
+    SECTION("opposite-colored bishops are not automatically insufficient") {
+        chess::Board board = chess::board_from_fen("8/8/8/8/8/6b1/6k1/4K2B w - - 0 1");
+        REQUIRE_FALSE(chess::has_insufficient_material(board));
     }
 }
 

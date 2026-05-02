@@ -87,6 +87,8 @@ std::string pv_to_string(const std::vector<chess::Move>& principal_variation) {
 }  // namespace
 
 int main() {
+    std::cout.setf(std::ios::unitbuf);
+
     chess::Board board = chess::Board::start_position();
     chess::engine::Searcher searcher;
 

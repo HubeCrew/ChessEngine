@@ -12,6 +12,7 @@ option(CHESSENGINE_FETCH_CATCH2 "Download Catch2 for tests when it is not instal
 add_library(chess_core
     src/core/board.cpp
     src/core/fen.cpp
+    src/core/game_status.cpp
     src/core/move.cpp
     src/core/movegen.cpp
     src/core/perft.cpp
@@ -43,6 +44,9 @@ target_link_libraries(chess_uci PRIVATE chess_engine)
 
 add_executable(chess_bench apps/bench_main.cpp)
 target_link_libraries(chess_bench PRIVATE chess_engine)
+
+add_executable(chess_referee apps/referee_main.cpp)
+target_link_libraries(chess_referee PRIVATE chess_core)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -77,6 +81,13 @@ if(BUILD_TESTING)
         add_test(
             NAME bench_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/bench_smoke_test.py $<TARGET_FILE:chess_bench>
+        )
+        add_test(
+            NAME gauntlet_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gauntlet_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/gauntlet.py
+                $<TARGET_FILE:chess_uci>
+                $<TARGET_FILE:chess_referee>
         )
     endif()
 endif()
