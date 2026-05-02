@@ -21,11 +21,15 @@ def write_invalid_engine(path: Path) -> None:
         "\n".join(
             [
                 "import sys",
+                "log_path = sys.argv[1] if len(sys.argv) > 1 else None",
                 "for line in sys.stdin:",
                 "    command = line.strip()",
                 "    if command == 'uci':",
                 "        print('id name InvalidEngine', flush=True)",
                 "        print('uciok', flush=True)",
+                "    elif command.startswith('setoption ') and log_path is not None:",
+                "        with open(log_path, 'a', encoding='utf-8') as handle:",
+                "            handle.write(command + '\\n')",
                 "    elif command == 'isready':",
                 "        print('readyok', flush=True)",
                 "    elif command.startswith('go '):",
@@ -92,6 +96,7 @@ def require_successful_self_play(gauntlet: Path, chess_uci: Path, referee: Path)
 def require_invalid_move_detection(gauntlet: Path, chess_uci: Path, referee: Path) -> int:
     with tempfile.TemporaryDirectory() as temp_dir:
         dummy = Path(temp_dir) / "invalid_engine.py"
+        option_log = Path(temp_dir) / "options.txt"
         output_dir = Path(temp_dir) / "invalid"
         write_invalid_engine(dummy)
         completed = run_command(
@@ -101,7 +106,7 @@ def require_invalid_move_detection(gauntlet: Path, chess_uci: Path, referee: Pat
                 "--engine-a",
                 str(chess_uci),
                 "--engine-b",
-                f"{sys.executable} {dummy}",
+                f"{sys.executable} {dummy} {option_log}",
                 "--name-a",
                 "current",
                 "--name-b",
@@ -116,6 +121,10 @@ def require_invalid_move_detection(gauntlet: Path, chess_uci: Path, referee: Pat
                 "4",
                 "--hash",
                 "1",
+                "--option-b",
+                "UCI_LimitStrength=true",
+                "--option-b",
+                "UCI_Elo=1320",
                 "--output-dir",
                 str(output_dir),
                 "--no-pgn",
@@ -128,6 +137,13 @@ def require_invalid_move_detection(gauntlet: Path, chess_uci: Path, referee: Pat
         if "illegal_move" not in completed.stdout:
             print(completed.stdout, file=sys.stderr)
             print(completed.stderr, file=sys.stderr)
+            return 1
+        options = option_log.read_text(encoding="utf-8")
+        if "setoption name UCI_LimitStrength value true" not in options:
+            print(f"missing UCI_LimitStrength option in {options!r}", file=sys.stderr)
+            return 1
+        if "setoption name UCI_Elo value 1320" not in options:
+            print(f"missing UCI_Elo option in {options!r}", file=sys.stderr)
             return 1
 
     return 0

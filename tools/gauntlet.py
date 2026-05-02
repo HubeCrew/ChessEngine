@@ -33,6 +33,7 @@ class EngineConfig:
     command: list[str]
     name: str
     hash_mb: int
+    options: list[tuple[str, str]]
 
 
 @dataclass
@@ -77,6 +78,8 @@ class UciEngine:
         self._read_until("uciok", self.protocol_timeout)
         if self.config.hash_mb > 0:
             self._send(f"setoption name Hash value {self.config.hash_mb}")
+        for name, value in self.config.options:
+            self._send(f"setoption name {name} value {value}")
         self.wait_ready()
 
     def new_game(self) -> None:
@@ -155,6 +158,17 @@ class UciEngine:
 
 def parse_command(value: str) -> list[str]:
     return shlex.split(value)
+
+
+def parse_engine_option(value: str) -> tuple[str, str]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("engine options must use NAME=VALUE syntax")
+    name, option_value = value.split("=", 1)
+    name = name.strip()
+    option_value = option_value.strip()
+    if not name:
+        raise argparse.ArgumentTypeError("engine option name cannot be empty")
+    return name, option_value
 
 
 def run_referee(referee: Path, fen: str, moves: list[str], timeout: float) -> dict[str, str]:
@@ -378,6 +392,22 @@ def main() -> int:
     parser.add_argument("--games", type=int, default=20)
     parser.add_argument("--movetime", type=int, default=100, help="milliseconds per move")
     parser.add_argument("--hash", type=int, default=16, help="Hash option in MB for both engines")
+    parser.add_argument(
+        "--option-a",
+        action="append",
+        default=[],
+        type=parse_engine_option,
+        metavar="NAME=VALUE",
+        help="extra UCI option for engine A; may be repeated",
+    )
+    parser.add_argument(
+        "--option-b",
+        action="append",
+        default=[],
+        type=parse_engine_option,
+        metavar="NAME=VALUE",
+        help="extra UCI option for engine B; may be repeated",
+    )
     parser.add_argument("--max-plies", type=int, default=300)
     parser.add_argument("--output-dir", default="gauntlet-results")
     parser.add_argument("--csv", action="store_true", help="write results.csv")
@@ -396,8 +426,8 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    config_a = EngineConfig(parse_command(args.engine_a), args.name_a, args.hash)
-    config_b = EngineConfig(parse_command(args.engine_b), args.name_b, args.hash)
+    config_a = EngineConfig(parse_command(args.engine_a), args.name_a, args.hash, args.option_a)
+    config_b = EngineConfig(parse_command(args.engine_b), args.name_b, args.hash, args.option_b)
     engine_a = UciEngine(config_a, args.protocol_timeout)
     engine_b = UciEngine(config_b, args.protocol_timeout)
     results: list[GameResult] = []
@@ -428,7 +458,8 @@ def main() -> int:
             results.append(result)
             print(
                 f"game {result.game}: {result.white} vs {result.black} "
-                f"{result.result} {result.reason} plies={result.plies}"
+                f"{result.result} {result.reason} plies={result.plies}",
+                flush=True,
             )
             if not args.no_pgn:
                 write_pgn(output_dir / f"game-{result.game:04d}.pgn", result, fen)
