@@ -96,6 +96,11 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_benchmark_misses.py
         )
         add_test(
+            NAME compare_benchmark_results_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/compare_benchmark_results_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/compare_benchmark_results.py
+        )
+        add_test(
             NAME gauntlet_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gauntlet_smoke_test.py
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/gauntlet.py

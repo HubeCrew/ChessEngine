@@ -183,6 +183,54 @@ TEST_CASE("evaluation rewards king centralization in endgames") {
             > chess::engine::evaluate_white_perspective(corner));
 }
 
+TEST_CASE("evaluation rewards intact castled king shelter") {
+    const chess::Board sheltered = chess::board_from_fen("6k1/5ppp/8/8/8/8/5PPP/6K1 w - - 0 1");
+    const chess::Board exposed = chess::board_from_fen("6k1/5ppp/8/8/5PPP/8/8/6K1 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(sheltered)
+            > chess::engine::evaluate_white_perspective(exposed));
+}
+
+TEST_CASE("evaluation penalizes open files near the king") {
+    const chess::Board closed_file = chess::board_from_fen("k4r2/8/8/8/8/8/5PPP/6K1 w - - 0 1");
+    const chess::Board open_file = chess::board_from_fen("k4r2/8/8/8/8/8/P5PP/6K1 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(closed_file)
+            > chess::engine::evaluate_white_perspective(open_file));
+}
+
+TEST_CASE("evaluation recognizes coordinated attacks near the king") {
+    const chess::Board quiet = chess::board_from_fen("kn6/8/n6b/q7/8/8/5PPP/6K1 w - - 0 1");
+    const chess::Board attacked = chess::board_from_fen("k3r3/8/5n2/2b3q1/8/8/5PPP/6K1 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(quiet)
+            > chess::engine::evaluate_white_perspective(attacked));
+}
+
+TEST_CASE("evaluation rewards attacks on loose major pieces") {
+    const chess::Board attacked_queen = chess::board_from_fen("k7/8/8/4q3/6N1/8/8/7K w - - 0 1");
+    const chess::Board safe_queen = chess::board_from_fen("k7/8/8/4q3/8/8/6N1/7K w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(attacked_queen)
+            > chess::engine::evaluate_white_perspective(safe_queen));
+}
+
+TEST_CASE("evaluation rewards pawn attacks on higher-value pieces") {
+    const chess::Board pawn_attacks_rook = chess::board_from_fen("k7/8/8/4r3/3P4/8/8/7K w - - 0 1");
+    const chess::Board pawn_misses_rook = chess::board_from_fen("k7/8/8/4r3/2P5/8/8/7K w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(pawn_attacks_rook)
+            > chess::engine::evaluate_white_perspective(pawn_misses_rook));
+}
+
+TEST_CASE("king safety and threats mirror by color") {
+    const chess::Board white_attack = chess::board_from_fen("6k1/5ppp/8/6Q1/2B5/5N2/8/6K1 w - - 0 1");
+    const chess::Board black_attack = chess::board_from_fen("6k1/8/5n2/2b5/6q1/8/5PPP/6K1 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(white_attack)
+            == -chess::engine::evaluate_white_perspective(black_attack));
+}
+
 TEST_CASE("search prefers winning free queen material") {
     chess::Board board = chess::board_from_fen("4k3/7q/8/8/8/8/8/4K2R w - - 0 1");
     chess::engine::Searcher searcher;

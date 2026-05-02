@@ -2,8 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cmath>
-#include <initializer_list>
+#include <utility>
 
 namespace chess::engine {
 
@@ -14,6 +15,29 @@ constexpr int kMaxPhase = 24;
 constexpr std::array<int, 6> kPhaseWeights{
     0, 1, 1, 2, 4, 0,
 };
+
+constexpr std::array<std::pair<int, int>, 8> kKnightOffsets{{
+    {1, 2}, {2, 1}, {2, -1}, {1, -2},
+    {-1, -2}, {-2, -1}, {-2, 1}, {-1, 2},
+}};
+
+constexpr std::array<std::pair<int, int>, 8> kKingOffsets{{
+    {1, 1}, {1, 0}, {1, -1}, {0, -1},
+    {-1, -1}, {-1, 0}, {-1, 1}, {0, 1},
+}};
+
+constexpr std::array<std::pair<int, int>, 4> kBishopDirections{{
+    {1, 1}, {1, -1}, {-1, -1}, {-1, 1},
+}};
+
+constexpr std::array<std::pair<int, int>, 4> kRookDirections{{
+    {1, 0}, {0, -1}, {-1, 0}, {0, 1},
+}};
+
+constexpr std::array<std::pair<int, int>, 8> kQueenDirections{{
+    {1, 1}, {1, -1}, {-1, -1}, {-1, 1},
+    {1, 0}, {0, -1}, {-1, 0}, {0, 1},
+}};
 
 constexpr std::array<int, 64> kPawnMg{{
       0,   0,   0,   0,   0,   0,   0,   0,
@@ -179,70 +203,111 @@ int table_value(PieceType type, Square square, Color color, bool endgame) {
     return 0;
 }
 
-bool has_own_piece(const Board& board, Square square, Color color) {
-    return is_valid_square(square)
-        && board.piece_at(square) != Piece::None
-        && color_of(board.piece_at(square)) == color;
+bool has_piece(const Board& board, Square square, Color color, PieceType type) {
+    return is_valid_square(square) && board.piece_at(square) == make_piece(color, type);
 }
 
-int knight_mobility(const Board& board, Square square, Color color) {
-    constexpr std::array<std::pair<int, int>, 8> offsets{{
-        {1, 2}, {2, 1}, {2, -1}, {1, -2},
-        {-1, -2}, {-2, -1}, {-2, 1}, {-1, 2},
-    }};
-    int mobility = 0;
+template <std::size_t Size>
+Bitboard attacks_from_offsets(Square square, const std::array<std::pair<int, int>, Size>& offsets) {
+    Bitboard attacks = 0;
     for (const auto& [df, dr] : offsets) {
         const int file = file_of(square) + df;
         const int rank = rank_of(square) + dr;
-        if (file >= 0 && file < 8 && rank >= 0 && rank < 8
-            && !has_own_piece(board, make_square(file, rank), color)) {
-            ++mobility;
+        if (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
+            attacks |= square_bb(make_square(file, rank));
         }
     }
-    return mobility;
+    return attacks;
 }
 
-int slider_mobility(
+Bitboard pawn_attacks_from(Square square, Color color) {
+    const int file = file_of(square);
+    Bitboard attacks = 0;
+    if (color == Color::White) {
+        if (file > 0 && square + 7 < kBoardSquareCount) {
+            attacks |= square_bb(square + 7);
+        }
+        if (file < 7 && square + 9 < kBoardSquareCount) {
+            attacks |= square_bb(square + 9);
+        }
+    } else {
+        if (file > 0 && square - 9 >= 0) {
+            attacks |= square_bb(square - 9);
+        }
+        if (file < 7 && square - 7 >= 0) {
+            attacks |= square_bb(square - 7);
+        }
+    }
+    return attacks;
+}
+
+Bitboard knight_attacks_from(Square square) {
+    return attacks_from_offsets(square, kKnightOffsets);
+}
+
+Bitboard king_attacks_from(Square square) {
+    return attacks_from_offsets(square, kKingOffsets);
+}
+
+template <std::size_t Size>
+Bitboard slider_attacks_from(
     const Board& board,
-    Square square,
-    Color color,
-    std::initializer_list<std::pair<int, int>> directions
+    Square from,
+    const std::array<std::pair<int, int>, Size>& directions
 ) {
-    int mobility = 0;
+    Bitboard attacks = 0;
     for (const auto& [df, dr] : directions) {
-        int file = file_of(square) + df;
-        int rank = rank_of(square) + dr;
+        int file = file_of(from) + df;
+        int rank = rank_of(from) + dr;
         while (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
-            const Square target = make_square(file, rank);
-            if (has_own_piece(board, target, color)) {
-                break;
-            }
-            ++mobility;
-            if (board.piece_at(target) != Piece::None) {
+            const Square square = make_square(file, rank);
+            attacks |= square_bb(square);
+            if (board.piece_at(square) != Piece::None) {
                 break;
             }
             file += df;
             rank += dr;
         }
     }
-    return mobility;
+    return attacks;
 }
 
-int mobility_for_piece(const Board& board, Square square, Color color, PieceType type) {
+Bitboard attacks_from_piece(const Board& board, Square from, Color color, PieceType type) {
+    switch (type) {
+        case PieceType::Pawn:
+            return pawn_attacks_from(from, color);
+        case PieceType::Knight:
+            return knight_attacks_from(from);
+        case PieceType::Bishop:
+            return slider_attacks_from(board, from, kBishopDirections);
+        case PieceType::Rook:
+            return slider_attacks_from(board, from, kRookDirections);
+        case PieceType::Queen:
+            return slider_attacks_from(board, from, kQueenDirections);
+        case PieceType::King:
+            return king_attacks_from(from);
+        case PieceType::None:
+            return 0;
+    }
+    return 0;
+}
+
+struct AttackMap {
+    std::array<Bitboard, 6> by_type{};
+    Bitboard all = 0;
+};
+
+int mobility_for_piece(PieceType type, Bitboard attacks, Bitboard own_occupancy) {
+    const int mobility = __builtin_popcountll(attacks & ~own_occupancy);
     switch (type) {
         case PieceType::Knight:
-            return knight_mobility(board, square, color) * 4;
+            return mobility * 4;
         case PieceType::Bishop:
-            return slider_mobility(board, square, color, {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}}) * 3;
+            return mobility * 3;
         case PieceType::Rook:
-            return slider_mobility(board, square, color, {{1, 0}, {0, -1}, {-1, 0}, {0, 1}}) * 2;
+            return mobility * 2;
         case PieceType::Queen:
-            return slider_mobility(
-                board,
-                square,
-                color,
-                {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}, {1, 0}, {0, -1}, {-1, 0}, {0, 1}}
-            );
+            return mobility;
         case PieceType::Pawn:
         case PieceType::King:
         case PieceType::None:
@@ -288,6 +353,10 @@ bool is_passed_pawn(const Board& board, Square square, Color color) {
 
 int king_distance(Square from, Square to) {
     return std::max(std::abs(file_of(from) - file_of(to)), std::abs(rank_of(from) - rank_of(to)));
+}
+
+int castling_rights_for(Color color) {
+    return color == Color::White ? WhiteKingSide | WhiteQueenSide : BlackKingSide | BlackQueenSide;
 }
 
 int non_pawn_material(const Board& board, Color color) {
@@ -426,6 +495,36 @@ int pawn_structure_score(const Board& board, Color color, bool endgame) {
     return score;
 }
 
+int shield_pawn_score(const Board& board, Color color, Square king, int file) {
+    const int direction = color == Color::White ? 1 : -1;
+    const int front_rank = rank_of(king) + direction;
+    const int second_rank = rank_of(king) + 2 * direction;
+    const int third_rank = rank_of(king) + 3 * direction;
+    const bool king_file = file == file_of(king);
+
+    if (front_rank >= 0 && front_rank < 8 && has_piece(board, make_square(file, front_rank), color, PieceType::Pawn)) {
+        return king_file ? 10 : 8;
+    }
+    if (second_rank >= 0 && second_rank < 8 && has_piece(board, make_square(file, second_rank), color, PieceType::Pawn)) {
+        return king_file ? 4 : 3;
+    }
+    if (third_rank >= 0 && third_rank < 8 && has_piece(board, make_square(file, third_rank), color, PieceType::Pawn)) {
+        return king_file ? -3 : -2;
+    }
+    return king_file ? -14 : -10;
+}
+
+bool heavy_piece_on_file(const Board& board, Color color, int file) {
+    for (int rank = 0; rank < 8; ++rank) {
+        const Piece piece = board.piece_at(make_square(file, rank));
+        if (piece != Piece::None && color_of(piece) == color
+            && (type_of(piece) == PieceType::Rook || type_of(piece) == PieceType::Queen)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int king_shelter_score(const Board& board, Color color) {
     const Square king = board.king_square(color);
     if (!is_valid_square(king)) {
@@ -435,22 +534,230 @@ int king_shelter_score(const Board& board, Color color) {
     int score = 0;
     const int king_file = file_of(king);
     const int home_rank = color == Color::White ? 0 : 7;
-    const int pawn_rank_1 = color == Color::White ? 1 : 6;
-    const int pawn_rank_2 = color == Color::White ? 2 : 5;
+    const Color enemy = opposite(color);
 
     if (rank_of(king) == home_rank && (king_file <= 2 || king_file >= 5)) {
-        score += 18;
+        score += 22;
+    } else if (rank_of(king) == home_rank && king_file >= 3 && king_file <= 4) {
+        score -= (board.castling_rights() & castling_rights_for(color)) != 0 ? 12 : 32;
+    } else {
+        score -= 14;
     }
 
     for (int file = std::max(0, king_file - 1); file <= std::min(7, king_file + 1); ++file) {
-        if (board.piece_at(make_square(file, pawn_rank_1)) == make_piece(color, PieceType::Pawn)) {
-            score += 7;
-        } else if (board.piece_at(make_square(file, pawn_rank_2)) == make_piece(color, PieceType::Pawn)) {
-            score += 3;
-        } else {
-            score -= 6;
+        score += shield_pawn_score(board, color, king, file);
+
+        const bool own_pawn_on_file = has_pawn_on_file(board, color, file);
+        const bool enemy_pawn_on_file = has_pawn_on_file(board, enemy, file);
+        const bool same_file = file == king_file;
+        if (!own_pawn_on_file && !enemy_pawn_on_file) {
+            score -= same_file ? 28 : 16;
+        } else if (!own_pawn_on_file) {
+            score -= same_file ? 16 : 9;
+        }
+
+        if (!own_pawn_on_file && heavy_piece_on_file(board, enemy, file)) {
+            score -= same_file ? 28 : 18;
         }
     }
+    return score;
+}
+
+struct KingRing {
+    std::array<Square, 8> squares{};
+    int count = 0;
+};
+
+KingRing king_ring(Square king) {
+    KingRing ring;
+    for (int df = -1; df <= 1; ++df) {
+        for (int dr = -1; dr <= 1; ++dr) {
+            if (df == 0 && dr == 0) {
+                continue;
+            }
+            const int file = file_of(king) + df;
+            const int rank = rank_of(king) + dr;
+            if (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
+                ring.squares[ring.count++] = make_square(file, rank);
+            }
+        }
+    }
+    return ring;
+}
+
+int king_attack_piece_weight(PieceType type) {
+    switch (type) {
+        case PieceType::Pawn:
+            return 2;
+        case PieceType::Knight:
+            return 9;
+        case PieceType::Bishop:
+            return 7;
+        case PieceType::Rook:
+            return 11;
+        case PieceType::Queen:
+            return 18;
+        case PieceType::King:
+        case PieceType::None:
+            return 0;
+    }
+    return 0;
+}
+
+int king_attack_penalty(const Board& board, Color defender, const AttackMap& attacker_map) {
+    const Square king = board.king_square(defender);
+    if (!is_valid_square(king)) {
+        return 0;
+    }
+
+    const Color attacker = opposite(defender);
+    const KingRing ring = king_ring(king);
+    Bitboard ring_mask = 0;
+    for (int index = 0; index < ring.count; ++index) {
+        ring_mask |= square_bb(ring.squares[index]);
+    }
+
+    int attackers = 0;
+    int attack_units = 0;
+    bool queen_attacks = false;
+
+    for (const PieceType type : {
+             PieceType::Pawn,
+             PieceType::Knight,
+             PieceType::Bishop,
+             PieceType::Rook,
+             PieceType::Queen,
+         }) {
+        Bitboard pieces = board.pieces(attacker, type);
+        while (pieces != 0) {
+            const Square from = __builtin_ctzll(pieces);
+            pieces &= pieces - 1;
+
+            const int hits = __builtin_popcountll(attacks_from_piece(board, from, attacker, type) & ring_mask);
+            if (hits > 0) {
+                ++attackers;
+                attack_units += king_attack_piece_weight(type) + hits * 2;
+                queen_attacks = queen_attacks || type == PieceType::Queen;
+            }
+        }
+    }
+
+    int penalty = (attacker_map.all & square_bb(king)) != 0 ? 45 : 0;
+    if (attackers >= 2) {
+        penalty += attack_units + attackers * attackers * 4;
+        if (queen_attacks) {
+            penalty += 14;
+        }
+    } else if (attackers == 1) {
+        penalty += attack_units / 3;
+    }
+
+    return penalty;
+}
+
+int king_safety_score(const Board& board, Color color, const AttackMap& enemy_attacks) {
+    return king_shelter_score(board, color) - king_attack_penalty(board, color, enemy_attacks);
+}
+
+int loose_piece_bonus(PieceType type) {
+    switch (type) {
+        case PieceType::Pawn:
+            return 8;
+        case PieceType::Knight:
+        case PieceType::Bishop:
+            return 28;
+        case PieceType::Rook:
+            return 45;
+        case PieceType::Queen:
+            return 75;
+        case PieceType::King:
+        case PieceType::None:
+            return 0;
+    }
+    return 0;
+}
+
+int pressure_bonus(PieceType type) {
+    switch (type) {
+        case PieceType::Pawn:
+            return 1;
+        case PieceType::Knight:
+        case PieceType::Bishop:
+            return 5;
+        case PieceType::Rook:
+            return 12;
+        case PieceType::Queen:
+            return 18;
+        case PieceType::King:
+        case PieceType::None:
+            return 0;
+    }
+    return 0;
+}
+
+int pawn_threat_bonus(PieceType victim) {
+    switch (victim) {
+        case PieceType::Knight:
+        case PieceType::Bishop:
+            return 18;
+        case PieceType::Rook:
+            return 35;
+        case PieceType::Queen:
+            return 55;
+        case PieceType::Pawn:
+        case PieceType::King:
+        case PieceType::None:
+            return 0;
+    }
+    return 0;
+}
+
+int minor_threat_bonus(PieceType victim) {
+    switch (victim) {
+        case PieceType::Rook:
+            return 14;
+        case PieceType::Queen:
+            return 24;
+        case PieceType::Pawn:
+        case PieceType::Knight:
+        case PieceType::Bishop:
+        case PieceType::King:
+        case PieceType::None:
+            return 0;
+    }
+    return 0;
+}
+
+int threat_score(const Board& board, Color color, const AttackMap& own_attacks, const AttackMap& enemy_attacks) {
+    const Color enemy = opposite(color);
+    int score = 0;
+
+    for (Square square = 0; square < kBoardSquareCount; ++square) {
+        const Piece piece = board.piece_at(square);
+        if (piece == Piece::None || color_of(piece) != enemy || type_of(piece) == PieceType::King) {
+            continue;
+        }
+
+        const PieceType victim = type_of(piece);
+        const Bitboard target = square_bb(square);
+        if ((own_attacks.all & target) == 0) {
+            continue;
+        }
+
+        const bool defended = (enemy_attacks.all & target) != 0;
+        score += defended ? pressure_bonus(victim) : loose_piece_bonus(victim);
+
+        if ((own_attacks.by_type[piece_index(PieceType::Pawn)] & target) != 0 && victim != PieceType::Pawn) {
+            score += pawn_threat_bonus(victim);
+        }
+
+        const bool minor_attack = ((own_attacks.by_type[piece_index(PieceType::Knight)]
+            | own_attacks.by_type[piece_index(PieceType::Bishop)]) & target) != 0;
+        if (minor_attack && material_value(victim) > material_value(PieceType::Bishop)) {
+            score += minor_threat_bonus(victim);
+        }
+    }
+
     return score;
 }
 
@@ -484,6 +791,7 @@ int evaluate_white_perspective(const Board& board) {
     int eg_score = 0;
     int phase = 0;
     std::array<int, 2> bishops{0, 0};
+    std::array<AttackMap, 2> attack_maps{};
 
     for (Square square = 0; square < kBoardSquareCount; ++square) {
         const Piece piece = board.piece_at(square);
@@ -504,7 +812,11 @@ int evaluate_white_perspective(const Board& board) {
             ++bishops[static_cast<int>(color)];
         }
 
-        const int mobility = mobility_for_piece(board, square, color, type);
+        const Bitboard attacks = attacks_from_piece(board, square, color, type);
+        attack_maps[static_cast<int>(color)].by_type[piece_index(type)] |= attacks;
+        attack_maps[static_cast<int>(color)].all |= attacks;
+
+        const int mobility = mobility_for_piece(type, attacks, board.occupancy(color));
         mg_score += signed_score(color, mobility);
         eg_score += signed_score(color, mobility / 2);
     }
@@ -523,8 +835,16 @@ int evaluate_white_perspective(const Board& board) {
     eg_score += pawn_structure_score(board, Color::White, true);
     eg_score -= pawn_structure_score(board, Color::Black, true);
 
-    mg_score += king_shelter_score(board, Color::White);
-    mg_score -= king_shelter_score(board, Color::Black);
+    const AttackMap& white_attacks = attack_maps[static_cast<int>(Color::White)];
+    const AttackMap& black_attacks = attack_maps[static_cast<int>(Color::Black)];
+
+    mg_score += king_safety_score(board, Color::White, black_attacks);
+    mg_score -= king_safety_score(board, Color::Black, white_attacks);
+
+    const int white_threats = threat_score(board, Color::White, white_attacks, black_attacks);
+    const int black_threats = threat_score(board, Color::Black, black_attacks, white_attacks);
+    mg_score += white_threats - black_threats;
+    eg_score += (white_threats - black_threats) / 3;
 
     phase = std::min(phase, kMaxPhase);
     const int eg_phase = kMaxPhase - phase;
