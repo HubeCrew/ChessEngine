@@ -146,6 +146,22 @@ TEST_CASE("evaluation rewards passed pawns over stopped pawns") {
             > chess::engine::evaluate_white_perspective(stopped));
 }
 
+TEST_CASE("evaluation rewards clear and supported passed pawns in endgames") {
+    const chess::Board clear_supported = chess::board_from_fen("7k/8/4P3/3P4/8/8/8/4K3 w - - 0 1");
+    const chess::Board blockaded = chess::board_from_fen("7k/4p3/4P3/3P4/8/8/8/4K3 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(clear_supported)
+            > chess::engine::evaluate_white_perspective(blockaded));
+}
+
+TEST_CASE("evaluation recognizes king races for advanced passed pawns") {
+    const chess::Board outside_square = chess::board_from_fen("7k/8/8/4P3/8/8/8/4K3 w - - 0 1");
+    const chess::Board inside_square = chess::board_from_fen("8/8/8/4P1k1/8/8/8/4K3 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(outside_square)
+            > chess::engine::evaluate_white_perspective(inside_square));
+}
+
 TEST_CASE("evaluation penalizes doubled isolated pawns") {
     const chess::Board connected = chess::board_from_fen("4k3/8/8/8/8/8/2PP4/4K3 w - - 0 1");
     const chess::Board doubled = chess::board_from_fen("4k3/8/8/8/8/2P5/2P5/4K3 w - - 0 1");

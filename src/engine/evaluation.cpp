@@ -286,11 +286,117 @@ bool is_passed_pawn(const Board& board, Square square, Color color) {
     return true;
 }
 
+int king_distance(Square from, Square to) {
+    return std::max(std::abs(file_of(from) - file_of(to)), std::abs(rank_of(from) - rank_of(to)));
+}
+
+int non_pawn_material(const Board& board, Color color) {
+    int total = 0;
+    total += __builtin_popcountll(board.pieces(color, PieceType::Knight)) * material_value(PieceType::Knight);
+    total += __builtin_popcountll(board.pieces(color, PieceType::Bishop)) * material_value(PieceType::Bishop);
+    total += __builtin_popcountll(board.pieces(color, PieceType::Rook)) * material_value(PieceType::Rook);
+    total += __builtin_popcountll(board.pieces(color, PieceType::Queen)) * material_value(PieceType::Queen);
+    return total;
+}
+
+bool path_to_promotion_is_clear(const Board& board, Square square, Color color) {
+    const int direction = color == Color::White ? 1 : -1;
+    const int file = file_of(square);
+    for (int rank = rank_of(square) + direction; rank >= 0 && rank < 8; rank += direction) {
+        if (board.piece_at(make_square(file, rank)) != Piece::None) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_blocked_by_enemy(const Board& board, Square square, Color color) {
+    const int direction = color == Color::White ? 1 : -1;
+    const int rank = rank_of(square) + direction;
+    if (rank < 0 || rank >= 8) {
+        return false;
+    }
+    const Piece blocker = board.piece_at(make_square(file_of(square), rank));
+    return blocker != Piece::None && color_of(blocker) == opposite(color);
+}
+
+bool is_protected_by_pawn(const Board& board, Square square, Color color) {
+    const int support_rank = rank_of(square) + (color == Color::White ? -1 : 1);
+    if (support_rank < 0 || support_rank >= 8) {
+        return false;
+    }
+    for (const int file : {file_of(square) - 1, file_of(square) + 1}) {
+        if (file >= 0 && file < 8
+            && board.piece_at(make_square(file, support_rank)) == make_piece(color, PieceType::Pawn)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool has_connected_pawn(const Board& board, Square square, Color color) {
+    for (const int file : {file_of(square) - 1, file_of(square) + 1}) {
+        if (file < 0 || file >= 8) {
+            continue;
+        }
+        for (const int rank : {rank_of(square) - 1, rank_of(square), rank_of(square) + 1}) {
+            if (rank >= 0 && rank < 8
+                && board.piece_at(make_square(file, rank)) == make_piece(color, PieceType::Pawn)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 int passed_pawn_bonus(Square square, Color color, bool endgame) {
     const int advanced_rank = color == Color::White ? rank_of(square) : 7 - rank_of(square);
     constexpr std::array<int, 8> mg_bonus{{0, 0, 8, 16, 28, 45, 75, 0}};
     constexpr std::array<int, 8> eg_bonus{{0, 0, 15, 30, 55, 90, 140, 0}};
     return endgame ? eg_bonus[advanced_rank] : mg_bonus[advanced_rank];
+}
+
+int passed_pawn_dynamic_bonus(const Board& board, Square square, Color color, bool endgame) {
+    if (!endgame) {
+        return 0;
+    }
+
+    const int advanced_rank = color == Color::White ? rank_of(square) : 7 - rank_of(square);
+    const bool clear_path = path_to_promotion_is_clear(board, square, color);
+    int score = 0;
+
+    if (clear_path) {
+        score += 10 + advanced_rank * 8;
+    } else if (is_blocked_by_enemy(board, square, color)) {
+        score -= 18 + advanced_rank * 4;
+    }
+
+    if (is_protected_by_pawn(board, square, color)) {
+        score += 8 + advanced_rank * 5;
+    }
+    if (has_connected_pawn(board, square, color)) {
+        score += 8 + advanced_rank * 4;
+    }
+
+    const Square own_king = board.king_square(color);
+    const Square enemy_king = board.king_square(opposite(color));
+    if (is_valid_square(own_king) && is_valid_square(enemy_king)) {
+        const Square promotion_square = make_square(file_of(square), color == Color::White ? 7 : 0);
+        const int own_distance = king_distance(own_king, promotion_square);
+        const int enemy_distance = king_distance(enemy_king, promotion_square);
+        score += std::clamp(enemy_distance - own_distance, -3, 3) * 8;
+
+        int pawn_steps = color == Color::White ? 7 - rank_of(square) : rank_of(square);
+        if (board.side_to_move() != color) {
+            ++pawn_steps;
+        }
+        if (clear_path && enemy_distance > pawn_steps) {
+            const bool bare_king_race = non_pawn_material(board, opposite(color)) == 0;
+            score += bare_king_race ? 80 + advanced_rank * 25 : 20 + advanced_rank * 8;
+        }
+    }
+
+    return score;
 }
 
 int pawn_structure_score(const Board& board, Color color, bool endgame) {
@@ -314,6 +420,7 @@ int pawn_structure_score(const Board& board, Color color, bool endgame) {
         }
         if (is_passed_pawn(board, square, color)) {
             score += passed_pawn_bonus(square, color, endgame);
+            score += passed_pawn_dynamic_bonus(board, square, color, endgame);
         }
     }
     return score;

@@ -5,14 +5,14 @@ Engine-first C++20 chess project. The current foundation is a validated chess ru
 ## Build
 
 ```bash
-cmake -S . -B build -G Ninja
-cmake --build build
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
 ```
 
 ## Test
 
 ```bash
-ctest --test-dir build --output-on-failure
+ctest --test-dir build-release --output-on-failure
 ```
 
 The test suite uses Catch2 and validates FEN round trips, legal move generation, make/unmake restoration, special move edge cases, and standard perft positions.
@@ -23,13 +23,13 @@ It also includes engine tests for Zobrist hashing, transposition table behavior,
 Run a divided perft from the start position:
 
 ```bash
-./build/chess_perft 3
+./build-release/chess_perft 3
 ```
 
 Run the UCI engine manually:
 
 ```bash
-./build/chess_uci
+./build-release/chess_uci
 ```
 
 Example UCI session:
@@ -45,13 +45,13 @@ quit
 Run the benchmark and tactical suites:
 
 ```bash
-./build/chess_bench --suite all --hash 64
-./build/chess_bench --suite bench --depth 3 --csv
-./build/chess_bench --suite tactics
-./build/chess_bench --suite bench --depth 5 --disable-null-move
-./build/chess_bench --suite epd --epd data/suites/tactics.epd
-./build/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd
-./build/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd --progress
+./build-release/chess_bench --suite all --hash 64
+./build-release/chess_bench --suite bench --depth 3 --csv
+./build-release/chess_bench --suite tactics
+./build-release/chess_bench --suite bench --depth 5 --disable-null-move
+./build-release/chess_bench --suite epd --epd data/suites/tactics.epd
+./build-release/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd
+./build-release/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd --progress
 ```
 
 `chess_bench` reports depth, best move, expected move for tactical cases, score, nodes, NPS, and elapsed time. The tactical suite currently contains 50 curated positions across mates, promotions, forks, hanging pieces, winning captures, pawn tactics, checks, and loose-piece tactics. Tactical runs return a non-zero exit code if any expected best move is missed.
@@ -67,20 +67,34 @@ python3 tools/import_lichess_puzzles.py \
   --input data/raw/lichess_db_puzzle.csv.zst \
   --output data/suites/lichess_tactics_250.epd \
   --limit 250 \
-  --referee ./build/chess_referee
+  --referee ./build-release/chess_referee
 ```
 
 The raw database belongs in ignored `data/raw/`. `data/suites/lichess_tactics_250.epd` is an imported, traceable stress suite, not a hand-curated golden suite.
+
+Extract a focused suite from failed benchmark rows:
+
+```bash
+./build-release/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd --csv \
+  > data/suites/lichess_tactics_250_results.csv
+python3 tools/extract_benchmark_misses.py \
+  --source data/suites/lichess_tactics_250.epd \
+  --results data/suites/lichess_tactics_250_results.csv \
+  --output data/suites/lichess_tactics_misses.epd
+./build-release/chess_bench --suite epd --epd data/suites/lichess_tactics_misses.epd --depth 8 --progress
+```
+
+The extracted miss suite is useful for diagnosing whether failed tactical positions are fixed by deeper search or need engine changes. Generated CSV result files and extracted miss suites should stay local unless deliberately promoted to curated test data.
 
 Run a local UCI gauntlet:
 
 ```bash
 ./tools/gauntlet.py \
-  --engine-a ./build/chess_uci \
-  --engine-b ./build/chess_uci \
+  --engine-a ./build-release/chess_uci \
+  --engine-b ./build-release/chess_uci \
   --name-a current \
   --name-b candidate \
-  --referee ./build/chess_referee \
+  --referee ./build-release/chess_referee \
   --games 20 \
   --movetime 100 \
   --csv
@@ -90,11 +104,11 @@ Run against Stockfish at its lowest built-in limited Elo:
 
 ```bash
 ./tools/gauntlet.py \
-  --engine-a ./build/chess_uci \
+  --engine-a ./build-release/chess_uci \
   --engine-b /usr/games/stockfish \
   --name-a current \
   --name-b stockfish-1320 \
-  --referee ./build/chess_referee \
+  --referee ./build-release/chess_referee \
   --games 200 \
   --movetime 100 \
   --option-b UCI_LimitStrength=true \

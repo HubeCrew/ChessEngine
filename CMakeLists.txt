@@ -91,6 +91,11 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/import_lichess_puzzles.py
         )
         add_test(
+            NAME extract_benchmark_misses_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_benchmark_misses_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_benchmark_misses.py
+        )
+        add_test(
             NAME gauntlet_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gauntlet_smoke_test.py
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/gauntlet.py
