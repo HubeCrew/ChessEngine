@@ -9,6 +9,7 @@
 #include "chess/core/movegen.h"
 #include "chess/engine/evaluation.h"
 #include "chess/engine/search.h"
+#include "chess/engine/static_exchange.h"
 
 namespace {
 
@@ -127,6 +128,16 @@ void print_eval_trace(const chess::Board& board) {
               << '\n';
 }
 
+void print_static_exchange(const chess::Board& board, std::istringstream& input) {
+    std::string move_text;
+    input >> move_text;
+    chess::Board copy = board;
+    const chess::Move move = chess::parse_uci_move(copy, move_text);
+    std::cout << "info string see " << chess::move_to_uci(move)
+              << ' ' << chess::engine::static_exchange_eval(copy, move)
+              << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -218,6 +229,8 @@ int main() {
                 std::cout << board.to_fen() << '\n';
             } else if (command == "eval") {
                 print_eval_trace(board);
+            } else if (command == "see") {
+                print_static_exchange(board, input);
             } else if (command == "quit") {
                 break;
             }

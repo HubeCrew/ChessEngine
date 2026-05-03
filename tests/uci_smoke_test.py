@@ -15,8 +15,10 @@ def main() -> int:
             "setoption name SearchExtensions value true",
             "isready",
             "ucinewgame",
-            "position startpos moves e2e4 e7e5",
+            "position startpos moves e2e4 d7d5",
             "eval",
+            "position fen 4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1",
+            "see e4d5",
             "go depth 3",
             "quit",
             "",
@@ -66,6 +68,7 @@ def main() -> int:
         "uciok",
         "readyok",
         "info string eval material ",
+        "info string see e4d5 100",
         "bestmove ",
     ]
     for fragment in required_fragments:

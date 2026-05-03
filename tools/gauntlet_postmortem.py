@@ -103,6 +103,11 @@ class MoveRecord:
     severity: int = 0
     engine_bestmove: str = ""
     engine_bestmove_score_cp: int | None = None
+    engine_played_score_cp: int | None = None
+    engine_played_see_cp: int | None = None
+    engine_reference_score_cp: int | None = None
+    engine_reference_see_cp: int | None = None
+    engine_reference_delta_cp: int | None = None
     reference_bestmove: str = ""
     reference_score_cp: int | None = None
     reference_played_score_cp: int | None = None
@@ -116,6 +121,8 @@ class UciTraceEngine:
         self.timeout = timeout
         self.process: subprocess.Popen[str] | None = None
         self.cache: dict[str, dict[str, int]] = {}
+        self.search_cache: dict[tuple[str, int, int, tuple[str, ...]], tuple[str, int | None]] = {}
+        self.see_cache: dict[tuple[str, str], int] = {}
 
     def __enter__(self) -> "UciTraceEngine":
         self.process = subprocess.Popen(
@@ -156,12 +163,27 @@ class UciTraceEngine:
                 self.cache[fen] = trace
                 return trace
 
-    def bestmove(self, fen: str, depth: int = 0, movetime_ms: int = 0) -> tuple[str, int | None]:
+    def bestmove(
+        self,
+        fen: str,
+        depth: int = 0,
+        movetime_ms: int = 0,
+        search_moves: Iterable[str] = (),
+    ) -> tuple[str, int | None]:
+        search_move_tuple = tuple(search_moves)
+        cache_key = (fen, depth, movetime_ms, search_move_tuple)
+        cached = self.search_cache.get(cache_key)
+        if cached is not None:
+            return cached
         self._send(f"position fen {fen}")
+        search_moves_clause = " ".join(search_move_tuple)
         if movetime_ms > 0:
-            self._send(f"go movetime {movetime_ms}")
+            command = f"go movetime {movetime_ms}"
         else:
-            self._send(f"go depth {depth}")
+            command = f"go depth {depth}"
+        if search_moves_clause:
+            command += f" searchmoves {search_moves_clause}"
+        self._send(command)
         deadline = time.monotonic() + self.timeout
         latest_score: int | None = None
         while True:
@@ -173,7 +195,27 @@ class UciTraceEngine:
                     latest_score = parsed_score
             if line.startswith("bestmove "):
                 parts = line.split()
-                return (parts[1] if len(parts) > 1 else "0000", latest_score)
+                result = (parts[1] if len(parts) > 1 else "0000", latest_score)
+                self.search_cache[cache_key] = result
+                return result
+
+    def see(self, fen: str, move: str) -> int:
+        cache_key = (fen, move)
+        cached = self.see_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        self._send(f"position fen {fen}")
+        self._send(f"see {move}")
+        deadline = time.monotonic() + self.timeout
+        while True:
+            line = self._readline(deadline)
+            if line.startswith("info string see "):
+                parts = line.split()
+                if len(parts) < 5:
+                    raise ValueError(f"invalid see output: {line}")
+                score = int(parts[4])
+                self.see_cache[cache_key] = score
+                return score
 
     def _send(self, command: str) -> None:
         if self.process is None or self.process.stdin is None or self.process.poll() is not None:
@@ -532,6 +574,18 @@ def select_events(records: list[MoveRecord], max_events: int) -> list[MoveRecord
 def summarize(records: list[MoveRecord], events: list[MoveRecord], engine_name: str) -> dict[str, object]:
     game_ids = sorted({record.game for record in records})
     loss_ids = sorted({record.game for record in records if "engine-loss" in record.categories})
+    scored_reference_events = [
+        event for event in events
+        if event.engine_reference_delta_cp is not None
+    ]
+    played_see_events = [
+        event for event in events
+        if event.engine_played_see_cp is not None
+    ]
+    reference_see_events = [
+        event for event in events
+        if event.engine_reference_see_cp is not None
+    ]
     return {
         "engine": engine_name,
         "games_seen": len(game_ids),
@@ -544,6 +598,12 @@ def summarize(records: list[MoveRecord], events: list[MoveRecord], engine_name: 
         "equal_value_captures": sum(1 for record in records if "equal-value-capture" in record.categories),
         "queen_trades": sum(1 for record in records if "queen-trade" in record.categories),
         "eval_swings": sum(1 for record in records if "eval-swing" in record.categories),
+        "engine_reference_scores": len(scored_reference_events),
+        "engine_prefers_reference": sum(1 for event in scored_reference_events if event.engine_reference_delta_cp > 0),
+        "engine_prefers_played": sum(1 for event in scored_reference_events if event.engine_reference_delta_cp < 0),
+        "engine_ties_reference": sum(1 for event in scored_reference_events if event.engine_reference_delta_cp == 0),
+        "engine_played_negative_see": sum(1 for event in played_see_events if event.engine_played_see_cp < 0),
+        "engine_reference_negative_see": sum(1 for event in reference_see_events if event.engine_reference_see_cp < 0),
     }
 
 
@@ -581,6 +641,11 @@ def write_csv(path: Path, events: list[MoveRecord]) -> None:
         "capture_value",
         "engine_bestmove",
         "engine_bestmove_score_cp",
+        "engine_played_score_cp",
+        "engine_played_see_cp",
+        "engine_reference_score_cp",
+        "engine_reference_see_cp",
+        "engine_reference_delta_cp",
         "reference_bestmove",
         "reference_score_cp",
         "reference_played_score_cp",
@@ -673,6 +738,18 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
             if event.engine_bestmove:
                 lines.append(f"- Engine re-search: `{event.engine_bestmove}` score `{event.engine_bestmove_score_cp}`")
                 lines.append("")
+            if event.engine_played_score_cp is not None:
+                lines.append(f"- Engine played-move constrained score: `{event.engine_played_score_cp}`")
+                if event.engine_played_see_cp is not None:
+                    lines.append(f"- Engine played-move SEE: `{event.engine_played_see_cp}`")
+                if event.engine_reference_score_cp is not None and event.engine_reference_delta_cp is not None:
+                    lines.append(
+                        f"- Engine reference-move constrained score: `{event.engine_reference_score_cp}`, "
+                        f"delta `{event.engine_reference_delta_cp:+d}`"
+                    )
+                    if event.engine_reference_see_cp is not None:
+                        lines.append(f"- Engine reference-move SEE: `{event.engine_reference_see_cp}`")
+                lines.append("")
             if event.reference_bestmove:
                 lines.append(f"- Reference bestmove: `{event.reference_bestmove}` score `{event.reference_score_cp}`")
                 if event.reference_played_score_cp is not None and event.reference_delta_cp is not None:
@@ -720,6 +797,26 @@ def add_engine_bestmoves(events: list[MoveRecord], engine: UciTraceEngine, depth
         bestmove, score = engine.bestmove(event.fen_before, depth)
         event.engine_bestmove = bestmove
         event.engine_bestmove_score_cp = score
+        _, played_score = engine.bestmove(event.fen_before, depth, search_moves=(event.uci,))
+        event.engine_played_score_cp = played_score
+        event.engine_played_see_cp = engine.see(event.fen_before, event.uci)
+
+
+def add_engine_reference_scores(events: list[MoveRecord], engine: UciTraceEngine, depth: int) -> None:
+    if depth <= 0:
+        return
+    for event in events:
+        if not event.reference_bestmove or event.reference_bestmove == "0000":
+            continue
+        board = chess.Board(event.fen_before)
+        reference_move = chess.Move.from_uci(event.reference_bestmove)
+        if reference_move not in board.legal_moves:
+            continue
+        _, reference_score = engine.bestmove(event.fen_before, depth, search_moves=(event.reference_bestmove,))
+        event.engine_reference_score_cp = reference_score
+        event.engine_reference_see_cp = engine.see(event.fen_before, event.reference_bestmove)
+        if event.engine_played_score_cp is not None and reference_score is not None:
+            event.engine_reference_delta_cp = reference_score - event.engine_played_score_cp
 
 
 def add_reference_bestmoves(
@@ -858,6 +955,9 @@ def main() -> int:
                 args.reference_min_delta_cp,
                 reference_confirm_depth,
             )
+    if args.engine_depth > 0 and any(event.reference_bestmove for event in events):
+        with UciTraceEngine(args.engine, args.protocol_timeout) as trace_engine:
+            add_engine_reference_scores(events, trace_engine, args.engine_depth)
 
     summary = summarize(records, events, args.engine_name)
     write_json(args.output_dir / "postmortem.json", summary, events)

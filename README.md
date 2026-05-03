@@ -81,6 +81,7 @@ eval
 ```
 
 The custom `eval` command prints white-perspective components for material, piece-square tables, mobility, safe mobility, king safety, threats, pawn structure, outposts, rook files, space, center control, bishop quality, pawn dynamics, development, trade context, and total score.
+The custom `see <uci-move>` command prints static exchange evaluation for a legal move in the current position, which is useful for checking whether a capture is tactically profitable before deeper search context is considered.
 
 Generate an imported Lichess tactical suite from the official CC0 puzzle database:
 
@@ -182,7 +183,7 @@ Analyze a completed gauntlet after the PGNs are written:
   --reference-min-delta-cp 120
 ```
 
-The postmortem writes `report.md`, `events.csv`, `postmortem.json`, and `positions.epd`. It uses `python-chess` for PGN/FEN reconstruction and the engine's own `eval` command for trace components, then flags eval swings, loss-context moves, equal trades, queen trades, opponent recaptures, and bad trade sequences. `positions.epd` records the gauntlet move as `am` when there is no reference engine, or when the reference engine's best move is clearly better by `--reference-min-delta-cp` and remains better at the optional confirmation depth. If the reference engine agrees with the gauntlet move, that move is recorded as `bm`; otherwise the reference move is kept as a comment so the regression suite tests blunder avoidance rather than exact Stockfish imitation.
+The postmortem writes `report.md`, `events.csv`, `postmortem.json`, and `positions.epd`. It uses `python-chess` for PGN/FEN reconstruction and the engine's own `eval` command for trace components, then flags eval swings, loss-context moves, equal trades, queen trades, opponent recaptures, and bad trade sequences. When `--engine-depth` is set, it also uses UCI `searchmoves` to record constrained scores for the played move and, when available, the reference move, plus the engine's `see` score for each candidate. `positions.epd` records the gauntlet move as `am` when there is no reference engine, or when the reference engine's best move is clearly better by `--reference-min-delta-cp` and remains better at the optional confirmation depth. If the reference engine agrees with the gauntlet move, that move is recorded as `bm`; otherwise the reference move is kept as a comment so the regression suite tests blunder avoidance rather than exact Stockfish imitation.
 
 Watch a gauntlet live in the browser:
 

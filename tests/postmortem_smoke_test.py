@@ -59,6 +59,8 @@ def main() -> int:
                 str(output_dir),
                 "--max-events",
                 "8",
+                "--engine-depth",
+                "1",
                 "--reference-engine",
                 str(engine),
                 "--reference-depth",
@@ -83,10 +85,32 @@ def main() -> int:
         if payload["summary"]["games_seen"] != 1 or payload["summary"]["flagged_events"] <= 0:
             print(f"unexpected summary: {payload['summary']}", file=sys.stderr)
             return 1
+        if "engine_reference_scores" not in payload["summary"]:
+            print(f"missing candidate-score summary: {payload['summary']}", file=sys.stderr)
+            return 1
+        if "engine_played_negative_see" not in payload["summary"]:
+            print(f"missing SEE summary: {payload['summary']}", file=sys.stderr)
+            return 1
         if not rows:
             print("expected at least one CSV event", file=sys.stderr)
             return 1
+        required_csv_fields = {
+            "engine_played_score_cp",
+            "engine_played_see_cp",
+            "engine_reference_score_cp",
+            "engine_reference_see_cp",
+            "engine_reference_delta_cp",
+        }
+        if not required_csv_fields.issubset(rows[0].keys()):
+            print(f"missing CSV fields: {required_csv_fields - set(rows[0].keys())}", file=sys.stderr)
+            return 1
         if "bad-trade-sequence" not in report or "Sequence after reply" not in report:
+            print(report, file=sys.stderr)
+            return 1
+        if "Engine played-move constrained score" not in report:
+            print(report, file=sys.stderr)
+            return 1
+        if "Engine played-move SEE" not in report:
             print(report, file=sys.stderr)
             return 1
         if "postmortem-0001" not in positions or " bm " not in positions:
