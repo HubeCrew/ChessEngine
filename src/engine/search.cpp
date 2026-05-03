@@ -370,7 +370,8 @@ public:
         Move first_killer,
         Move second_killer,
         bool allow_quiet_checks,
-        const HistoryTable& history
+        const HistoryTable& history,
+        SearchDiagnostics& diagnostics
     )
         : board_(board),
           side_to_move_(board.side_to_move()),
@@ -380,7 +381,8 @@ public:
           first_killer_(first_killer),
           second_killer_(second_killer),
           allow_quiet_checks_(allow_quiet_checks),
-          history_(history) {
+          history_(history),
+          diagnostics_(diagnostics) {
         for (const Move& move : moves) {
             moves_.emplace_back(move);
         }
@@ -391,6 +393,7 @@ public:
             switch (stage_) {
                 case MovePickerStage::PreviousPv:
                     if (pick_special(previous_pv_move_, picked)) {
+                        ++diagnostics_.move_picker_pv_picks;
                         return true;
                     }
                     stage_ = MovePickerStage::Remainder;
@@ -445,6 +448,7 @@ private:
     Move second_killer_;
     bool allow_quiet_checks_ = false;
     const HistoryTable& history_;
+    SearchDiagnostics& diagnostics_;
     FixedVector<ScoredMove, MoveList::kCapacity> moves_;
     FixedVector<ScoredIndex, MoveList::kCapacity> remainder_;
     MovePickerStage stage_ = MovePickerStage::PreviousPv;
@@ -535,6 +539,18 @@ private:
 
     void emit(ScoredMove& state, PickedMove& picked) {
         state.emitted = true;
+        ++diagnostics_.move_picker_searched_moves;
+        classify_tactical(state);
+        if (state.is_tactical) {
+            ++diagnostics_.move_picker_tactical_picks;
+        } else if (same_move(state.move, first_killer_) || same_move(state.move, second_killer_)) {
+            ++diagnostics_.move_picker_killer_picks;
+        } else {
+            ++diagnostics_.move_picker_quiet_picks;
+        }
+        if (is_valid_move_shape(tt_move_) && same_move_identity(state.move, tt_move_)) {
+            ++diagnostics_.move_picker_tt_picks;
+        }
         picked = PickedMove{
             state.move,
             state.gives_check_known,
@@ -549,6 +565,7 @@ private:
             return;
         }
         state.tactical_classified = true;
+        ++diagnostics_.move_picker_scored_moves;
         state.is_tactical = state.move.is_capture() || state.move.is_promotion();
         if (!state.is_tactical) {
             return;
@@ -561,7 +578,7 @@ private:
         if (state.move.is_capture()) {
             const bool see_needed = needs_see_for_loss_detection(board_, state.move);
             const int exchange_score = see_needed
-                ? static_exchange_eval(board_, state.move)
+                ? see(board_, state.move)
                 : immediate_capture_gain(board_, state.move);
             state.tactical_exchange_score = exchange_score;
             if (see_needed) {
@@ -588,9 +605,15 @@ private:
     bool gives_check(ScoredMove& state) {
         if (!state.gives_check_known) {
             state.gives_check_known = true;
+            ++diagnostics_.move_gives_check_calls;
             state.gives_check = move_gives_check(board_, state.move);
         }
         return state.gives_check;
+    }
+
+    int see(const Board& board, const Move& move) {
+        ++diagnostics_.see_calls;
+        return static_exchange_eval(board, move);
     }
 };
 
@@ -630,6 +653,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     nodes_ = 0;
     qnodes_ = 0;
     tt_hits_ = 0;
+    diagnostics_ = {};
     const std::chrono::milliseconds effective_move_time = allocated_time(board, limits);
     use_deadline_ = effective_move_time.count() > 0;
     start_time_ = std::chrono::steady_clock::now();
@@ -698,6 +722,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
             result.nodes = nodes_;
             result.qnodes = qnodes_;
             result.tt_hits = tt_hits_;
+            result.diagnostics = diagnostics_;
             result.principal_variation = extract_principal_variation(board, depth);
             if (!result.principal_variation.empty()) {
                 result.best_move = result.principal_variation.front();
@@ -715,6 +740,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     );
     const auto elapsed_ms = std::max<std::int64_t>(1, result.elapsed.count());
     result.nps = result.nodes * 1000ULL / static_cast<std::uint64_t>(elapsed_ms);
+    result.diagnostics = diagnostics_;
     return result;
 }
 
@@ -757,7 +783,7 @@ void Searcher::clear() {
 
 int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move, int extensions_used) {
     if (should_stop()) {
-        return evaluate(board);
+        return evaluate_with_diagnostics(board);
     }
     ++nodes_;
 
@@ -794,15 +820,17 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
 
     if (null_move_pruning_
         && can_try_null_move(board, depth, ply, alpha, beta, in_check, allow_null_move)
-        && evaluate(board) >= beta) {
+        && evaluate_with_diagnostics(board) >= beta) {
+        ++diagnostics_.null_move_attempts;
         const UndoState undo = board.make_null_move();
         const int null_depth = std::max(0, depth - 1 - kNullMoveReduction);
         const int score = -negamax(board, null_depth, ply + 1, -beta, -beta + 1, false, extensions_used);
         board.unmake_null_move(undo);
         if (should_stop()) {
-            return evaluate(board);
+            return evaluate_with_diagnostics(board);
         }
         if (score >= beta) {
+            ++diagnostics_.null_move_cutoffs;
             tt_.store(board.hash_key(), depth, score_to_tt(beta, ply), Bound::Lower, Move{});
             return beta;
         }
@@ -825,6 +853,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
         ply < kMaxPly ? killer_moves_[ply][1] : Move{},
         false,
         history_,
+        diagnostics_,
     };
     std::array<Move, kMaxHistoryQuiets> quiets_tried_before_cutoff{};
     std::size_t quiet_count = 0;
@@ -834,6 +863,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
         const Color moving_side = board.side_to_move();
         const UndoState undo = board.make_move(move);
         if (!move_is_legal_after_make(board, moving_side)) {
+            ++diagnostics_.illegal_pseudo_moves;
             board.unmake_move(undo);
             continue;
         }
@@ -856,8 +886,10 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
                 && !(is_valid_move_shape(tt_move) && same_move_identity(move, tt_move))
                 && !(is_valid_move_shape(pv_move) && same_move_identity(move, pv_move));
             if (can_reduce) {
+                ++diagnostics_.lmr_reductions;
                 score = -negamax(board, depth - 2, ply + 1, -alpha - 1, -alpha, true, child_extensions_used);
                 if (score > alpha && !should_stop()) {
+                    ++diagnostics_.lmr_researches;
                     score = -negamax(board, child_depth, ply + 1, -alpha - 1, -alpha, true, child_extensions_used);
                 }
             } else {
@@ -876,6 +908,8 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
         }
         alpha = std::max(alpha, score);
         if (alpha >= beta) {
+            ++diagnostics_.beta_cutoffs;
+            diagnostics_.beta_cutoff_move_index_sum += static_cast<std::uint64_t>(move_index);
             record_cutoff(move, depth, ply, moving_side, quiets_tried_before_cutoff.data(), quiet_count);
             break;
         }
@@ -904,15 +938,19 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
 
 int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
     if (should_stop()) {
-        return evaluate(board);
+        return evaluate_with_diagnostics(board);
     }
     ++nodes_;
     ++qnodes_;
 
     const bool in_check = board.in_check(board.side_to_move());
+    if (in_check) {
+        ++diagnostics_.qsearch_in_check_nodes;
+    }
     int stand_pat = -kInfinity;
     if (!in_check) {
-        stand_pat = evaluate(board);
+        ++diagnostics_.qsearch_stand_pat_nodes;
+        stand_pat = evaluate_with_diagnostics(board);
         if (stand_pat >= beta) {
             return beta;
         }
@@ -940,6 +978,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         ply < kMaxPly ? killer_moves_[ply][1] : Move{},
         allow_quiet_checks,
         history_,
+        diagnostics_,
     };
 
     int legal_moves_searched = 0;
@@ -948,7 +987,12 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         const Move& move = picked.move;
         bool gives_check = false;
         if (!in_check) {
-            gives_check = picked.gives_check_known ? picked.gives_check : move_gives_check(board, move);
+            if (picked.gives_check_known) {
+                gives_check = picked.gives_check;
+            } else {
+                ++diagnostics_.move_gives_check_calls;
+                gives_check = move_gives_check(board, move);
+            }
             if (!move.is_capture() && !move.is_promotion() && (!allow_quiet_checks || !gives_check)) {
                 continue;
             }
@@ -957,7 +1001,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
                 continue;
             }
             if (needs_see_for_loss_detection(board, move)
-                && (picked.see_known ? picked.see_score : static_exchange_eval(board, move)) < 0
+                && (picked.see_known ? picked.see_score : static_exchange_with_diagnostics(board, move)) < 0
                 && !gives_check) {
                 continue;
             }
@@ -966,6 +1010,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         const Color moving_side = board.side_to_move();
         const UndoState undo = board.make_move(move);
         if (!move_is_legal_after_make(board, moving_side)) {
+            ++diagnostics_.illegal_pseudo_moves;
             board.unmake_move(undo);
             continue;
         }
@@ -981,6 +1026,16 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         return -kMateScore + ply;
     }
     return alpha;
+}
+
+int Searcher::evaluate_with_diagnostics(const Board& board) {
+    ++diagnostics_.evaluations;
+    return evaluate(board);
+}
+
+int Searcher::static_exchange_with_diagnostics(const Board& board, const Move& move) {
+    ++diagnostics_.see_calls;
+    return static_exchange_eval(board, move);
 }
 
 void Searcher::age_history() {

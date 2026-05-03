@@ -127,6 +127,43 @@ def main() -> int:
         print(f"missing progress update details: {progress_completed.stderr}", file=sys.stderr)
         return 1
 
+    diagnostics_completed = subprocess.run(
+        [
+            sys.argv[1],
+            "--suite",
+            "bench",
+            "--depth",
+            "1",
+            "--hash",
+            "1",
+            "--csv",
+            "--diagnostics",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=10,
+    )
+    if diagnostics_completed.returncode != 0:
+        print(diagnostics_completed.stderr, file=sys.stderr)
+        print(diagnostics_completed.stdout, file=sys.stderr)
+        return diagnostics_completed.returncode
+    diagnostics_rows = list(csv.DictReader(diagnostics_completed.stdout.splitlines()))
+    if len(diagnostics_rows) != len(rows):
+        print("diagnostics run changed CSV row count", file=sys.stderr)
+        return 1
+    if set(diagnostics_rows[0].keys()) != required_columns:
+        print(f"diagnostics changed CSV columns: {diagnostics_rows[0].keys()}", file=sys.stderr)
+        return 1
+    if "diagnostics" not in diagnostics_completed.stderr:
+        print(f"missing diagnostics summary: {diagnostics_completed.stderr}", file=sys.stderr)
+        return 1
+    for key in ("evaluations", "move_picker_scored_moves", "beta_cutoffs", "see_calls"):
+        if key not in diagnostics_completed.stderr:
+            print(f"missing diagnostics key {key}: {diagnostics_completed.stderr}", file=sys.stderr)
+            return 1
+
     return 0
 
 

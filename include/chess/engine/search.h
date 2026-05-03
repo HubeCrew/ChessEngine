@@ -21,6 +21,28 @@ struct SearchLimits {
     int moves_to_go = 0;
 };
 
+struct SearchDiagnostics {
+    std::uint64_t evaluations = 0;
+    std::uint64_t move_picker_pv_picks = 0;
+    std::uint64_t move_picker_tt_picks = 0;
+    std::uint64_t move_picker_scored_moves = 0;
+    std::uint64_t move_picker_searched_moves = 0;
+    std::uint64_t move_picker_tactical_picks = 0;
+    std::uint64_t move_picker_killer_picks = 0;
+    std::uint64_t move_picker_quiet_picks = 0;
+    std::uint64_t beta_cutoffs = 0;
+    std::uint64_t beta_cutoff_move_index_sum = 0;
+    std::uint64_t illegal_pseudo_moves = 0;
+    std::uint64_t null_move_attempts = 0;
+    std::uint64_t null_move_cutoffs = 0;
+    std::uint64_t lmr_reductions = 0;
+    std::uint64_t lmr_researches = 0;
+    std::uint64_t qsearch_in_check_nodes = 0;
+    std::uint64_t qsearch_stand_pat_nodes = 0;
+    std::uint64_t see_calls = 0;
+    std::uint64_t move_gives_check_calls = 0;
+};
+
 struct SearchResult {
     Move best_move;
     int score_centipawns = 0;
@@ -31,6 +53,7 @@ struct SearchResult {
     std::chrono::milliseconds elapsed{0};
     std::uint64_t nps = 0;
     std::vector<Move> principal_variation;
+    SearchDiagnostics diagnostics;
 };
 
 [[nodiscard]] bool move_gives_check(const Board& board, const Move& move);
@@ -59,6 +82,7 @@ private:
     bool use_deadline_ = false;
     bool null_move_pruning_ = true;
     bool search_extensions_ = true;
+    SearchDiagnostics diagnostics_{};
     TranspositionTable tt_;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
     std::array<std::array<std::array<int, 64>, 64>, 2> history_{};
@@ -66,6 +90,8 @@ private:
 
     int negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move, int extensions_used);
     int quiescence(Board& board, int ply, int alpha, int beta, int qply);
+    int evaluate_with_diagnostics(const Board& board);
+    int static_exchange_with_diagnostics(const Board& board, const Move& move);
     void age_history();
     void record_cutoff(
         const Move& move,

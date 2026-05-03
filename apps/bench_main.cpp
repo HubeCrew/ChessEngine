@@ -30,6 +30,7 @@ struct Options {
     std::size_t hash_mb = 64;
     bool csv = false;
     bool progress = false;
+    bool diagnostics = false;
     bool null_move_pruning = true;
     bool search_extensions = true;
     std::vector<std::filesystem::path> epd_paths;
@@ -48,6 +49,7 @@ struct RunResult {
     std::uint64_t qnodes = 0;
     std::uint64_t nps = 0;
     std::int64_t time_ms = 0;
+    chess::engine::SearchDiagnostics diagnostics;
 };
 
 struct ProgressState {
@@ -60,7 +62,7 @@ struct ProgressState {
 };
 
 void print_usage(std::ostream& out) {
-    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--disable-null-move] [--disable-extensions] [--progress] [--csv]\n";
+    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--disable-null-move] [--disable-extensions] [--progress] [--diagnostics] [--csv]\n";
 }
 
 SuiteSelection parse_suite(std::string_view value) {
@@ -91,6 +93,8 @@ Options parse_options(int argc, char** argv) {
             options.csv = true;
         } else if (arg == "--progress") {
             options.progress = true;
+        } else if (arg == "--diagnostics") {
+            options.diagnostics = true;
         } else if (arg == "--disable-null-move") {
             options.null_move_pruning = false;
         } else if (arg == "--disable-extensions") {
@@ -175,6 +179,7 @@ RunResult run_search(
     result.qnodes = search_result.qnodes;
     result.nps = search_result.nps;
     result.time_ms = search_result.elapsed.count();
+    result.diagnostics = search_result.diagnostics;
     return result;
 }
 
@@ -278,6 +283,59 @@ void print_progress_update(const RunResult& result, std::size_t total, ProgressS
               << '\n';
 }
 
+chess::engine::SearchDiagnostics add_diagnostics(
+    chess::engine::SearchDiagnostics lhs,
+    const chess::engine::SearchDiagnostics& rhs
+) {
+    lhs.evaluations += rhs.evaluations;
+    lhs.move_picker_pv_picks += rhs.move_picker_pv_picks;
+    lhs.move_picker_tt_picks += rhs.move_picker_tt_picks;
+    lhs.move_picker_scored_moves += rhs.move_picker_scored_moves;
+    lhs.move_picker_searched_moves += rhs.move_picker_searched_moves;
+    lhs.move_picker_tactical_picks += rhs.move_picker_tactical_picks;
+    lhs.move_picker_killer_picks += rhs.move_picker_killer_picks;
+    lhs.move_picker_quiet_picks += rhs.move_picker_quiet_picks;
+    lhs.beta_cutoffs += rhs.beta_cutoffs;
+    lhs.beta_cutoff_move_index_sum += rhs.beta_cutoff_move_index_sum;
+    lhs.illegal_pseudo_moves += rhs.illegal_pseudo_moves;
+    lhs.null_move_attempts += rhs.null_move_attempts;
+    lhs.null_move_cutoffs += rhs.null_move_cutoffs;
+    lhs.lmr_reductions += rhs.lmr_reductions;
+    lhs.lmr_researches += rhs.lmr_researches;
+    lhs.qsearch_in_check_nodes += rhs.qsearch_in_check_nodes;
+    lhs.qsearch_stand_pat_nodes += rhs.qsearch_stand_pat_nodes;
+    lhs.see_calls += rhs.see_calls;
+    lhs.move_gives_check_calls += rhs.move_gives_check_calls;
+    return lhs;
+}
+
+void print_diagnostics_summary(const chess::engine::SearchDiagnostics& diagnostics, std::ostream& out) {
+    const auto average_cutoff_index = diagnostics.beta_cutoffs == 0
+        ? 0.0
+        : static_cast<double>(diagnostics.beta_cutoff_move_index_sum) / static_cast<double>(diagnostics.beta_cutoffs);
+
+    out << "diagnostics\n"
+        << "  evaluations " << diagnostics.evaluations << '\n'
+        << "  move_picker_pv_picks " << diagnostics.move_picker_pv_picks << '\n'
+        << "  move_picker_tt_picks " << diagnostics.move_picker_tt_picks << '\n'
+        << "  move_picker_scored_moves " << diagnostics.move_picker_scored_moves << '\n'
+        << "  move_picker_searched_moves " << diagnostics.move_picker_searched_moves << '\n'
+        << "  move_picker_tactical_picks " << diagnostics.move_picker_tactical_picks << '\n'
+        << "  move_picker_killer_picks " << diagnostics.move_picker_killer_picks << '\n'
+        << "  move_picker_quiet_picks " << diagnostics.move_picker_quiet_picks << '\n'
+        << "  beta_cutoffs " << diagnostics.beta_cutoffs << '\n'
+        << "  beta_cutoff_avg_move_index " << std::fixed << std::setprecision(2) << average_cutoff_index << std::defaultfloat << '\n'
+        << "  illegal_pseudo_moves " << diagnostics.illegal_pseudo_moves << '\n'
+        << "  null_move_attempts " << diagnostics.null_move_attempts << '\n'
+        << "  null_move_cutoffs " << diagnostics.null_move_cutoffs << '\n'
+        << "  lmr_reductions " << diagnostics.lmr_reductions << '\n'
+        << "  lmr_researches " << diagnostics.lmr_researches << '\n'
+        << "  qsearch_in_check_nodes " << diagnostics.qsearch_in_check_nodes << '\n'
+        << "  qsearch_stand_pat_nodes " << diagnostics.qsearch_stand_pat_nodes << '\n'
+        << "  see_calls " << diagnostics.see_calls << '\n'
+        << "  move_gives_check_calls " << diagnostics.move_gives_check_calls << '\n';
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -372,11 +430,13 @@ int main(int argc, char** argv) {
         std::uint64_t total_nodes = 0;
         std::uint64_t total_qnodes = 0;
         std::int64_t total_time_ms = 0;
+        chess::engine::SearchDiagnostics total_diagnostics;
         for (const RunResult& result : results) {
             all_matched = all_matched && result.matched;
             total_nodes += result.nodes;
             total_qnodes += result.qnodes;
             total_time_ms += result.time_ms;
+            total_diagnostics = add_diagnostics(total_diagnostics, result.diagnostics);
         }
 
         if (options.csv) {
@@ -395,6 +455,14 @@ int main(int argc, char** argv) {
                       << " total_qnodes " << total_qnodes
                       << " total_time_ms " << total_time_ms
                       << " total_nps " << total_nps << '\n';
+            if (options.diagnostics) {
+                std::cout << '\n';
+                print_diagnostics_summary(total_diagnostics, std::cout);
+            }
+        }
+
+        if (options.csv && options.diagnostics) {
+            print_diagnostics_summary(total_diagnostics, std::cerr);
         }
 
         return all_matched ? 0 : 1;
