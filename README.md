@@ -170,10 +170,11 @@ Analyze a completed gauntlet after the PGNs are written:
   --max-events 80 \
   --engine-depth 1 \
   --reference-engine /usr/games/stockfish \
-  --reference-depth 8
+  --reference-depth 8 \
+  --reference-min-delta-cp 120
 ```
 
-The postmortem writes `report.md`, `events.csv`, `postmortem.json`, and `positions.epd`. It uses `python-chess` for PGN/FEN reconstruction and the engine's own `eval` command for trace components, then flags eval swings, loss-context moves, equal trades, queen trades, opponent recaptures, and bad trade sequences. `positions.epd` records the gauntlet move as `am` when there is no reference move or when the reference engine disagrees with it; when a reference engine is supplied, its best move is recorded as `bm`, making the file suitable for blunder-regression checks with `chess_bench`.
+The postmortem writes `report.md`, `events.csv`, `postmortem.json`, and `positions.epd`. It uses `python-chess` for PGN/FEN reconstruction and the engine's own `eval` command for trace components, then flags eval swings, loss-context moves, equal trades, queen trades, opponent recaptures, and bad trade sequences. `positions.epd` records the gauntlet move as `am` when there is no reference engine, or when the reference engine's best move is clearly better by `--reference-min-delta-cp`. If the reference engine agrees with the gauntlet move, that move is recorded as `bm`; otherwise the reference move is kept as a comment so the regression suite tests blunder avoidance rather than exact Stockfish imitation.
 
 Watch a gauntlet live in the browser:
 

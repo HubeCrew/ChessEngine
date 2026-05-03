@@ -53,6 +53,7 @@ TRACE_COMPONENTS = [
 ]
 
 RESULT_TOKENS = {"1-0", "0-1", "1/2-1/2", "*"}
+MATE_SCORE_CP = 900_000
 
 
 @dataclass
@@ -104,6 +105,9 @@ class MoveRecord:
     engine_bestmove_score_cp: int | None = None
     reference_bestmove: str = ""
     reference_score_cp: int | None = None
+    reference_played_score_cp: int | None = None
+    reference_delta_cp: int | None = None
+    reference_avoid: bool = False
 
 
 class UciTraceEngine:
@@ -162,12 +166,11 @@ class UciTraceEngine:
         latest_score: int | None = None
         while True:
             line = self._readline(deadline)
-            if line.startswith("info ") and " score cp " in line:
+            if line.startswith("info ") and " score " in line:
                 parts = line.split()
-                try:
-                    latest_score = int(parts[parts.index("cp") + 1])
-                except (ValueError, IndexError):
-                    pass
+                parsed_score = parse_uci_score(parts)
+                if parsed_score is not None:
+                    latest_score = parsed_score
             if line.startswith("bestmove "):
                 parts = line.split()
                 return (parts[1] if len(parts) > 1 else "0000", latest_score)
@@ -213,6 +216,21 @@ def parse_trace_line(line: str) -> dict[str, int]:
     if missing:
         raise ValueError(f"engine eval output is missing components: {missing}: {line}")
     return values
+
+
+def parse_uci_score(parts: list[str]) -> int | None:
+    try:
+        score_index = parts.index("score")
+        score_type = parts[score_index + 1]
+        score_value = int(parts[score_index + 2])
+    except (ValueError, IndexError):
+        return None
+    if score_type == "cp":
+        return score_value
+    if score_type == "mate":
+        magnitude = MATE_SCORE_CP - min(abs(score_value), 10_000)
+        return magnitude if score_value > 0 else -magnitude
+    return None
 
 
 def parse_pgn(path: Path) -> GameRecord:
@@ -565,6 +583,9 @@ def write_csv(path: Path, events: list[MoveRecord]) -> None:
         "engine_bestmove_score_cp",
         "reference_bestmove",
         "reference_score_cp",
+        "reference_played_score_cp",
+        "reference_delta_cp",
+        "reference_avoid",
         "fen_before",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -585,13 +606,21 @@ def write_epd(path: Path, events: list[MoveRecord]) -> None:
     for index, event in enumerate(events, start=1):
         board = chess.Board(event.fen_before)
         epd = " ".join(event.fen_before.split()[:4])
-        best_move = f"bm {event.reference_bestmove}; " if event.reference_bestmove else ""
-        avoid_move = f"am {event.uci}; " if event.reference_bestmove != event.uci else ""
+        strict_reference = bool(event.reference_bestmove) and event.reference_bestmove == event.uci
+        best_move = f"bm {event.reference_bestmove}; " if strict_reference else ""
+        avoid_move = f"am {event.uci}; " if not event.reference_bestmove or event.reference_avoid else ""
+        reference_comment = (
+            f' c1 "reference {event.reference_bestmove} score {event.reference_score_cp} '
+            f'played_score {event.reference_played_score_cp} delta {event.reference_delta_cp}";'
+            if event.reference_bestmove and not strict_reference
+            else ""
+        )
         lines.append(
             f'{epd} {best_move}{avoid_move}id "postmortem-{index:04d}-g{event.game}-p{event.ply}"; '
             f'theme "{"|".join(event.categories)}"; acd 5; '
             f'hmvc {board.halfmove_clock}; fmvn {board.fullmove_number}; '
             f'c0 "{event.mover} played {event.uci} ({event.san}), delta {event.delta_cp} cp";'
+            f'{reference_comment}'
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -646,6 +675,11 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
                 lines.append("")
             if event.reference_bestmove:
                 lines.append(f"- Reference bestmove: `{event.reference_bestmove}` score `{event.reference_score_cp}`")
+                if event.reference_played_score_cp is not None and event.reference_delta_cp is not None:
+                    lines.append(
+                        f"- Reference played-move score: `{event.reference_played_score_cp}`, "
+                        f"delta `{event.reference_delta_cp:+d}`"
+                    )
                 lines.append("")
 
     trade_categories = {
@@ -688,7 +722,13 @@ def add_engine_bestmoves(events: list[MoveRecord], engine: UciTraceEngine, depth
         event.engine_bestmove_score_cp = score
 
 
-def add_reference_bestmoves(events: list[MoveRecord], engine: UciTraceEngine, depth: int, movetime_ms: int) -> None:
+def add_reference_bestmoves(
+    events: list[MoveRecord],
+    engine: UciTraceEngine,
+    depth: int,
+    movetime_ms: int,
+    min_delta_cp: int,
+) -> None:
     if depth <= 0 and movetime_ms <= 0:
         return
     for event in events:
@@ -696,6 +736,20 @@ def add_reference_bestmoves(events: list[MoveRecord], engine: UciTraceEngine, de
         if bestmove != "0000":
             event.reference_bestmove = bestmove
             event.reference_score_cp = score
+        if bestmove == "0000" or bestmove == event.uci or score is None:
+            continue
+
+        board = chess.Board(event.fen_before)
+        move = chess.Move.from_uci(event.uci)
+        if move not in board.legal_moves:
+            continue
+        board.push(move)
+        _, reply_score = engine.bestmove(board.fen(), depth, movetime_ms)
+        if reply_score is None:
+            continue
+        event.reference_played_score_cp = -reply_score
+        event.reference_delta_cp = score - event.reference_played_score_cp
+        event.reference_avoid = event.reference_delta_cp >= min_delta_cp
 
 
 def parse_args() -> argparse.Namespace:
@@ -711,6 +765,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reference-engine", default="", help="Optional UCI engine command used to annotate EPD bm moves.")
     parser.add_argument("--reference-depth", type=int, default=0, help="Reference-engine depth for EPD bm annotation.")
     parser.add_argument("--reference-movetime-ms", type=int, default=0, help="Reference-engine movetime for EPD bm annotation.")
+    parser.add_argument(
+        "--reference-min-delta-cp",
+        type=int,
+        default=120,
+        help="Only emit an EPD am move when the reference best move is at least this many cp better.",
+    )
     parser.add_argument("--both-sides", action="store_true", help="Analyze both players instead of only --engine-name moves.")
     parser.add_argument("--protocol-timeout", type=float, default=10.0)
     return parser.parse_args()
@@ -748,7 +808,13 @@ def main() -> int:
         if reference_depth <= 0 and args.reference_movetime_ms <= 0:
             reference_depth = 8
         with UciTraceEngine(args.reference_engine, args.protocol_timeout) as reference_engine:
-            add_reference_bestmoves(events, reference_engine, reference_depth, args.reference_movetime_ms)
+            add_reference_bestmoves(
+                events,
+                reference_engine,
+                reference_depth,
+                args.reference_movetime_ms,
+                args.reference_min_delta_cp,
+            )
 
     summary = summarize(records, events, args.engine_name)
     write_json(args.output_dir / "postmortem.json", summary, events)
