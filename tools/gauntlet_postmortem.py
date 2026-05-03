@@ -728,6 +728,7 @@ def add_reference_bestmoves(
     depth: int,
     movetime_ms: int,
     min_delta_cp: int,
+    confirm_depth: int,
 ) -> None:
     if depth <= 0 and movetime_ms <= 0:
         return
@@ -750,6 +751,38 @@ def add_reference_bestmoves(
         event.reference_played_score_cp = -reply_score
         event.reference_delta_cp = score - event.reference_played_score_cp
         event.reference_avoid = event.reference_delta_cp >= min_delta_cp
+        if event.reference_avoid and confirm_depth > depth and movetime_ms <= 0:
+            confirmed_bestmove, confirmed_score = engine.bestmove(event.fen_before, confirm_depth)
+            if confirmed_bestmove != "0000":
+                event.reference_bestmove = confirmed_bestmove
+                event.reference_score_cp = confirmed_score
+            else:
+                event.reference_avoid = False
+                event.reference_played_score_cp = None
+                event.reference_delta_cp = None
+                continue
+            if confirmed_bestmove == event.uci or confirmed_score is None:
+                event.reference_avoid = False
+                event.reference_played_score_cp = None
+                event.reference_delta_cp = None
+                continue
+            board = chess.Board(event.fen_before)
+            move = chess.Move.from_uci(event.uci)
+            if move not in board.legal_moves:
+                event.reference_avoid = False
+                event.reference_played_score_cp = None
+                event.reference_delta_cp = None
+                continue
+            board.push(move)
+            _, confirmed_reply_score = engine.bestmove(board.fen(), confirm_depth)
+            if confirmed_reply_score is None:
+                event.reference_avoid = False
+                event.reference_played_score_cp = None
+                event.reference_delta_cp = None
+                continue
+            event.reference_played_score_cp = -confirmed_reply_score
+            event.reference_delta_cp = confirmed_score - event.reference_played_score_cp
+            event.reference_avoid = event.reference_delta_cp >= min_delta_cp
 
 
 def parse_args() -> argparse.Namespace:
@@ -764,6 +797,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--engine-depth", type=int, default=0, help="Optional depth for bestmove re-search on flagged events.")
     parser.add_argument("--reference-engine", default="", help="Optional UCI engine command used to annotate EPD bm moves.")
     parser.add_argument("--reference-depth", type=int, default=0, help="Reference-engine depth for EPD bm annotation.")
+    parser.add_argument(
+        "--reference-confirm-depth",
+        type=int,
+        default=0,
+        help="Optional deeper reference depth used to confirm am labels before writing them.",
+    )
     parser.add_argument("--reference-movetime-ms", type=int, default=0, help="Reference-engine movetime for EPD bm annotation.")
     parser.add_argument(
         "--reference-min-delta-cp",
@@ -806,7 +845,10 @@ def main() -> int:
     if args.reference_engine:
         reference_depth = args.reference_depth
         if reference_depth <= 0 and args.reference_movetime_ms <= 0:
-            reference_depth = 8
+            reference_depth = 12
+        reference_confirm_depth = args.reference_confirm_depth
+        if reference_confirm_depth <= 0 and reference_depth > 0 and args.reference_movetime_ms <= 0:
+            reference_confirm_depth = reference_depth + 2
         with UciTraceEngine(args.reference_engine, args.protocol_timeout) as reference_engine:
             add_reference_bestmoves(
                 events,
@@ -814,6 +856,7 @@ def main() -> int:
                 reference_depth,
                 args.reference_movetime_ms,
                 args.reference_min_delta_cp,
+                reference_confirm_depth,
             )
 
     summary = summarize(records, events, args.engine_name)
