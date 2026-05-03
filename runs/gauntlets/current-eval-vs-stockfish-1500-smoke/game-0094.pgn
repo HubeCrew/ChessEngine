@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.03"]
+[Round "94"]
+[White "stockfish-1500"]
+[Black "current-eval"]
+[Result "1-0"]
+[Opening "kings_indian"]
+[SetUp "1"]
+[FEN "rnbqk2r/ppppppbp/5np1/8/2PPP3/2N2N2/PP3PPP/R1BQKB1R b KQkq - 4 4"]
+[Termination "white_win:checkmate"]
+
+1. b8c6 e4e5 2. f6g4 d1d3 3. e8g8 h2h3 4. g4e5 d4e5 5. c6e5 f3e5 6. g7e5 c1d2 7. d7d6 d2e3 8. c8f5 d3d5 9. e5c3 b2c3 10. c7c6 d5d2 11. d8a5 f1e2 12. f5e4 e2f1 13. f8e8 f2f3 14. e4f5 g2g4 15. f5e6 a2a4 16. a5a6 e3h6 17. a8b8 d2d4 18. f7f6 e1f2 19. c6c5 d4d2 20. e6c4 h3h4 21. c4f1 h1f1 22. a6c4 d2e1 23. f6f5 e1d2 24. f5g4 a1d1 25. g4f3 f2g3 26. g8h8 f1f3 27. c4a4 d1e1 28. b8c8 d2d5 29. c8c7 e1f1 30. c7c8 f3f7 31. a4c6 d5e6 32. d6d5 h6g7 33. h8g8 f7f8 34. g8g7 f1f7 35. g7h6 e6e3 36. h6h5 f7f5 37. g6f5 f8f5 38. h5g6 e3g5 1-0

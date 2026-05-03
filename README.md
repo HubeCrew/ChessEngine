@@ -102,6 +102,13 @@ python3 tools/extract_benchmark_misses.py \
 
 The extracted miss suite is useful for diagnosing whether failed tactical positions are fixed by deeper search or need engine changes. Generated CSV result files and extracted miss suites should stay local unless deliberately promoted to curated test data.
 
+Install optional Python tooling dependencies in a local venv:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-tools.txt
+```
+
 Run a local UCI gauntlet:
 
 ```bash
@@ -152,6 +159,20 @@ Run a clock-based gauntlet instead of fixed per-move time:
 
 The gauntlet launches both engines as UCI subprocesses, alternates colors, uses a built-in balanced opening suite with color reversal, validates every move through `chess_referee`, writes PGNs to `gauntlet-results/`, and reports score plus a rough Elo difference. It supports either fixed `movetime` or clock-based `wtime/btime/winc/binc` games. Non-clean games, such as crashes, timeouts, protocol failures, or illegal moves, are separated from normal chess results.
 
+Analyze a completed gauntlet after the PGNs are written:
+
+```bash
+.venv/bin/python tools/gauntlet_postmortem.py \
+  --pgn-dir runs/gauntlets/current-eval-vs-stockfish-1500-smoke \
+  --engine ./build-release/chess_uci \
+  --engine-name current-eval \
+  --output-dir runs/postmortems/current-eval-vs-stockfish-1500 \
+  --max-events 80 \
+  --engine-depth 1
+```
+
+The postmortem writes `report.md`, `events.csv`, `postmortem.json`, and `positions.epd`. It uses `python-chess` for PGN/FEN reconstruction and the engine's own `eval` command for trace components, then flags eval swings, loss-context moves, equal trades, queen trades, opponent recaptures, and bad trade sequences.
+
 Watch a gauntlet live in the browser:
 
 ```bash
@@ -173,6 +194,7 @@ Open `http://127.0.0.1:8765`, then run `tools/gauntlet.py` with the same `--outp
 - `chess_bench`: repeatable benchmark/tactical harness for measuring strength and speed changes.
 - `chess_referee`: machine-readable game adjudicator used by the gauntlet.
 - `tools/gauntlet.py`: UCI engine-vs-engine gauntlet with PGN/CSV output and rough Elo reporting.
+- `tools/gauntlet_postmortem.py`: offline gauntlet analyzer for eval-trace swings, losses, equal trades, queen trades, recaptures, and EPD extraction.
 - `tools/gauntlet_live_server.py`: local browser viewer for following the gauntlet live from `live-state.json`.
 
 ## Next Engine Work

@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.03"]
+[Round "43"]
+[White "current-eval"]
+[Black "stockfish-1500"]
+[Result "1/2-1/2"]
+[Opening "italian"]
+[SetUp "1"]
+[FEN "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"]
+[Termination "draw:threefold_repetition"]
+
+1. a7a6 b1c3 2. g8f6 f3g5 3. f8c5 g5f7 4. c5f2 e1f2 5. f6e4 c3e4 6. d8h4 f2e3 7. d7d5 d1f3 8. c8g4 e4d6 9. c7d6 f3d5 10. c6e7 f7d6 11. e8d8 d5b7 12. g4c8 b7a8 13. h4h6 e3e2 14. h6d6 h1f1 15. d8d7 f1f7 16. d7e8 f7g7 17. d6d4 c4e6 18. h8f8 g7h7 19. d4f2 e2d3 20. f2d4 d3e2 21. d4f2 e2d3 22. f2d4 d3e2 1/2-1/2

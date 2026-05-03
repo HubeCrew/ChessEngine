@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.03"]
+[Round "99"]
+[White "current-eval"]
+[Black "stockfish-1500"]
+[Result "1-0"]
+[Opening "slav"]
+[SetUp "1"]
+[FEN "rnbqkbnr/pp2pppp/2p5/3p4/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 3"]
+[Termination "white_win:checkmate"]
+
+1. b1c3 g8f6 2. g1f3 d5c4 3. c1g5 d8a5 4. g5f6 e7f6 5. e2e3 c8e6 6. a2a3 b8d7 7. f1e2 f8e7 8. f3d2 b7b5 9. e2f3 e8g8 10. f3c6 a8c8 11. c6b5 f6f5 12. d4d5 a7a6 13. d2c4 a5c7 14. b5a6 f8d8 15. d5e6 c8b8 16. c3d5 c7c5 17. b2b4 d7f6 18. d5f6 e7f6 19. e6f7 g8h8 20. b4c5 f5f4 21. c4d6 f6a1 22. d1a1 h7h6 23. d6f5 d8d4 24. a1d4 b8b1 25. e1e2 f4f3 26. e2f3 b1a1 27. d4g7 1-0

@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.03"]
+[Round "25"]
+[White "current-eval"]
+[Black "stockfish-1500"]
+[Result "1/2-1/2"]
+[Opening "queens_gambit"]
+[SetUp "1"]
+[FEN "rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR b KQkq c3 0 2"]
+[Termination "draw:threefold_repetition"]
+
+1. e7e6 c4d5 2. g8f6 d1a4 3. c8d7 a4b3 4. a7a5 b3b7 5. a8a6 d5e6 6. f8b4 c1d2 7. a6e6 d2b4 8. e6b6 b7b6 9. c7b6 b4a3 10. b6b5 a3c5 11. f6e4 b1c3 12. e4c3 b2c3 13. f7f6 g1f3 14. b8a6 c5d6 15. h7h5 e2e4 16. d7c6 d6a3 17. e8f7 f1d3 18. h5h4 e1g1 19. h4h3 g2g3 20. d8c7 d4d5 21. c6d7 a3b2 22. a5a4 f3d4 23. h8b8 f1d1 24. a6c5 b2a3 25. b5b4 a3b4 26. c5d3 d1d3 27. f6f5 d4f5 28. d7f5 d3f3 29. g7g6 e4f5 30. g6g5 a1e1 31. b8e8 e1e8 32. f7e8 f3e3 33. e8d8 b4e7 34. d8d7 e7g5 35. c7a5 c3c4 36. a5c5 e3e4 37. a4a3 g3g4 38. c5b4 e4e7 39. d7c8 e7e8 40. c8c7 e8e7 41. c7c8 e7e8 42. c8c7 e8e7 43. c7b8 e7e8 44. b8b7 e8e7 45. b7b8 e7e8 46. b8a7 e8e7 47. a7a6 e7e6 48. a6b7 e6e7 49. b7c8 1/2-1/2

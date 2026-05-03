@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.03"]
+[Round "97"]
+[White "current-eval"]
+[Black "stockfish-1500"]
+[Result "1-0"]
+[Opening "ruy_lopez"]
+[SetUp "1"]
+[FEN "r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"]
+[Termination "white_win:checkmate"]
+
+1. d7d5 b1c3 2. d5e4 f3e5 3. d8g5 e5c6 4. g5g2 h1f1 5. g8f6 c6e5 6. c7c6 b5c4 7. f8b4 c4f7 8. e8f8 f2f4 9. c8h3 d1e2 10. f6g4 e2g2 11. h3g2 f1g1 12. g4e5 f4e5 13. f8f7 g1g2 14. h8e8 g2f2 15. f7g8 f2f5 16. g7g6 f5g5 17. b4e7 g5g4 18. a8d8 g4e4 19. e7b4 e4b4 20. g8h8 d2d4 21. d8b8 c1g5 22. e8c8 e1c1 23. b7b5 g5f6 24. h8g8 c3e4 25. b8b6 e4d6 26. c8f8 d1f1 27. b6a6 c1b1 28. a6a4 b4a4 29. b5a4 e5e6 30. a7a5 e6e7 31. f8b8 f1e1 32. h7h5 e7e8q 33. g8h7 e8d7 34. h7g8 d7g7 1-0

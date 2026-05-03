@@ -108,5 +108,11 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:chess_uci>
                 $<TARGET_FILE:chess_referee>
         )
+        add_test(
+            NAME postmortem_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/postmortem_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/gauntlet_postmortem.py
+                $<TARGET_FILE:chess_uci>
+        )
     endif()
 endif()
