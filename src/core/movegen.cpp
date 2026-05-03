@@ -1,17 +1,17 @@
 #include "chess/core/movegen.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <stdexcept>
+
+#include "chess/core/attacks.h"
 
 namespace chess {
 
 namespace {
 
-bool has_own_piece(const Board& board, Square square, Color color) {
-    return is_valid_square(square)
-        && board.piece_at(square) != Piece::None
-        && color_of(board.piece_at(square)) == color;
-}
+constexpr Bitboard kAllSquares = ~Bitboard{0};
 
 bool has_enemy_piece(const Board& board, Square square, Color color) {
     return is_valid_square(square)
@@ -26,6 +26,32 @@ bool is_enemy_king(const Board& board, Square square, Color color) {
         && type_of(board.piece_at(square)) == PieceType::King;
 }
 
+bool is_slider(PieceType type) {
+    return type == PieceType::Bishop || type == PieceType::Rook || type == PieceType::Queen;
+}
+
+bool can_slider_block_check(Square king, Square checker, PieceType checker_type) {
+    if (checker_type == PieceType::Bishop) {
+        return attacks::between(king, checker) != 0;
+    }
+    if (checker_type == PieceType::Rook) {
+        return attacks::between(king, checker) != 0;
+    }
+    if (checker_type == PieceType::Queen) {
+        return attacks::between(king, checker) != 0;
+    }
+    return false;
+}
+
+template <typename Callback>
+void for_each_square(Bitboard squares, Callback callback) {
+    while (squares != 0) {
+        const Square square = __builtin_ctzll(squares);
+        squares &= squares - 1;
+        callback(square);
+    }
+}
+
 void add_promotion_moves(MoveList& moves, Square from, Square to, std::uint8_t flags) {
     for (const PieceType promotion : {
              PieceType::Queen,
@@ -37,7 +63,7 @@ void add_promotion_moves(MoveList& moves, Square from, Square to, std::uint8_t f
     }
 }
 
-void add_pawn_moves(const Board& board, MoveList& moves, Square from, Color color) {
+void add_pawn_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard target_mask = kAllSquares) {
     const int file = file_of(from);
     const int rank = rank_of(from);
     const int forward = color == Color::White ? 8 : -8;
@@ -46,12 +72,18 @@ void add_pawn_moves(const Board& board, MoveList& moves, Square from, Color colo
 
     const Square one_forward = from + forward;
     if (is_valid_square(one_forward) && board.piece_at(one_forward) == Piece::None) {
-        if (rank == promotion_from_rank) {
+        const bool one_forward_allowed = (target_mask & square_bb(one_forward)) != 0;
+        if (rank == promotion_from_rank && one_forward_allowed) {
             add_promotion_moves(moves, from, one_forward, Quiet);
-        } else {
-            moves.push_back(Move{from, one_forward, PieceType::None, Quiet});
+        } else if (rank != promotion_from_rank) {
+            if (one_forward_allowed) {
+                moves.push_back(Move{from, one_forward, PieceType::None, Quiet});
+            }
             const Square two_forward = from + 2 * forward;
-            if (rank == start_rank && board.piece_at(two_forward) == Piece::None) {
+            if (rank == start_rank
+                && is_valid_square(two_forward)
+                && board.piece_at(two_forward) == Piece::None
+                && (target_mask & square_bb(two_forward)) != 0) {
                 moves.push_back(Move{from, two_forward, PieceType::None, DoublePawnPush});
             }
         }
@@ -74,41 +106,40 @@ void add_pawn_moves(const Board& board, MoveList& moves, Square from, Color colo
             continue;
         }
 
-        if (has_enemy_piece(board, to, color) && !is_enemy_king(board, to, color)) {
+        const bool target_allowed = (target_mask & square_bb(to)) != 0;
+        if (target_allowed && has_enemy_piece(board, to, color) && !is_enemy_king(board, to, color)) {
             if (rank == promotion_from_rank) {
                 add_promotion_moves(moves, from, to, Capture);
             } else {
                 moves.push_back(Move{from, to, PieceType::None, Capture});
             }
         } else if (to == board.en_passant_square()) {
-            moves.push_back(Move{from, to, PieceType::None, static_cast<std::uint8_t>(Capture | EnPassant)});
+            const Square captured_square = color == Color::White ? to - 8 : to + 8;
+            if (target_allowed || (is_valid_square(captured_square) && (target_mask & square_bb(captured_square)) != 0)) {
+                moves.push_back(Move{from, to, PieceType::None, static_cast<std::uint8_t>(Capture | EnPassant)});
+            }
         }
     }
 }
 
-void add_knight_moves(const Board& board, MoveList& moves, Square from, Color color) {
-    constexpr std::array<std::pair<int, int>, 8> offsets{{
-        {1, 2}, {2, 1}, {2, -1}, {1, -2},
-        {-1, -2}, {-2, -1}, {-2, 1}, {-1, 2},
-    }};
-
-    for (const auto& [df, dr] : offsets) {
-        const int file = file_of(from) + df;
-        const int rank = rank_of(from) + dr;
-        if (file < 0 || file >= 8 || rank < 0 || rank >= 8) {
-            continue;
-        }
-        const Square to = make_square(file, rank);
-        if (has_own_piece(board, to, color) || is_enemy_king(board, to, color)) {
-            continue;
-        }
+void add_piece_target_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard targets) {
+    const Bitboard enemy_occupancy = board.occupancy(opposite(color));
+    for_each_square(targets, [&](Square to) {
         moves.push_back(Move{
             from,
             to,
             PieceType::None,
-            static_cast<std::uint8_t>(has_enemy_piece(board, to, color) ? Capture : Quiet),
+            static_cast<std::uint8_t>((enemy_occupancy & square_bb(to)) != 0 ? Capture : Quiet),
         });
-    }
+    });
+}
+
+void add_knight_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard target_mask = kAllSquares) {
+    const Bitboard targets = attacks::knight_attacks(from)
+        & ~board.occupancy(color)
+        & ~board.pieces(opposite(color), PieceType::King)
+        & target_mask;
+    add_piece_target_moves(board, moves, from, color, targets);
 }
 
 void add_slider_moves(
@@ -116,58 +147,40 @@ void add_slider_moves(
     MoveList& moves,
     Square from,
     Color color,
-    std::initializer_list<std::pair<int, int>> directions
+    PieceType slider,
+    Bitboard target_mask = kAllSquares
 ) {
-    for (const auto& [df, dr] : directions) {
-        int file = file_of(from) + df;
-        int rank = rank_of(from) + dr;
-        while (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
-            const Square to = make_square(file, rank);
-            if (has_own_piece(board, to, color)) {
-                break;
-            }
-            if (is_enemy_king(board, to, color)) {
-                break;
-            }
-            moves.push_back(Move{
-                from,
-                to,
-                PieceType::None,
-                static_cast<std::uint8_t>(has_enemy_piece(board, to, color) ? Capture : Quiet),
-            });
-            if (has_enemy_piece(board, to, color)) {
-                break;
-            }
-            file += df;
-            rank += dr;
-        }
+    Bitboard attacks = 0;
+    switch (slider) {
+        case PieceType::Bishop:
+            attacks = attacks::bishop_attacks(from, board.occupancy());
+            break;
+        case PieceType::Rook:
+            attacks = attacks::rook_attacks(from, board.occupancy());
+            break;
+        case PieceType::Queen:
+            attacks = attacks::queen_attacks(from, board.occupancy());
+            break;
+        default:
+            return;
     }
+
+    const Bitboard targets = attacks
+        & ~board.occupancy(color)
+        & ~board.pieces(opposite(color), PieceType::King)
+        & target_mask;
+    add_piece_target_moves(board, moves, from, color, targets);
 }
 
-void add_king_moves(const Board& board, MoveList& moves, Square from, Color color) {
-    constexpr std::array<std::pair<int, int>, 8> offsets{{
-        {1, 1}, {1, 0}, {1, -1}, {0, -1},
-        {-1, -1}, {-1, 0}, {-1, 1}, {0, 1},
-    }};
+void add_king_step_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard target_mask = kAllSquares) {
+    const Bitboard targets = attacks::king_attacks(from)
+        & ~board.occupancy(color)
+        & ~board.pieces(opposite(color), PieceType::King)
+        & target_mask;
+    add_piece_target_moves(board, moves, from, color, targets);
+}
 
-    for (const auto& [df, dr] : offsets) {
-        const int file = file_of(from) + df;
-        const int rank = rank_of(from) + dr;
-        if (file < 0 || file >= 8 || rank < 0 || rank >= 8) {
-            continue;
-        }
-        const Square to = make_square(file, rank);
-        if (has_own_piece(board, to, color) || is_enemy_king(board, to, color)) {
-            continue;
-        }
-        moves.push_back(Move{
-            from,
-            to,
-            PieceType::None,
-            static_cast<std::uint8_t>(has_enemy_piece(board, to, color) ? Capture : Quiet),
-        });
-    }
-
+void add_castling_moves(const Board& board, MoveList& moves, Square from, Color color) {
     const Color enemy = opposite(color);
     if (board.in_check(color)) {
         return;
@@ -212,6 +225,36 @@ void add_king_moves(const Board& board, MoveList& moves, Square from, Color colo
     }
 }
 
+void add_king_moves(const Board& board, MoveList& moves, Square from, Color color) {
+    add_king_step_moves(board, moves, from, color);
+    add_castling_moves(board, moves, from, color);
+}
+
+void add_piece_moves(const Board& board, MoveList& moves, Square from, Color color, PieceType type, Bitboard target_mask = kAllSquares) {
+    switch (type) {
+        case PieceType::Pawn:
+            add_pawn_moves(board, moves, from, color, target_mask);
+            break;
+        case PieceType::Knight:
+            add_knight_moves(board, moves, from, color, target_mask);
+            break;
+        case PieceType::Bishop:
+        case PieceType::Rook:
+        case PieceType::Queen:
+            add_slider_moves(board, moves, from, color, type, target_mask);
+            break;
+        case PieceType::King:
+            if (target_mask == kAllSquares) {
+                add_king_moves(board, moves, from, color);
+            } else {
+                add_king_step_moves(board, moves, from, color, target_mask);
+            }
+            break;
+        case PieceType::None:
+            break;
+    }
+}
+
 }  // namespace
 
 MoveList generate_pseudo_legal_moves(const Board& board) {
@@ -225,34 +268,46 @@ MoveList generate_pseudo_legal_moves(const Board& board) {
             continue;
         }
 
-        switch (type_of(piece)) {
-            case PieceType::Pawn:
-                add_pawn_moves(board, moves, from, color);
-                break;
-            case PieceType::Knight:
-                add_knight_moves(board, moves, from, color);
-                break;
-            case PieceType::Bishop:
-                add_slider_moves(board, moves, from, color, {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}});
-                break;
-            case PieceType::Rook:
-                add_slider_moves(board, moves, from, color, {{1, 0}, {0, -1}, {-1, 0}, {0, 1}});
-                break;
-            case PieceType::Queen:
-                add_slider_moves(
-                    board,
-                    moves,
-                    from,
-                    color,
-                    {{1, 1}, {1, -1}, {-1, -1}, {-1, 1}, {1, 0}, {0, -1}, {-1, 0}, {0, 1}}
-                );
-                break;
-            case PieceType::King:
-                add_king_moves(board, moves, from, color);
-                break;
-            case PieceType::None:
-                break;
+        add_piece_moves(board, moves, from, color, type_of(piece));
+    }
+
+    return moves;
+}
+
+MoveList generate_pseudo_legal_check_evasions(const Board& board) {
+    const Color color = board.side_to_move();
+    const Color enemy = opposite(color);
+    const Square king = board.king_square(color);
+    if (!is_valid_square(king) || !board.in_check(color)) {
+        return generate_pseudo_legal_moves(board);
+    }
+
+    MoveList moves;
+    moves.reserve(32);
+    add_king_step_moves(board, moves, king, color);
+
+    const Bitboard checkers = attacks::attackers_to(board, king, enemy);
+    if (__builtin_popcountll(checkers) != 1) {
+        return moves;
+    }
+
+    const Square checker = __builtin_ctzll(checkers);
+    const Piece checker_piece = board.piece_at(checker);
+    Bitboard evasion_targets = square_bb(checker);
+    if (checker_piece != Piece::None && is_slider(type_of(checker_piece)) && can_slider_block_check(king, checker, type_of(checker_piece))) {
+        evasion_targets |= attacks::between(king, checker);
+    }
+
+    for (Square from = 0; from < kBoardSquareCount; ++from) {
+        if (from == king) {
+            continue;
         }
+        const Piece piece = board.piece_at(from);
+        if (piece == Piece::None || color_of(piece) != color) {
+            continue;
+        }
+
+        add_piece_moves(board, moves, from, color, type_of(piece), evasion_targets);
     }
 
     return moves;

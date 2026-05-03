@@ -1,10 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "chess/core/attacks.h"
 #include "chess/core/fen.h"
 #include "chess/core/game_status.h"
 #include "chess/core/move.h"
@@ -75,7 +77,58 @@ void require_board_invariants(const chess::Board& board) {
     REQUIRE(board.hash_key() == board.recompute_hash());
 }
 
+std::vector<std::string> sorted_uci(const chess::MoveList& moves) {
+    std::vector<std::string> uci_moves;
+    uci_moves.reserve(moves.size());
+    for (const chess::Move& move : moves) {
+        uci_moves.push_back(chess::move_to_uci(move));
+    }
+    std::sort(uci_moves.begin(), uci_moves.end());
+    return uci_moves;
+}
+
+std::vector<std::string> legal_uci_from_candidates(chess::Board& board, const chess::MoveList& candidates) {
+    const chess::Color moving_side = board.side_to_move();
+    chess::MoveList legalized;
+    for (const chess::Move& move : candidates) {
+        const chess::UndoState undo = board.make_move(move);
+        const bool legal = !board.in_check(moving_side);
+        board.unmake_move(undo);
+        if (legal) {
+            legalized.push_back(move);
+        }
+    }
+    return sorted_uci(legalized);
+}
+
 }  // namespace
+
+TEST_CASE("precomputed leaper attack tables cover center and edge squares") {
+    const chess::Square e4 = chess::make_square(4, 3);
+    REQUIRE(chess::attacks::pawn_attacks(chess::Color::White, e4)
+            == (chess::square_bb(chess::make_square(3, 4)) | chess::square_bb(chess::make_square(5, 4))));
+    REQUIRE(chess::attacks::pawn_attacks(chess::Color::Black, e4)
+            == (chess::square_bb(chess::make_square(3, 2)) | chess::square_bb(chess::make_square(5, 2))));
+
+    REQUIRE(__builtin_popcountll(chess::attacks::knight_attacks(chess::make_square(3, 3))) == 8);
+    REQUIRE(__builtin_popcountll(chess::attacks::knight_attacks(chess::make_square(0, 0))) == 2);
+    REQUIRE(__builtin_popcountll(chess::attacks::king_attacks(chess::make_square(3, 3))) == 8);
+    REQUIRE(__builtin_popcountll(chess::attacks::king_attacks(chess::make_square(0, 0))) == 3);
+}
+
+TEST_CASE("board attack detection uses all piece types and blockers") {
+    SECTION("leaper and pawn attacks") {
+        const chess::Board board = chess::board_from_fen("4k3/8/3n4/3pP3/4K3/8/8/8 w - - 0 1");
+        REQUIRE(board.is_square_attacked(chess::make_square(4, 3), chess::Color::Black));
+        REQUIRE(board.is_square_attacked(chess::make_square(5, 4), chess::Color::Black));
+    }
+
+    SECTION("sliding attacks stop at the first blocker") {
+        const chess::Board board = chess::board_from_fen("4k3/8/8/q2P4/8/8/8/4K3 w - - 0 1");
+        REQUIRE(board.is_square_attacked(chess::make_square(2, 4), chess::Color::Black));
+        REQUIRE_FALSE(board.is_square_attacked(chess::make_square(4, 4), chess::Color::Black));
+    }
+}
 
 TEST_CASE("start position FEN round trips") {
     const chess::Board board = chess::board_from_fen(chess::kStartFen);
@@ -194,6 +247,55 @@ TEST_CASE("terminal positions distinguish checkmate and stalemate") {
         REQUIRE_FALSE(board.in_check(chess::Color::Black));
         REQUIRE(chess::generate_legal_moves(board).empty());
         REQUIRE(chess::perft(board, 1) == 0);
+    }
+}
+
+TEST_CASE("pseudo-legal check evasions legalize to the public legal move set") {
+    for (const char* fen : {
+             "4k3/8/8/8/1b6/8/8/4R2K b - - 0 1",
+             "4k3/8/5N2/8/8/8/8/4K3 b - - 0 1",
+             "4k3/8/8/1B6/8/8/8/4R2K b - - 0 1",
+             "k7/8/8/3pP3/4K3/8/8/8 w - d6 0 1",
+             "5Rk1/6pp/8/2B5/8/8/6PP/6K1 b - - 1 1",
+         }) {
+        chess::Board board = chess::board_from_fen(fen);
+        INFO(fen);
+        REQUIRE(board.in_check(board.side_to_move()));
+
+        chess::Board legal_board = board;
+        const std::vector<std::string> legal_moves = sorted_uci(chess::generate_legal_moves(legal_board));
+        const std::vector<std::string> legalized_evasions =
+            legal_uci_from_candidates(board, chess::generate_pseudo_legal_check_evasions(board));
+
+        REQUIRE(legalized_evasions == legal_moves);
+    }
+}
+
+TEST_CASE("pseudo-legal check evasions are narrowed by check type") {
+    SECTION("single slider check includes block candidates") {
+        chess::Board board = chess::board_from_fen("4k3/8/8/8/1b6/8/8/4R2K b - - 0 1");
+        const chess::MoveList evasions = chess::generate_pseudo_legal_check_evasions(board);
+        const std::vector<std::string> uci_moves = sorted_uci(evasions);
+
+        REQUIRE(std::find(uci_moves.begin(), uci_moves.end(), "b4e7") != uci_moves.end());
+        REQUIRE(std::find(uci_moves.begin(), uci_moves.end(), "b4a5") == uci_moves.end());
+    }
+
+    SECTION("double check generates only king moves") {
+        chess::Board board = chess::board_from_fen("4k3/8/8/1B6/8/8/8/4R2K b - - 0 1");
+        const chess::MoveList evasions = chess::generate_pseudo_legal_check_evasions(board);
+
+        for (const chess::Move& move : evasions) {
+            REQUIRE(move.from == chess::make_square(4, 7));
+        }
+    }
+
+    SECTION("en-passant can capture a checking pawn") {
+        chess::Board board = chess::board_from_fen("k7/8/8/3pP3/4K3/8/8/8 w - d6 0 1");
+        const chess::MoveList evasions = chess::generate_pseudo_legal_check_evasions(board);
+        const std::vector<std::string> uci_moves = sorted_uci(evasions);
+
+        REQUIRE(std::find(uci_moves.begin(), uci_moves.end(), "e5d6") != uci_moves.end());
     }
 }
 

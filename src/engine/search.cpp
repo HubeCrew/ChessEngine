@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
+#include <cstddef>
+#include <memory>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -218,11 +222,73 @@ struct PickedMove {
     int see_score = 0;
 };
 
+template <typename T, std::size_t Capacity>
+class FixedVector {
+public:
+    FixedVector() = default;
+
+    FixedVector(const FixedVector&) = delete;
+    FixedVector& operator=(const FixedVector&) = delete;
+
+    ~FixedVector() {
+        clear();
+    }
+
+    template <typename... Args>
+    T& emplace_back(Args&&... args) {
+        assert(size_ < Capacity);
+        T* item = std::construct_at(ptr(size_), std::forward<Args>(args)...);
+        ++size_;
+        return *item;
+    }
+
+    void clear() {
+        for (std::size_t index = 0; index < size_; ++index) {
+            std::destroy_at(ptr(index));
+        }
+        size_ = 0;
+    }
+
+    [[nodiscard]] std::size_t size() const {
+        return size_;
+    }
+
+    [[nodiscard]] T& operator[](std::size_t index) {
+        assert(index < size_);
+        return *ptr(index);
+    }
+
+    [[nodiscard]] const T& operator[](std::size_t index) const {
+        assert(index < size_);
+        return *ptr(index);
+    }
+
+    [[nodiscard]] T* begin() {
+        return ptr(0);
+    }
+
+    [[nodiscard]] T* end() {
+        return ptr(size_);
+    }
+
+private:
+    alignas(T) std::byte storage_[sizeof(T) * Capacity];
+    std::size_t size_ = 0;
+
+    [[nodiscard]] T* ptr(std::size_t index) {
+        return std::launder(reinterpret_cast<T*>(storage_ + sizeof(T) * index));
+    }
+
+    [[nodiscard]] const T* ptr(std::size_t index) const {
+        return std::launder(reinterpret_cast<const T*>(storage_ + sizeof(T) * index));
+    }
+};
+
 class MovePicker {
 public:
     MovePicker(
         Board& board,
-        MoveList moves,
+        const MoveList& moves,
         MovePickerMode mode,
         Move previous_pv_move,
         Move tt_move,
@@ -240,9 +306,8 @@ public:
           second_killer_(second_killer),
           allow_quiet_checks_(allow_quiet_checks),
           history_(history) {
-        moves_.reserve(moves.size());
         for (const Move& move : moves) {
-            moves_.push_back(MoveState{move});
+            moves_.emplace_back(move);
         }
         build_order();
     }
@@ -252,7 +317,8 @@ public:
             return false;
         }
 
-        MoveState& state = moves_[ordered_indices_[ordered_cursor_++]];
+        ScoredMove& state = moves_[ordered_indices_[ordered_cursor_].index];
+        ++ordered_cursor_;
         picked = PickedMove{
             state.move,
             state.gives_check_known,
@@ -264,7 +330,7 @@ public:
     }
 
 private:
-    struct MoveState {
+    struct ScoredMove {
         Move move;
         bool tactical_classified = false;
         bool is_tactical = false;
@@ -278,6 +344,10 @@ private:
     };
 
     struct ScoredIndex {
+        ScoredIndex(std::size_t move_index, int move_score)
+            : index(move_index),
+              score(move_score) {}
+
         std::size_t index = kNoMoveIndex;
         int score = 0;
     };
@@ -291,33 +361,25 @@ private:
     Move second_killer_;
     bool allow_quiet_checks_ = false;
     const HistoryTable& history_;
-    std::vector<MoveState> moves_;
-    std::vector<std::size_t> ordered_indices_;
+    FixedVector<ScoredMove, MoveList::kCapacity> moves_;
+    FixedVector<ScoredIndex, MoveList::kCapacity> ordered_indices_;
     std::size_t ordered_cursor_ = 0;
 
     void build_order() {
-        ordered_indices_.reserve(moves_.size());
-        std::vector<ScoredIndex> candidates;
-        candidates.reserve(moves_.size());
-
         for (std::size_t index = 0; index < moves_.size(); ++index) {
-            MoveState& state = moves_[index];
+            ScoredMove& state = moves_[index];
             if (!is_candidate_for_mode(state)) {
                 continue;
             }
-            candidates.push_back(ScoredIndex{index, move_order_score(state)});
+            ordered_indices_.emplace_back(index, move_order_score(state));
         }
 
-        std::stable_sort(candidates.begin(), candidates.end(), [](const ScoredIndex& lhs, const ScoredIndex& rhs) {
+        std::stable_sort(ordered_indices_.begin(), ordered_indices_.end(), [](const ScoredIndex& lhs, const ScoredIndex& rhs) {
             return lhs.score > rhs.score;
         });
-
-        for (const ScoredIndex& candidate : candidates) {
-            ordered_indices_.push_back(candidate.index);
-        }
     }
 
-    int move_order_score(MoveState& state) {
+    int move_order_score(ScoredMove& state) {
         if (is_valid_move_shape(previous_pv_move_) && same_move_identity(state.move, previous_pv_move_)) {
             return 1'100'000;
         }
@@ -340,7 +402,7 @@ private:
         return score;
     }
 
-    bool is_candidate_for_mode(MoveState& state) {
+    bool is_candidate_for_mode(ScoredMove& state) {
         if (mode_ == MovePickerMode::AllMoves) {
             return true;
         }
@@ -353,7 +415,7 @@ private:
         return gives_check(state);
     }
 
-    void classify_tactical(MoveState& state) {
+    void classify_tactical(ScoredMove& state) {
         if (state.tactical_classified) {
             return;
         }
@@ -385,7 +447,7 @@ private:
         }
     }
 
-    int quiet_score(MoveState& state) {
+    int quiet_score(ScoredMove& state) {
         if (!state.quiet_score_known) {
             state.quiet_score_known = true;
             state.quiet_score = history_[color_index(side_to_move_)][state.move.from][state.move.to];
@@ -393,7 +455,7 @@ private:
         return state.quiet_score;
     }
 
-    bool gives_check(MoveState& state) {
+    bool gives_check(ScoredMove& state) {
         if (!state.gives_check_known) {
             state.gives_check_known = true;
             state.gives_check = move_gives_check(board_, state.move);
@@ -596,7 +658,9 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
     }
 
     const bool in_check = board.in_check(board.side_to_move());
-    MoveList moves = ply == 0 ? generate_legal_moves(board) : generate_pseudo_legal_moves(board);
+    MoveList moves = ply == 0
+        ? generate_legal_moves(board)
+        : (in_check ? generate_pseudo_legal_check_evasions(board) : generate_pseudo_legal_moves(board));
 
     if (null_move_pruning_
         && can_try_null_move(board, depth, ply, alpha, beta, in_check, allow_null_move)
@@ -623,7 +687,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
     }
     MovePicker picker{
         board,
-        std::move(moves),
+        moves,
         MovePickerMode::AllMoves,
         pv_move,
         tt_move,
@@ -730,7 +794,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         tt_move = entry->best_move;
     }
 
-    MoveList moves = generate_pseudo_legal_moves(board);
+    MoveList moves = in_check ? generate_pseudo_legal_check_evasions(board) : generate_pseudo_legal_moves(board);
     const bool allow_quiet_checks = !in_check
         && qply < kMaxQuiescenceQuietCheckPly
         && ply < kMaxPly - 1
@@ -738,7 +802,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         && beta < kMateScore - kMateWindow;
     MovePicker picker{
         board,
-        std::move(moves),
+        moves,
         in_check ? MovePickerMode::AllMoves : MovePickerMode::Quiescence,
         Move{},
         tt_move,

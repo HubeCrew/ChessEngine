@@ -2,6 +2,7 @@
 
 #include <cassert>
 
+#include "chess/core/attacks.h"
 #include "chess/core/fen.h"
 #include "chess/core/zobrist.h"
 
@@ -15,10 +16,6 @@ constexpr int color_index(Color color) {
 
 constexpr int type_index(PieceType type) {
     return static_cast<int>(type);
-}
-
-bool square_has_piece(const Board& board, Square square, Color color, PieceType type) {
-    return is_valid_square(square) && board.piece_at(square) == make_piece(color, type);
 }
 
 }  // namespace
@@ -78,92 +75,7 @@ Square Board::king_square(Color color) const {
 
 bool Board::is_square_attacked(Square square, Color by_color) const {
     assert(is_valid_square(square));
-    const int file = file_of(square);
-    const int rank = rank_of(square);
-
-    if (by_color == Color::White) {
-        if (file > 0 && square_has_piece(*this, square - 9, Color::White, PieceType::Pawn)) {
-            return true;
-        }
-        if (file < 7 && square_has_piece(*this, square - 7, Color::White, PieceType::Pawn)) {
-            return true;
-        }
-    } else {
-        if (file > 0 && square_has_piece(*this, square + 7, Color::Black, PieceType::Pawn)) {
-            return true;
-        }
-        if (file < 7 && square_has_piece(*this, square + 9, Color::Black, PieceType::Pawn)) {
-            return true;
-        }
-    }
-
-    constexpr std::array<std::pair<int, int>, 8> knight_offsets{{
-        {1, 2}, {2, 1}, {2, -1}, {1, -2},
-        {-1, -2}, {-2, -1}, {-2, 1}, {-1, 2},
-    }};
-    for (const auto& [df, dr] : knight_offsets) {
-        const int nf = file + df;
-        const int nr = rank + dr;
-        if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8
-            && square_has_piece(*this, make_square(nf, nr), by_color, PieceType::Knight)) {
-            return true;
-        }
-    }
-
-    constexpr std::array<std::pair<int, int>, 8> king_offsets{{
-        {1, 1}, {1, 0}, {1, -1}, {0, -1},
-        {-1, -1}, {-1, 0}, {-1, 1}, {0, 1},
-    }};
-    for (const auto& [df, dr] : king_offsets) {
-        const int nf = file + df;
-        const int nr = rank + dr;
-        if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8
-            && square_has_piece(*this, make_square(nf, nr), by_color, PieceType::King)) {
-            return true;
-        }
-    }
-
-    constexpr std::array<std::pair<int, int>, 4> bishop_dirs{{
-        {1, 1}, {1, -1}, {-1, -1}, {-1, 1},
-    }};
-    for (const auto& [df, dr] : bishop_dirs) {
-        int nf = file + df;
-        int nr = rank + dr;
-        while (nf >= 0 && nf < 8 && nr >= 0 && nr < 8) {
-            const Piece piece = piece_at(make_square(nf, nr));
-            if (piece != Piece::None) {
-                if (color_of(piece) == by_color
-                    && (type_of(piece) == PieceType::Bishop || type_of(piece) == PieceType::Queen)) {
-                    return true;
-                }
-                break;
-            }
-            nf += df;
-            nr += dr;
-        }
-    }
-
-    constexpr std::array<std::pair<int, int>, 4> rook_dirs{{
-        {1, 0}, {0, -1}, {-1, 0}, {0, 1},
-    }};
-    for (const auto& [df, dr] : rook_dirs) {
-        int nf = file + df;
-        int nr = rank + dr;
-        while (nf >= 0 && nf < 8 && nr >= 0 && nr < 8) {
-            const Piece piece = piece_at(make_square(nf, nr));
-            if (piece != Piece::None) {
-                if (color_of(piece) == by_color
-                    && (type_of(piece) == PieceType::Rook || type_of(piece) == PieceType::Queen)) {
-                    return true;
-                }
-                break;
-            }
-            nf += df;
-            nr += dr;
-        }
-    }
-
-    return false;
+    return attacks::is_square_attacked(*this, square, by_color);
 }
 
 bool Board::in_check(Color color) const {

@@ -10,6 +10,7 @@ option(CHESSENGINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(CHESSENGINE_FETCH_CATCH2 "Download Catch2 for tests when it is not installed" OFF)
 
 add_library(chess_core
+    src/core/attacks.cpp
     src/core/board.cpp
     src/core/fen.cpp
     src/core/game_status.cpp
