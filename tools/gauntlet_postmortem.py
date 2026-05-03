@@ -604,6 +604,12 @@ def summarize(records: list[MoveRecord], events: list[MoveRecord], engine_name: 
         "engine_ties_reference": sum(1 for event in scored_reference_events if event.engine_reference_delta_cp == 0),
         "engine_played_negative_see": sum(1 for event in played_see_events if event.engine_played_see_cp < 0),
         "engine_reference_negative_see": sum(1 for event in reference_see_events if event.engine_reference_see_cp < 0),
+        "engine_prefers_negative_see": sum(
+            1 for event in events if "engine-prefers-negative-see" in event.categories
+        ),
+        "engine_can_avoid_negative_see": sum(
+            1 for event in events if "engine-can-avoid-negative-see" in event.categories
+        ),
     }
 
 
@@ -778,6 +784,16 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
         25,
     )
     append_event_list(
+        "Negative SEE Capture Audit",
+        [event for event in events if "played-negative-see" in event.categories],
+        25,
+    )
+    append_event_list(
+        "Engine Prefers Negative SEE",
+        [event for event in events if "engine-prefers-negative-see" in event.categories],
+        25,
+    )
+    append_event_list(
         "Loss-Game Watchlist",
         [event for event in events if "engine-loss" in event.categories],
         20,
@@ -817,6 +833,25 @@ def add_engine_reference_scores(events: list[MoveRecord], engine: UciTraceEngine
         event.engine_reference_see_cp = engine.see(event.fen_before, event.reference_bestmove)
         if event.engine_played_score_cp is not None and reference_score is not None:
             event.engine_reference_delta_cp = reference_score - event.engine_played_score_cp
+
+
+def add_engine_diagnostic_categories(events: list[MoveRecord]) -> None:
+    for event in events:
+        if event.engine_played_see_cp is not None and event.engine_played_see_cp < 0:
+            add_category(event, "played-negative-see", min(80, -event.engine_played_see_cp // 4))
+        if event.engine_reference_see_cp is not None and event.engine_reference_see_cp < 0:
+            add_category(event, "reference-negative-see")
+
+        if event.engine_played_see_cp is None or event.engine_played_see_cp >= 0:
+            continue
+        if event.engine_reference_delta_cp is None:
+            continue
+
+        reference_see = event.engine_reference_see_cp if event.engine_reference_see_cp is not None else 0
+        if event.engine_reference_delta_cp <= -30 and reference_see >= event.engine_played_see_cp:
+            add_category(event, "engine-prefers-negative-see", 90)
+        elif event.engine_reference_delta_cp >= 30:
+            add_category(event, "engine-can-avoid-negative-see", 60)
 
 
 def add_reference_bestmoves(
@@ -958,6 +993,7 @@ def main() -> int:
     if args.engine_depth > 0 and any(event.reference_bestmove for event in events):
         with UciTraceEngine(args.engine, args.protocol_timeout) as trace_engine:
             add_engine_reference_scores(events, trace_engine, args.engine_depth)
+    add_engine_diagnostic_categories(events)
 
     summary = summarize(records, events, args.engine_name)
     write_json(args.output_dir / "postmortem.json", summary, events)

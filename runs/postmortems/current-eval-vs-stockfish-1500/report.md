@@ -19,6 +19,8 @@
 - `engine_ties_reference`: 65
 - `engine_played_negative_see`: 32
 - `engine_reference_negative_see`: 18
+- `engine_prefers_negative_see`: 11
+- `engine_can_avoid_negative_see`: 2
 
 ## Highest-Severity Events
 
@@ -604,7 +606,7 @@
 
 ### 4. Game 60, ply 38: d4d7 (Qxd7)
 
-- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence`
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
 - Score: `+503 -> +928` for current-eval, delta `+425`
 - Sequence after reply `c6d7`: `+503 -> -106`, delta `-609`
 - Engine recaptures available: `none`
@@ -624,7 +626,7 @@
 
 ### 5. Game 14, ply 51: e8e7 (Re7)
 
-- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence`
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, reference-negative-see`
 - Score: `-183 -> -20` for current-eval, delta `+163`
 - Sequence after reply `d7e7`: `-183 -> -694`, delta `-511`
 - Engine recaptures available: `none`
@@ -645,7 +647,7 @@
 
 ### 6. Game 65, ply 20: a4b4 (Qxb4)
 
-- Categories: `opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence`
+- Categories: `opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, engine-can-avoid-negative-see`
 - Score: `+372 -> +803` for current-eval, delta `+431`
 - Sequence after reply `a6b4`: `+372 -> -157`, delta `-529`
 - Engine recaptures available: `none`
@@ -769,7 +771,7 @@
 
 ### 12. Game 93, ply 32: c5f8 (Qxf8+)
 
-- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence`
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
 - Score: `+882 -> +1370` for current-eval, delta `+488`
 - Sequence after reply `g7f8`: `+882 -> +420`, delta `-462`
 - Engine recaptures available: `none`
@@ -871,7 +873,7 @@
 
 ### 17. Game 14, ply 53: c4f1 (Qxf1+)
 
-- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence`
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
 - Score: `-694 -> -229` for current-eval, delta `+465`
 - Sequence after reply `a1f1`: `-694 -> -1081`, delta `-387`
 - Engine recaptures available: `none`
@@ -891,7 +893,7 @@
 
 ### 18. Game 33, ply 48: c6e8 (Qxe8+)
 
-- Categories: `opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence`
+- Categories: `opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
 - Score: `+1247 -> +1748` for current-eval, delta `+501`
 - Sequence after reply `f7e8`: `+1247 -> +862`, delta `-385`
 - Engine recaptures available: `none`
@@ -911,7 +913,7 @@
 
 ### 19. Game 55, ply 36: a5a7 (Qxa7)
 
-- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence`
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
 - Score: `-87 -> +480` for current-eval, delta `+567`
 - Sequence after reply `b8a7`: `-87 -> -445`, delta `-358`
 - Engine recaptures available: `none`
@@ -951,7 +953,7 @@
 
 ### 21. Game 31, ply 82: c1c2 (Rxc2)
 
-- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence`
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
 - Score: `-428 -> -191` for current-eval, delta `+237`
 - Sequence after reply `b2c2`: `-428 -> -779`, delta `-351`
 - Engine recaptures available: `none`
@@ -1048,6 +1050,756 @@
 - Engine reference-move SEE: `0`
 
 - Reference bestmove: `f6e7` score `-899998`
+
+
+## Negative SEE Capture Audit
+
+### 1. Game 60, ply 38: d4d7 (Qxd7)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `+503 -> +928` for current-eval, delta `+425`
+- Sequence after reply `c6d7`: `+503 -> -106`, delta `-609`
+- Engine recaptures available: `none`
+- Material: `Q` captures `N` for `320` cp
+- Component movement: piece_square -6, space -6, center_control -1, development -1, threats +34, material +320
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `rk3b1r/p2Np1pp/2Q5/8/2Nq3P/7R/P2nPP2/4K3 b - - 2 21`
+
+- Engine re-search: `d4d7` score `-175`
+
+- Engine played-move constrained score: `-175`
+- Engine played-move SEE: `-580`
+- Engine reference-move constrained score: `-175`, delta `+0`
+- Engine reference-move SEE: `-580`
+
+- Reference bestmove: `d4d7` score `-916`
+
+### 2. Game 65, ply 20: a4b4 (Qxb4)
+
+- Categories: `opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, engine-can-avoid-negative-see`
+- Score: `+372 -> +803` for current-eval, delta `+431`
+- Sequence after reply `a6b4`: `+372 -> -157`, delta `-529`
+- Engine recaptures available: `none`
+- Material: `Q` captures `B` for `330` cp
+- Component movement: threats -146, rook_files -1, pawn_dynamics -1, king_safety +99, material +330
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `r1bqk2r/p2n2pp/n3Np2/1N2p3/Qbp5/4B3/PP2PPPP/3RKB1R w Kkq - 1 12`
+
+- Engine re-search: `b5c3` score `469`
+
+- Engine played-move constrained score: `288`
+- Engine played-move SEE: `-570`
+- Engine reference-move constrained score: `437`, delta `+149`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `e3d2` score `435`
+- Reference played-move score: `327`, delta `+108`
+
+### 3. Game 93, ply 32: c5f8 (Qxf8+)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `+882 -> +1370` for current-eval, delta `+488`
+- Sequence after reply `g7f8`: `+882 -> +420`, delta `-462`
+- Engine recaptures available: `none`
+- Material: `Q` captures `R` for `500` cp
+- Component movement: threats -81, piece_square -9, center_control -8, king_safety +23, material +500
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `5r2/2p2Pkp/2n3p1/2Q5/2P1P3/2P2bPq/P4P1P/RB3RK1 w - - 1 20`
+
+- Engine re-search: `c5f8` score `-899996`
+
+- Engine played-move constrained score: `-899996`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `-899996`, delta `+0`
+- Engine reference-move SEE: `-400`
+
+- Reference bestmove: `c5f8` score `-899998`
+
+### 4. Game 14, ply 53: c4f1 (Qxf1+)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `-694 -> -229` for current-eval, delta `+465`
+- Sequence after reply `a1f1`: `-694 -> -1081`, delta `-387`
+- Engine recaptures available: `none`
+- Material: `Q` captures `R` for `500` cp
+- Component movement: threats -86, piece_square -7, center_control -6, pawn_dynamics -4, king_safety +32, material +500
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `r5k1/pp2Q2p/4pppB/2pp4/2q5/2P2B1P/5PP1/R4RK1 b - - 0 30`
+
+- Engine re-search: `c4f1` score `-899996`
+
+- Engine played-move constrained score: `-899996`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `-899996`, delta `+0`
+- Engine reference-move SEE: `-400`
+
+- Reference bestmove: `c4f1` score `-899998`
+
+### 5. Game 33, ply 48: c6e8 (Qxe8+)
+
+- Categories: `opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `+1247 -> +1748` for current-eval, delta `+501`
+- Sequence after reply `f7e8`: `+1247 -> +862`, delta `-385`
+- Engine recaptures available: `none`
+- Material: `Q` captures `R` for `500` cp
+- Component movement: threats -54, piece_square -3, pawn_dynamics -2, mobility +22, material +500
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `4r3/5kPp/p1Qp4/2pP1B2/2Pp1b2/N5P1/PP5P/6K1 w - - 1 28`
+
+- Engine re-search: `c6e8` score `2257`
+
+- Engine played-move constrained score: `2257`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `2257`, delta `+0`
+- Engine reference-move SEE: `-400`
+
+- Reference bestmove: `c6e8` score `899991`
+
+### 6. Game 55, ply 36: a5a7 (Qxa7)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `-87 -> +480` for current-eval, delta `+567`
+- Sequence after reply `b8a7`: `-87 -> -445`, delta `-358`
+- Engine recaptures available: `none`
+- Material: `Q` captures `R` for `500` cp
+- Component movement: piece_square -8, king_safety -5, pawn_dynamics -2, pawn_structure -1, threats +38, material +500
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `1q2k2r/r2bbpp1/4p2p/Q1pnp3/8/3P4/PP1BPPPP/1K1R1B1R w k - 0 19`
+
+- Engine re-search: `a5a7` score `-442`
+
+- Engine played-move constrained score: `-442`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `-442`, delta `+0`
+- Engine reference-move SEE: `-400`
+
+- Reference bestmove: `a5a7` score `-638`
+
+### 7. Game 31, ply 82: c1c2 (Rxc2)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `-428 -> -191` for current-eval, delta `+237`
+- Sequence after reply `b2c2`: `-428 -> -779`, delta `-351`
+- Engine recaptures available: `none`
+- Material: `R` captures `P` for `100` cp
+- Component movement: threats +72, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `8/k7/p7/1p2P1P1/3P4/7P/1qp1bK2/2R5 w - - 0 43`
+
+- Engine re-search: `c1c2` score `-1022`
+
+- Engine played-move constrained score: `-1022`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `-1022`, delta `+0`
+- Engine reference-move SEE: `-400`
+
+- Reference bestmove: `c1c2` score `-617`
+
+### 8. Game 73, ply 64: h1h7 (Rxh7+)
+
+- Categories: `opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+1531 -> +1699` for current-eval, delta `+168`
+- Sequence after reply `g7h7`: `+1531 -> +1149`, delta `-382`
+- Engine recaptures available: `none`
+- Material: `R` captures `P` for `100` cp
+- Component movement: threats -28, pawn_structure -18, pawn_dynamics -10, mobility -4, piece_square +72, material +100
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `1r6/1Q3Nkp/p7/4b3/2P5/8/PP3PP1/1K5R w - - 1 36`
+
+- Engine re-search: `h1h7` score `1643`
+
+- Engine played-move constrained score: `1643`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `1501`, delta `-142`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `b7d7` score `889`
+- Reference played-move score: `1075`, delta `-186`
+
+### 9. Game 8, ply 52: c8d8 (Qxd8)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `-171 -> +443` for current-eval, delta `+614`
+- Sequence after reply `d6d8`: `-171 -> -428`, delta `-257`
+- Engine recaptures available: `none`
+- Material: `Q` captures `R` for `500` cp
+- Component movement: trade_context -8, pawn_dynamics -1, threats +43, material +500
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `rkqR4/p1r3pp/3Q4/3Bp3/P7/2P5/2P2P1P/5K2 b - - 2 27`
+
+- Engine re-search: `c8d8` score `-1010`
+
+- Engine played-move constrained score: `-1010`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `-1010`, delta `+0`
+- Engine reference-move SEE: `-400`
+
+- Reference bestmove: `c8d8` score `-899996`
+
+### 10. Game 45, ply 38: c6c8 (Qxc8+)
+
+- Categories: `engine-loss, recapture-trade, opponent-recapture, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `+380 -> +1052` for current-eval, delta `+672`
+- Sequence after reply `f5c8`: `+380 -> +125`, delta `-255`
+- Engine recaptures available: `none`
+- Material: `Q` captures `R` for `500` cp
+- Component movement: piece_square -7, center_control -2, pawn_dynamics -2, threats +92, material +500
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `2r3k1/p4ppp/2Q2n2/5q2/3p4/8/PP1NPPPP/4KB1R w K - 1 21`
+
+- Engine re-search: `c6c8` score `35`
+
+- Engine played-move constrained score: `35`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `35`, delta `+0`
+- Engine reference-move SEE: `-400`
+
+- Reference bestmove: `c6c8` score `-468`
+
+### 11. Game 25, ply 16: b7b6 (Qxb6)
+
+- Categories: `opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+557 -> +1044` for current-eval, delta `+487`
+- Sequence after reply `c7b6`: `+557 -> +278`, delta `-279`
+- Engine recaptures available: `none`
+- Material: `Q` captures `R` for `500` cp
+- Component movement: threats -37, space -6, king_safety -5, center_control -3, mobility +15, material +500
+- Result: `1/2-1/2` `draw:threefold_repetition`
+- FEN before: `1n1qk2r/1Qpb1ppp/1r3n2/p7/1B1P4/8/PP2PPPP/RN2KBNR w KQk - 1 10`
+
+- Engine re-search: `b7b6` score `290`
+
+- Engine played-move constrained score: `290`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `254`, delta `-36`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `b7f3` score `117`
+- Reference played-move score: `-66`, delta `+183`
+
+### 12. Game 7, ply 31: h7f6 (Nxf6+)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see`
+- Score: `+457 -> +852` for current-eval, delta `+395`
+- Sequence after reply `d8f6`: `+457 -> +196`, delta `-261`
+- Engine recaptures available: `none`
+- Material: `N` captures `P` for `100` cp
+- Component movement: bishop_quality -11, center_control -2, king_safety +79, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `r1bbq1kr/6pN/2pp1pn1/p6Q/2p1PN2/3P2B1/PPP3PP/R4RK1 w - - 4 17`
+
+- Engine re-search: `h7f6` score `478`
+
+- Engine played-move constrained score: `478`
+- Engine played-move SEE: `-220`
+- Engine reference-move constrained score: `454`, delta `-24`
+- Engine reference-move SEE: `320`
+
+- Reference bestmove: `h5g6` score `138`
+- Reference played-move score: `135`, delta `+3`
+
+### 13. Game 59, ply 35: f1c4 (Bxc4+)
+
+- Categories: `recapture-trade, opponent-recapture, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `+1887 -> +2126` for current-eval, delta `+239`
+- Sequence after reply `b6c4`: `+1887 -> +1601`, delta `-286`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: threats -17, king_safety +52, material +100
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `2N2b1r/1b3kpp/1n6/P7/2p1P3/1p2B3/1P3PPP/R2QKB1R w KQ - 0 20`
+
+- Engine re-search: `d1f3` score `2381`
+
+- Engine played-move constrained score: `2371`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `2371`, delta `+0`
+- Engine reference-move SEE: `-230`
+
+- Reference bestmove: `f1c4` score `1376`
+
+### 14. Game 50, ply 18: c6d4 (Nxd4)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+97 -> +390` for current-eval, delta `+293`
+- Sequence after reply `f3d4`: `+97 -> -135`, delta `-232`
+- Engine recaptures available: `none`
+- Material: `N` captures `P` for `100` cp
+- Component movement: bishop_quality -11, material +100, threats +133
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `r1bq1k1r/ppp2ppp/2nbp3/8/2PP4/5N2/PP2QPPP/RNB2RK1 b - - 0 11`
+
+- Engine re-search: `c6d4` score `88`
+
+- Engine played-move constrained score: `88`
+- Engine played-move SEE: `-220`
+- Engine reference-move constrained score: `18`, delta `-70`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `b7b6` score `-131`
+- Reference played-move score: `-434`, delta `+303`
+
+### 15. Game 80, ply 74: e4f4 (Rxf4+)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+740 -> +1137` for current-eval, delta `+397`
+- Sequence after reply `f3f4`: `+740 -> +528`, delta `-212`
+- Engine recaptures available: `none`
+- Material: `R` captures `B` for `330` cp
+- Component movement: rook_files -16, pawn_dynamics -2, center_control -1, mobility +21, material +330
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `1k6/pp3ppp/8/P2pr1PR/3prB2/5K2/R7/8 b - - 5 39`
+
+- Engine re-search: `h7h6` score `429`
+
+- Engine played-move constrained score: `401`
+- Engine played-move SEE: `-170`
+- Engine reference-move constrained score: `344`, delta `-57`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `b8c7` score `-279`
+- Reference played-move score: `-321`, delta `+42`
+
+### 16. Game 5, ply 28: c4e6 (Bxe6)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+426 -> +679` for current-eval, delta `+253`
+- Sequence after reply `d7e6`: `+426 -> +219`, delta `-207`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: bishop_quality -3, pawn_dynamics -3, king_safety +39, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `2r1k1nr/2Bbb3/p3pp2/1p4pp/2BP4/2N1P3/PP3PPP/R3K2R w KQk - 1 16`
+
+- Engine re-search: `c4e6` score `184`
+
+- Engine played-move constrained score: `184`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `102`, delta `-82`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `c4b3` score `-316`
+- Reference played-move score: `-349`, delta `+33`
+
+### 17. Game 31, ply 30: d3c4 (Bxc4)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+20 -> +110` for current-eval, delta `+90`
+- Sequence after reply `d5c4`: `+20 -> -186`, delta `-206`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: threats -30, space -4, bishop_quality -4, mobility -3, king_safety +15, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `2kr3r/1p2npp1/pn2b3/q2pP2p/2pP4/2NB2Q1/P1P1N1PP/1R3RK1 w - - 4 17`
+
+- Engine re-search: `g3g7` score `-26`
+
+- Engine played-move constrained score: `-124`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `-179`, delta `-55`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `g3g5` score `-271`
+- Reference played-move score: `-413`, delta `+142`
+
+### 18. Game 55, ply 108: g3f4 (Bxf4)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `-93 -> +204` for current-eval, delta `+297`
+- Sequence after reply `d4f4`: `-93 -> -208`, delta `-115`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: pawn_dynamics -4, material +100, threats +166
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `1r3bk1/6p1/4p3/2p5/3q1p2/P1RPRPBP/1P4P1/1K6 w - - 0 55`
+
+- Engine re-search: `g3f4` score `-191`
+
+- Engine played-move constrained score: `-191`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `-191`, delta `+0`
+- Engine reference-move SEE: `-230`
+
+- Reference bestmove: `g3f4` score `-585`
+
+### 19. Game 71, ply 36: b3c4 (Bxc4)
+
+- Categories: `opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see`
+- Score: `+420 -> +578` for current-eval, delta `+158`
+- Sequence after reply `e5c4`: `+420 -> +196`, delta `-224`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: threats -18, space -2, center_control -1, king_safety +26, material +100
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `1rb2b1r/p2k1Pp1/3p3p/1p2n3/2p2N2/1B2B3/PPP2PPP/R1K4R w - - 0 20`
+
+- Engine re-search: `e3a7` score `236`
+
+- Engine played-move constrained score: `232`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `205`, delta `-27`
+- Engine reference-move SEE: `100`
+
+- Reference bestmove: `e3a7` score `-133`
+- Reference played-move score: `-209`, delta `+76`
+
+### 20. Game 17, ply 16: e5c6 (Nxc6)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+296 -> +440` for current-eval, delta `+144`
+- Sequence after reply `d7c6`: `+296 -> +101`, delta `-195`
+- Engine recaptures available: `none`
+- Material: `N` captures `P` for `100` cp
+- Component movement: pawn_structure -12, threats +14, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `r1b1k2r/2ppqpp1/2p2n2/p1b1N3/4PP1p/2N2Q2/PPPP2PP/R1B2R1K w kq - 0 11`
+
+- Engine re-search: `e5d3` score `255`
+
+- Engine played-move constrained score: `240`
+- Engine played-move SEE: `-220`
+- Engine reference-move constrained score: `170`, delta `-70`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `h2h3` score `102`
+- Reference played-move score: `-225`, delta `+327`
+
+### 21. Game 65, ply 46: d6d7 (Rxd7+)
+
+- Categories: `opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `+1191 -> +1532` for current-eval, delta `+341`
+- Sequence after reply `e7d7`: `+1191 -> +1002`, delta `-189`
+- Engine recaptures available: `none`
+- Material: `R` captures `N` for `320` cp
+- Component movement: threats -53, king_safety +17, material +320
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `1r6/3nk1p1/p2R1p1p/1b2p3/2N5/5P2/PP1KPBPP/5B1R w - - 2 25`
+
+- Engine re-search: `d6d7` score `910`
+
+- Engine played-move constrained score: `910`
+- Engine played-move SEE: `-180`
+- Engine reference-move constrained score: `910`, delta `+0`
+- Engine reference-move SEE: `-180`
+
+- Reference bestmove: `d6d7` score `639`
+
+### 22. Game 56, ply 31: f4d5 (Nxd5)
+
+- Categories: `recapture-trade, opponent-recapture, bad-trade-sequence, played-negative-see, reference-negative-see`
+- Score: `+348 -> +549` for current-eval, delta `+201`
+- Sequence after reply `c3d5`: `+348 -> +174`, delta `-174`
+- Engine recaptures available: `none`
+- Material: `N` captures `P` for `100` cp
+- Component movement: mobility -11, space -5, safe_mobility -2, threats +43, material +100
+- Result: `1/2-1/2` `draw:threefold_repetition`
+- FEN before: `r2qkb1r/pppbppp1/8/2pP4/5nP1/2N1PN2/PPQ5/R3KBR1 b Qkq - 0 16`
+
+- Engine re-search: `f4d5` score `326`
+
+- Engine played-move constrained score: `326`
+- Engine played-move SEE: `-220`
+- Engine reference-move constrained score: `326`, delta `+0`
+- Engine reference-move SEE: `-220`
+
+- Reference bestmove: `f4d5` score `-188`
+
+### 23. Game 63, ply 26: g5f6 (Bxf6)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+59 -> +266` for current-eval, delta `+207`
+- Sequence after reply `g7f6`: `+59 -> -87`, delta `-146`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: threats -21, mobility -5, center_control -5, king_safety +58, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `r3k2r/ppp1b1pp/5p2/6Bq/6b1/3P1N2/PPP3PP/R3QK1R w kq - 0 16`
+
+- Engine re-search: `g5f6` score `-95`
+
+- Engine played-move constrained score: `-95`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `-170`, delta `-75`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `g5h4` score `-342`
+- Reference played-move score: `-481`, delta `+139`
+
+### 24. Game 37, ply 44: f7e7 (Rxe7)
+
+- Categories: `recapture-trade, opponent-recapture, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+1871 -> +2145` for current-eval, delta `+274`
+- Sequence after reply `c5e7`: `+1871 -> +1700`, delta `-171`
+- Engine recaptures available: `none`
+- Material: `R` captures `N` for `320` cp
+- Component movement: threats -48, pawn_structure -37, rook_files -9, king_safety -4, mobility +17, material +320
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `8/4nR2/p5P1/1pb1p1pk/8/1B6/PPPP2PP/R1B4K w - - 1 25`
+
+- Engine re-search: `f7e7` score `2226`
+
+- Engine played-move constrained score: `2226`
+- Engine played-move SEE: `-180`
+- Engine reference-move constrained score: `2166`, delta `-60`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `g6g7` score `1189`
+- Reference played-move score: `1274`, delta `-85`
+
+### 25. Game 3, ply 74: f3g5 (Nxg5)
+
+- Categories: `opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-can-avoid-negative-see`
+- Score: `+821 -> +1055` for current-eval, delta `+234`
+- Sequence after reply `f6g5`: `+821 -> +650`, delta `-171`
+- Engine recaptures available: `none`
+- Material: `N` captures `P` for `100` cp
+- Component movement: mobility -7, king_safety +61, material +100
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `2r5/R1p2qk1/1p1Qbp2/4p1p1/4P3/5NPp/PPP2P1P/3R3K w - - 1 40`
+
+- Engine re-search: `d6a3` score `857`
+
+- Engine played-move constrained score: `793`
+- Engine played-move SEE: `-220`
+- Engine reference-move constrained score: `857`, delta `+64`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `d6d3` score `457`
+- Reference played-move score: `213`, delta `+244`
+
+
+## Engine Prefers Negative SEE
+
+### 1. Game 73, ply 64: h1h7 (Rxh7+)
+
+- Categories: `opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+1531 -> +1699` for current-eval, delta `+168`
+- Sequence after reply `g7h7`: `+1531 -> +1149`, delta `-382`
+- Engine recaptures available: `none`
+- Material: `R` captures `P` for `100` cp
+- Component movement: threats -28, pawn_structure -18, pawn_dynamics -10, mobility -4, piece_square +72, material +100
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `1r6/1Q3Nkp/p7/4b3/2P5/8/PP3PP1/1K5R w - - 1 36`
+
+- Engine re-search: `h1h7` score `1643`
+
+- Engine played-move constrained score: `1643`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `1501`, delta `-142`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `b7d7` score `889`
+- Reference played-move score: `1075`, delta `-186`
+
+### 2. Game 25, ply 16: b7b6 (Qxb6)
+
+- Categories: `opponent-recapture, recapture-trade, queen-trade-sequence, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+557 -> +1044` for current-eval, delta `+487`
+- Sequence after reply `c7b6`: `+557 -> +278`, delta `-279`
+- Engine recaptures available: `none`
+- Material: `Q` captures `R` for `500` cp
+- Component movement: threats -37, space -6, king_safety -5, center_control -3, mobility +15, material +500
+- Result: `1/2-1/2` `draw:threefold_repetition`
+- FEN before: `1n1qk2r/1Qpb1ppp/1r3n2/p7/1B1P4/8/PP2PPPP/RN2KBNR w KQk - 1 10`
+
+- Engine re-search: `b7b6` score `290`
+
+- Engine played-move constrained score: `290`
+- Engine played-move SEE: `-400`
+- Engine reference-move constrained score: `254`, delta `-36`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `b7f3` score `117`
+- Reference played-move score: `-66`, delta `+183`
+
+### 3. Game 50, ply 18: c6d4 (Nxd4)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+97 -> +390` for current-eval, delta `+293`
+- Sequence after reply `f3d4`: `+97 -> -135`, delta `-232`
+- Engine recaptures available: `none`
+- Material: `N` captures `P` for `100` cp
+- Component movement: bishop_quality -11, material +100, threats +133
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `r1bq1k1r/ppp2ppp/2nbp3/8/2PP4/5N2/PP2QPPP/RNB2RK1 b - - 0 11`
+
+- Engine re-search: `c6d4` score `88`
+
+- Engine played-move constrained score: `88`
+- Engine played-move SEE: `-220`
+- Engine reference-move constrained score: `18`, delta `-70`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `b7b6` score `-131`
+- Reference played-move score: `-434`, delta `+303`
+
+### 4. Game 80, ply 74: e4f4 (Rxf4+)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+740 -> +1137` for current-eval, delta `+397`
+- Sequence after reply `f3f4`: `+740 -> +528`, delta `-212`
+- Engine recaptures available: `none`
+- Material: `R` captures `B` for `330` cp
+- Component movement: rook_files -16, pawn_dynamics -2, center_control -1, mobility +21, material +330
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `1k6/pp3ppp/8/P2pr1PR/3prB2/5K2/R7/8 b - - 5 39`
+
+- Engine re-search: `h7h6` score `429`
+
+- Engine played-move constrained score: `401`
+- Engine played-move SEE: `-170`
+- Engine reference-move constrained score: `344`, delta `-57`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `b8c7` score `-279`
+- Reference played-move score: `-321`, delta `+42`
+
+### 5. Game 5, ply 28: c4e6 (Bxe6)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+426 -> +679` for current-eval, delta `+253`
+- Sequence after reply `d7e6`: `+426 -> +219`, delta `-207`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: bishop_quality -3, pawn_dynamics -3, king_safety +39, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `2r1k1nr/2Bbb3/p3pp2/1p4pp/2BP4/2N1P3/PP3PPP/R3K2R w KQk - 1 16`
+
+- Engine re-search: `c4e6` score `184`
+
+- Engine played-move constrained score: `184`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `102`, delta `-82`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `c4b3` score `-316`
+- Reference played-move score: `-349`, delta `+33`
+
+### 6. Game 31, ply 30: d3c4 (Bxc4)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+20 -> +110` for current-eval, delta `+90`
+- Sequence after reply `d5c4`: `+20 -> -186`, delta `-206`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: threats -30, space -4, bishop_quality -4, mobility -3, king_safety +15, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `2kr3r/1p2npp1/pn2b3/q2pP2p/2pP4/2NB2Q1/P1P1N1PP/1R3RK1 w - - 4 17`
+
+- Engine re-search: `g3g7` score `-26`
+
+- Engine played-move constrained score: `-124`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `-179`, delta `-55`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `g3g5` score `-271`
+- Reference played-move score: `-413`, delta `+142`
+
+### 7. Game 17, ply 16: e5c6 (Nxc6)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+296 -> +440` for current-eval, delta `+144`
+- Sequence after reply `d7c6`: `+296 -> +101`, delta `-195`
+- Engine recaptures available: `none`
+- Material: `N` captures `P` for `100` cp
+- Component movement: pawn_structure -12, threats +14, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `r1b1k2r/2ppqpp1/2p2n2/p1b1N3/4PP1p/2N2Q2/PPPP2PP/R1B2R1K w kq - 0 11`
+
+- Engine re-search: `e5d3` score `255`
+
+- Engine played-move constrained score: `240`
+- Engine played-move SEE: `-220`
+- Engine reference-move constrained score: `170`, delta `-70`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `h2h3` score `102`
+- Reference played-move score: `-225`, delta `+327`
+
+### 8. Game 63, ply 26: g5f6 (Bxf6)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+59 -> +266` for current-eval, delta `+207`
+- Sequence after reply `g7f6`: `+59 -> -87`, delta `-146`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: threats -21, mobility -5, center_control -5, king_safety +58, material +100
+- Result: `0-1` `black_win:checkmate`
+- FEN before: `r3k2r/ppp1b1pp/5p2/6Bq/6b1/3P1N2/PPP3PP/R3QK1R w kq - 0 16`
+
+- Engine re-search: `g5f6` score `-95`
+
+- Engine played-move constrained score: `-95`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `-170`, delta `-75`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `g5h4` score `-342`
+- Reference played-move score: `-481`, delta `+139`
+
+### 9. Game 37, ply 44: f7e7 (Rxe7)
+
+- Categories: `recapture-trade, opponent-recapture, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+1871 -> +2145` for current-eval, delta `+274`
+- Sequence after reply `c5e7`: `+1871 -> +1700`, delta `-171`
+- Engine recaptures available: `none`
+- Material: `R` captures `N` for `320` cp
+- Component movement: threats -48, pawn_structure -37, rook_files -9, king_safety -4, mobility +17, material +320
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `8/4nR2/p5P1/1pb1p1pk/8/1B6/PPPP2PP/R1B4K w - - 1 25`
+
+- Engine re-search: `f7e7` score `2226`
+
+- Engine played-move constrained score: `2226`
+- Engine played-move SEE: `-180`
+- Engine reference-move constrained score: `2166`, delta `-60`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `g6g7` score `1189`
+- Reference played-move score: `1274`, delta `-85`
+
+### 10. Game 1, ply 27: e4b7 (Bxb7)
+
+- Categories: `opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `+520 -> +838` for current-eval, delta `+318`
+- Sequence after reply `c8b7`: `+520 -> +364`, delta `-156`
+- Engine recaptures available: `none`
+- Material: `B` captures `P` for `100` cp
+- Component movement: threats +92, material +100
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `r1bq1k1r/1p4p1/p3p3/2p2p1p/4Bb2/2NP1N2/PPP2PPP/R2QR1K1 w - - 0 14`
+
+- Engine re-search: `e4b7` score `563`
+
+- Engine played-move constrained score: `563`
+- Engine played-move SEE: `-230`
+- Engine reference-move constrained score: `438`, delta `-125`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `g2g3` score `387`
+- Reference played-move score: `181`, delta `+206`
+
+### 11. Game 28, ply 66: c7c4 (Rxc4)
+
+- Categories: `engine-loss, opponent-recapture, recapture-trade, bad-trade-sequence, played-negative-see, engine-prefers-negative-see`
+- Score: `-194 -> +144` for current-eval, delta `+338`
+- Sequence after reply `d3c4`: `-194 -> -321`, delta `-127`
+- Engine recaptures available: `none`
+- Material: `R` captures `B` for `330` cp
+- Component movement: threats -69, center_control -1, bishop_quality +36, material +330
+- Result: `1-0` `white_win:checkmate`
+- FEN before: `k7/2r2ppp/p4n2/4p3/2BbP2P/3P2B1/P3KPP1/1R6 b - - 1 34`
+
+- Engine re-search: `c7c4` score `-102`
+
+- Engine played-move constrained score: `-102`
+- Engine played-move SEE: `-170`
+- Engine reference-move constrained score: `-218`, delta `-116`
+- Engine reference-move SEE: `0`
+
+- Reference bestmove: `a8a7` score `-215`
+- Reference played-move score: `-321`, delta `+106`
 
 
 ## Loss-Game Watchlist

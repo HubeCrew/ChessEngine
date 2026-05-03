@@ -16,7 +16,9 @@
     "engine_prefers_played": 36,
     "engine_ties_reference": 65,
     "engine_played_negative_see": 32,
-    "engine_reference_negative_see": 18
+    "engine_reference_negative_see": 18,
+    "engine_prefers_negative_see": 11,
+    "engine_can_avoid_negative_see": 2
   },
   "events": [
     {
@@ -3511,9 +3513,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 994,
+      "severity": 1074,
       "engine_bestmove": "d4d7",
       "engine_bestmove_score_cp": -175,
       "engine_played_score_cp": -175,
@@ -3617,7 +3621,8 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "reference-negative-see"
       ],
       "severity": 896,
       "engine_bestmove": "e8e7",
@@ -3722,9 +3727,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-can-avoid-negative-see"
       ],
-      "severity": 889,
+      "severity": 1029,
       "engine_bestmove": "b5c3",
       "engine_bestmove_score_cp": 469,
       "engine_played_score_cp": 288,
@@ -4353,9 +4360,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 847,
+      "severity": 927,
       "engine_bestmove": "c5f8",
       "engine_bestmove_score_cp": -899996,
       "engine_played_score_cp": -899996,
@@ -4881,9 +4890,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 772,
+      "severity": 852,
       "engine_bestmove": "c4f1",
       "engine_bestmove_score_cp": -899996,
       "engine_played_score_cp": -899996,
@@ -4986,9 +4997,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 745,
+      "severity": 825,
       "engine_bestmove": "c6e8",
       "engine_bestmove_score_cp": 2257,
       "engine_played_score_cp": 2257,
@@ -5092,9 +5105,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 743,
+      "severity": 823,
       "engine_bestmove": "a5a7",
       "engine_bestmove_score_cp": -442,
       "engine_played_score_cp": -442,
@@ -5304,9 +5319,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 736,
+      "severity": 816,
       "engine_bestmove": "c1c2",
       "engine_bestmove_score_cp": -1022,
       "engine_played_score_cp": -1022,
@@ -6246,9 +6263,11 @@
       "categories": [
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 652,
+      "severity": 822,
       "engine_bestmove": "h1h7",
       "engine_bestmove_score_cp": 1643,
       "engine_played_score_cp": 1643,
@@ -6352,9 +6371,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 642,
+      "severity": 722,
       "engine_bestmove": "c8d8",
       "engine_bestmove_score_cp": -1010,
       "engine_played_score_cp": -1010,
@@ -6564,9 +6585,11 @@
         "recapture-trade",
         "opponent-recapture",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 640,
+      "severity": 720,
       "engine_bestmove": "c6c8",
       "engine_bestmove_score_cp": 35,
       "engine_played_score_cp": 35,
@@ -6669,9 +6692,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 639,
+      "severity": 809,
       "engine_bestmove": "b7b6",
       "engine_bestmove_score_cp": 290,
       "engine_played_score_cp": 290,
@@ -7830,9 +7855,10 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see"
       ],
-      "severity": 556,
+      "severity": 611,
       "engine_bestmove": "h7f6",
       "engine_bestmove_score_cp": 478,
       "engine_played_score_cp": 478,
@@ -7934,9 +7960,11 @@
       "categories": [
         "recapture-trade",
         "opponent-recapture",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 556,
+      "severity": 613,
       "engine_bestmove": "d1f3",
       "engine_bestmove_score_cp": 2381,
       "engine_played_score_cp": 2371,
@@ -8779,9 +8807,11 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 527,
+      "severity": 672,
       "engine_bestmove": "c6d4",
       "engine_bestmove_score_cp": 88,
       "engine_played_score_cp": 88,
@@ -9310,9 +9340,11 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 507,
+      "severity": 639,
       "engine_bestmove": "h7h6",
       "engine_bestmove_score_cp": 429,
       "engine_played_score_cp": 401,
@@ -9415,9 +9447,11 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 502,
+      "severity": 649,
       "engine_bestmove": "c4e6",
       "engine_bestmove_score_cp": 184,
       "engine_played_score_cp": 184,
@@ -9520,9 +9554,11 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 501,
+      "severity": 648,
       "engine_bestmove": "g3g7",
       "engine_bestmove_score_cp": -26,
       "engine_played_score_cp": -124,
@@ -9730,9 +9766,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 500,
+      "severity": 557,
       "engine_bestmove": "g3f4",
       "engine_bestmove_score_cp": -191,
       "engine_played_score_cp": -191,
@@ -9834,9 +9872,10 @@
       "categories": [
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see"
       ],
-      "severity": 494,
+      "severity": 551,
       "engine_bestmove": "e3a7",
       "engine_bestmove_score_cp": 236,
       "engine_played_score_cp": 232,
@@ -10043,9 +10082,11 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 490,
+      "severity": 635,
       "engine_bestmove": "e5d3",
       "engine_bestmove_score_cp": 255,
       "engine_played_score_cp": 240,
@@ -10358,7 +10399,8 @@
       "categories": [
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "reference-negative-see"
       ],
       "severity": 486,
       "engine_bestmove": "e5f3",
@@ -10886,9 +10928,11 @@
       "categories": [
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 459,
+      "severity": 504,
       "engine_bestmove": "d6d7",
       "engine_bestmove_score_cp": 910,
       "engine_played_score_cp": 910,
@@ -11198,9 +11242,11 @@
       "categories": [
         "recapture-trade",
         "opponent-recapture",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 444,
+      "severity": 499,
       "engine_bestmove": "f4d5",
       "engine_bestmove_score_cp": 326,
       "engine_played_score_cp": 326,
@@ -11303,9 +11349,11 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 441,
+      "severity": 588,
       "engine_bestmove": "g5f6",
       "engine_bestmove_score_cp": -95,
       "engine_played_score_cp": -95,
@@ -11407,9 +11455,11 @@
       "categories": [
         "recapture-trade",
         "opponent-recapture",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 441,
+      "severity": 576,
       "engine_bestmove": "f7e7",
       "engine_bestmove_score_cp": 2226,
       "engine_played_score_cp": 2226,
@@ -11511,9 +11561,11 @@
       "categories": [
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-can-avoid-negative-see"
       ],
-      "severity": 441,
+      "severity": 556,
       "engine_bestmove": "d6a3",
       "engine_bestmove_score_cp": 857,
       "engine_played_score_cp": 793,
@@ -11616,9 +11668,11 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 437,
+      "severity": 494,
       "engine_bestmove": "e5g7",
       "engine_bestmove_score_cp": -899996,
       "engine_played_score_cp": -899996,
@@ -11721,9 +11775,11 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 434,
+      "severity": 491,
       "engine_bestmove": "g6f7",
       "engine_bestmove_score_cp": 213,
       "engine_played_score_cp": 213,
@@ -11929,9 +11985,11 @@
       "categories": [
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 426,
+      "severity": 573,
       "engine_bestmove": "e4b7",
       "engine_bestmove_score_cp": 563,
       "engine_played_score_cp": 563,
@@ -12034,9 +12092,11 @@
         "opponent-recapture",
         "recapture-trade",
         "queen-trade-sequence",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 424,
+      "severity": 466,
       "engine_bestmove": "e5e4",
       "engine_bestmove_score_cp": 101,
       "engine_played_score_cp": 101,
@@ -12139,9 +12199,11 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "engine-prefers-negative-see"
       ],
-      "severity": 422,
+      "severity": 554,
       "engine_bestmove": "c7c4",
       "engine_bestmove_score_cp": -102,
       "engine_played_score_cp": -102,
@@ -12243,9 +12305,11 @@
       "categories": [
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see",
+        "reference-negative-see"
       ],
-      "severity": 421,
+      "severity": 478,
       "engine_bestmove": "d3c4",
       "engine_bestmove_score_cp": 213,
       "engine_played_score_cp": 213,
@@ -12557,9 +12621,10 @@
         "engine-loss",
         "opponent-recapture",
         "recapture-trade",
-        "bad-trade-sequence"
+        "bad-trade-sequence",
+        "played-negative-see"
       ],
-      "severity": 413,
+      "severity": 455,
       "engine_bestmove": "f1f6",
       "engine_bestmove_score_cp": 705,
       "engine_played_score_cp": 705,

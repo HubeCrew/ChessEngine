@@ -2,6 +2,8 @@
 
 Engine-first C++20 chess project. The current foundation is a validated chess rules core, a small search engine, a perft tool, and a minimal UCI-compatible command-line engine.
 
+The project engineering approach is documented in [docs/ENGINEERING_APPROACH.md](docs/ENGINEERING_APPROACH.md). Future strength work should preserve that bigger-picture workflow: diagnose repeated failure classes first, keep tactical strength as a guardrail, and avoid narrow fixes that only patch one benchmark.
+
 ## Build
 
 ```bash

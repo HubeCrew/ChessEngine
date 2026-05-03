@@ -91,6 +91,9 @@ def main() -> int:
         if "engine_played_negative_see" not in payload["summary"]:
             print(f"missing SEE summary: {payload['summary']}", file=sys.stderr)
             return 1
+        if "engine_prefers_negative_see" not in payload["summary"]:
+            print(f"missing SEE preference summary: {payload['summary']}", file=sys.stderr)
+            return 1
         if not rows:
             print("expected at least one CSV event", file=sys.stderr)
             return 1
@@ -111,6 +114,9 @@ def main() -> int:
             print(report, file=sys.stderr)
             return 1
         if "Engine played-move SEE" not in report:
+            print(report, file=sys.stderr)
+            return 1
+        if "Negative SEE Capture Audit" not in report:
             print(report, file=sys.stderr)
             return 1
         if "postmortem-0001" not in positions or " bm " not in positions:
