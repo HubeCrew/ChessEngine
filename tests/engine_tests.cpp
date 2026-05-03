@@ -40,6 +40,14 @@ chess::Move legal_move_by_uci(chess::Board& board, const std::string& uci) {
     return *found;
 }
 
+bool trusted_move_gives_check(chess::Board board, const chess::Move& move) {
+    const chess::Color moving_side = board.side_to_move();
+    const chess::UndoState undo = board.make_move(move);
+    const bool gives_check = board.in_check(chess::opposite(moving_side));
+    board.unmake_move(undo);
+    return gives_check;
+}
+
 }  // namespace
 
 TEST_CASE("hash is restored after every root move") {
@@ -142,6 +150,25 @@ TEST_CASE("search detects mate when the mated side has pseudo-legal evasions onl
     const chess::engine::SearchResult result = searcher.search(before_mate, chess::engine::SearchLimits{2});
 
     REQUIRE(chess::move_to_uci(result.best_move) == "f1f8");
+}
+
+TEST_CASE("direct check detection matches make-unmake oracle") {
+    for (const char* fen : {
+             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+             "4k3/8/8/8/8/2N5/8/4K3 w - - 0 1",
+             "4k3/8/8/8/8/8/4B3/R3K3 w Q - 0 1",
+             "5k2/8/8/8/8/8/8/4K2R w K - 0 1",
+             "4k3/8/8/3pP3/8/8/8/4R2K w - d6 0 1",
+             "4k2r/6P1/8/8/8/8/8/K7 w - - 0 1",
+         }) {
+        chess::Board board = chess::board_from_fen(fen);
+        INFO(fen);
+        for (const chess::Move& move : chess::generate_legal_moves(board)) {
+            INFO(chess::move_to_uci(move));
+            REQUIRE(chess::engine::move_gives_check(board, move) == trusted_move_gives_check(board, move));
+            REQUIRE(board.hash_key() == board.recompute_hash());
+        }
+    }
 }
 
 TEST_CASE("hash table can be resized and cleared through searcher") {

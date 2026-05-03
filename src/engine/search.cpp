@@ -10,11 +10,84 @@
 #include <utility>
 #include <vector>
 
+#include "chess/core/attacks.h"
 #include "chess/core/movegen.h"
 #include "chess/engine/evaluation.h"
 #include "chess/engine/static_exchange.h"
 
 namespace chess::engine {
+
+bool move_gives_check(const Board& board, const Move& move) {
+    if (!is_valid_square(move.from) || !is_valid_square(move.to)) {
+        return false;
+    }
+
+    const Piece moved = board.piece_at(move.from);
+    if (moved == Piece::None) {
+        return false;
+    }
+
+    const Color moving_side = board.side_to_move();
+    const Color enemy = opposite(moving_side);
+    const Square enemy_king = board.king_square(enemy);
+    if (!is_valid_square(enemy_king)) {
+        return false;
+    }
+
+    if (move.is_castling() || (move.flags & EnPassant) != 0) {
+        Board copy = board;
+        const UndoState undo = copy.make_move(move);
+        const bool gives_check = copy.in_check(enemy);
+        copy.unmake_move(undo);
+        return gives_check;
+    }
+
+    const Bitboard from_bit = square_bb(move.from);
+    const Bitboard to_bit = square_bb(move.to);
+    Bitboard occupancy_after = board.occupancy();
+    occupancy_after &= ~from_bit;
+    occupancy_after |= to_bit;
+
+    const PieceType moved_type = move.is_promotion() ? move.promotion : type_of(moved);
+    if ((attacks::piece_attacks(moved_type, moving_side, move.to, occupancy_after) & square_bb(enemy_king)) != 0) {
+        return true;
+    }
+
+    Bitboard bishops = board.pieces(moving_side, PieceType::Bishop);
+    Bitboard rooks = board.pieces(moving_side, PieceType::Rook);
+    Bitboard queens = board.pieces(moving_side, PieceType::Queen);
+
+    switch (type_of(moved)) {
+        case PieceType::Bishop:
+            bishops &= ~from_bit;
+            break;
+        case PieceType::Rook:
+            rooks &= ~from_bit;
+            break;
+        case PieceType::Queen:
+            queens &= ~from_bit;
+            break;
+        default:
+            break;
+    }
+
+    switch (moved_type) {
+        case PieceType::Bishop:
+            bishops |= to_bit;
+            break;
+        case PieceType::Rook:
+            rooks |= to_bit;
+            break;
+        case PieceType::Queen:
+            queens |= to_bit;
+            break;
+        default:
+            break;
+    }
+
+    return (attacks::bishop_attacks(enemy_king, occupancy_after) & (bishops | queens)) != 0
+        || (attacks::rook_attacks(enemy_king, occupancy_after) & (rooks | queens)) != 0;
+}
 
 namespace {
 
@@ -147,14 +220,6 @@ bool can_try_null_move(const Board& board, int depth, int ply, int alpha, int be
         && beta < kMateScore - kMateWindow
         && alpha > -kMateScore + kMateWindow
         && non_pawn_material(board, board.side_to_move()) >= kNullMoveMinMaterial;
-}
-
-bool move_gives_check(Board& board, const Move& move) {
-    const Color moving_side = board.side_to_move();
-    const UndoState undo = board.make_move(move);
-    const bool gives_check = board.in_check(opposite(moving_side));
-    board.unmake_move(undo);
-    return gives_check;
 }
 
 bool move_is_legal_after_make(const Board& board, Color moving_side) {

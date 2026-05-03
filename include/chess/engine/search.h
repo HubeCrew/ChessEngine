@@ -33,6 +33,8 @@ struct SearchResult {
     std::vector<Move> principal_variation;
 };
 
+[[nodiscard]] bool move_gives_check(const Board& board, const Move& move);
+
 class Searcher {
 public:
     Searcher();
