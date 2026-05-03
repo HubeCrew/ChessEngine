@@ -94,124 +94,36 @@ void push_unique(MoveList& moves, const Move& move) {
     }
 }
 
-void add_pawn_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard target_mask = kAllSquares) {
-    const int file = file_of(from);
+void add_pawn_pushes(
+    const Board& board,
+    MoveList& moves,
+    Square from,
+    Color color,
+    Bitboard target_mask,
+    bool include_quiet_moves,
+    bool include_promotions
+) {
     const int rank = rank_of(from);
     const int forward = color == Color::White ? 8 : -8;
     const int start_rank = color == Color::White ? 1 : 6;
     const int promotion_from_rank = color == Color::White ? 6 : 1;
 
     const Square one_forward = from + forward;
-    if (is_valid_square(one_forward) && board.piece_at(one_forward) == Piece::None) {
-        const bool one_forward_allowed = (target_mask & square_bb(one_forward)) != 0;
-        if (rank == promotion_from_rank && one_forward_allowed) {
-            add_promotion_moves(moves, from, one_forward, Quiet);
-        } else if (rank != promotion_from_rank) {
-            if (one_forward_allowed) {
-                moves.push_back(Move{from, one_forward, PieceType::None, Quiet});
-            }
-            const Square two_forward = from + 2 * forward;
-            if (rank == start_rank
-                && is_valid_square(two_forward)
-                && board.piece_at(two_forward) == Piece::None
-                && (target_mask & square_bb(two_forward)) != 0) {
-                moves.push_back(Move{from, two_forward, PieceType::None, DoublePawnPush});
-            }
-        }
-    }
-
-    const std::array<int, 2> capture_offsets = color == Color::White
-        ? std::array<int, 2>{7, 9}
-        : std::array<int, 2>{-9, -7};
-
-    for (const int offset : capture_offsets) {
-        if ((offset == 7 || offset == -9) && file == 0) {
-            continue;
-        }
-        if ((offset == 9 || offset == -7) && file == 7) {
-            continue;
-        }
-
-        const Square to = from + offset;
-        if (!is_valid_square(to)) {
-            continue;
-        }
-
-        const bool target_allowed = (target_mask & square_bb(to)) != 0;
-        if (target_allowed && has_enemy_piece(board, to, color) && !is_enemy_king(board, to, color)) {
-            if (rank == promotion_from_rank) {
-                add_promotion_moves(moves, from, to, Capture);
-            } else {
-                moves.push_back(Move{from, to, PieceType::None, Capture});
-            }
-        } else if (to == board.en_passant_square()) {
-            const Square captured_square = color == Color::White ? to - 8 : to + 8;
-            if (target_allowed || (is_valid_square(captured_square) && (target_mask & square_bb(captured_square)) != 0)) {
-                moves.push_back(Move{from, to, PieceType::None, static_cast<std::uint8_t>(Capture | EnPassant)});
-            }
-        }
-    }
-}
-
-void add_pawn_noisy_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard target_mask = kAllSquares) {
-    const int file = file_of(from);
-    const int rank = rank_of(from);
-    const int forward = color == Color::White ? 8 : -8;
-    const int promotion_from_rank = color == Color::White ? 6 : 1;
-
-    const Square one_forward = from + forward;
-    if (rank == promotion_from_rank
-        && is_valid_square(one_forward)
-        && board.piece_at(one_forward) == Piece::None
-        && (target_mask & square_bb(one_forward)) != 0) {
-        add_promotion_moves(moves, from, one_forward, Quiet);
-    }
-
-    const std::array<int, 2> capture_offsets = color == Color::White
-        ? std::array<int, 2>{7, 9}
-        : std::array<int, 2>{-9, -7};
-
-    for (const int offset : capture_offsets) {
-        if ((offset == 7 || offset == -9) && file == 0) {
-            continue;
-        }
-        if ((offset == 9 || offset == -7) && file == 7) {
-            continue;
-        }
-
-        const Square to = from + offset;
-        if (!is_valid_square(to)) {
-            continue;
-        }
-
-        const bool target_allowed = (target_mask & square_bb(to)) != 0;
-        if (target_allowed && has_enemy_piece(board, to, color) && !is_enemy_king(board, to, color)) {
-            if (rank == promotion_from_rank) {
-                add_promotion_moves(moves, from, to, Capture);
-            } else {
-                moves.push_back(Move{from, to, PieceType::None, Capture});
-            }
-        } else if (to == board.en_passant_square()) {
-            const Square captured_square = color == Color::White ? to - 8 : to + 8;
-            if (target_allowed || (is_valid_square(captured_square) && (target_mask & square_bb(captured_square)) != 0)) {
-                moves.push_back(Move{from, to, PieceType::None, static_cast<std::uint8_t>(Capture | EnPassant)});
-            }
-        }
-    }
-}
-
-void add_pawn_quiet_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard target_mask = kAllSquares) {
-    const int rank = rank_of(from);
-    const int forward = color == Color::White ? 8 : -8;
-    const int start_rank = color == Color::White ? 1 : 6;
-    const int promotion_from_rank = color == Color::White ? 6 : 1;
-
-    const Square one_forward = from + forward;
-    if (!is_valid_square(one_forward) || board.piece_at(one_forward) != Piece::None || rank == promotion_from_rank) {
+    if (!is_valid_square(one_forward) || board.piece_at(one_forward) != Piece::None) {
         return;
     }
 
-    if ((target_mask & square_bb(one_forward)) != 0) {
+    const bool one_forward_allowed = (target_mask & square_bb(one_forward)) != 0;
+    if (rank == promotion_from_rank) {
+        if (include_promotions && one_forward_allowed) {
+            add_promotion_moves(moves, from, one_forward, Quiet);
+        }
+        return;
+    }
+    if (!include_quiet_moves) {
+        return;
+    }
+    if (one_forward_allowed) {
         moves.push_back(Move{from, one_forward, PieceType::None, Quiet});
     }
 
@@ -222,6 +134,66 @@ void add_pawn_quiet_moves(const Board& board, MoveList& moves, Square from, Colo
         && (target_mask & square_bb(two_forward)) != 0) {
         moves.push_back(Move{from, two_forward, PieceType::None, DoublePawnPush});
     }
+}
+
+void add_pawn_captures(
+    const Board& board,
+    MoveList& moves,
+    Square from,
+    Color color,
+    Bitboard target_mask,
+    bool include_non_promotion_captures,
+    bool include_promotion_captures,
+    bool include_en_passant
+) {
+    const int file = file_of(from);
+    const int rank = rank_of(from);
+    const int promotion_from_rank = color == Color::White ? 6 : 1;
+    const std::array<int, 2> capture_offsets = color == Color::White
+        ? std::array<int, 2>{7, 9}
+        : std::array<int, 2>{-9, -7};
+
+    for (const int offset : capture_offsets) {
+        if ((offset == 7 || offset == -9) && file == 0) {
+            continue;
+        }
+        if ((offset == 9 || offset == -7) && file == 7) {
+            continue;
+        }
+
+        const Square to = from + offset;
+        if (!is_valid_square(to)) {
+            continue;
+        }
+
+        const bool target_allowed = (target_mask & square_bb(to)) != 0;
+        if (target_allowed && has_enemy_piece(board, to, color) && !is_enemy_king(board, to, color)) {
+            if (rank == promotion_from_rank && include_promotion_captures) {
+                add_promotion_moves(moves, from, to, Capture);
+            } else if (rank != promotion_from_rank && include_non_promotion_captures) {
+                moves.push_back(Move{from, to, PieceType::None, Capture});
+            }
+        } else if (include_en_passant && to == board.en_passant_square()) {
+            const Square captured_square = color == Color::White ? to - 8 : to + 8;
+            if (target_allowed || (is_valid_square(captured_square) && (target_mask & square_bb(captured_square)) != 0)) {
+                moves.push_back(Move{from, to, PieceType::None, static_cast<std::uint8_t>(Capture | EnPassant)});
+            }
+        }
+    }
+}
+
+void add_pawn_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard target_mask = kAllSquares) {
+    add_pawn_pushes(board, moves, from, color, target_mask, true, true);
+    add_pawn_captures(board, moves, from, color, target_mask, true, true, true);
+}
+
+void add_pawn_noisy_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard target_mask = kAllSquares) {
+    add_pawn_pushes(board, moves, from, color, target_mask, false, true);
+    add_pawn_captures(board, moves, from, color, target_mask, true, true, true);
+}
+
+void add_pawn_quiet_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard target_mask = kAllSquares) {
+    add_pawn_pushes(board, moves, from, color, target_mask, true, false);
 }
 
 void add_piece_target_moves(const Board& board, MoveList& moves, Square from, Color color, Bitboard targets) {

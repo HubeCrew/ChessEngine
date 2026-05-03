@@ -225,11 +225,6 @@ int clamp_history(int value) {
     return std::clamp(value, -kHistoryLimit, kHistoryLimit);
 }
 
-enum class MovePickerMode {
-    AllMoves,
-    Quiescence,
-};
-
 enum class MovePickerStage {
     PreviousPv,
     Remainder,
@@ -238,8 +233,6 @@ enum class MovePickerStage {
 
 struct PickedMove {
     Move move;
-    bool gives_check_known = false;
-    bool gives_check = false;
     bool see_known = false;
     int see_score = 0;
 };
@@ -315,24 +308,20 @@ public:
     MovePicker(
         Board& board,
         const MoveList& moves,
-        MovePickerMode mode,
         Move previous_pv_move,
         Move tt_move,
         Move first_killer,
         Move second_killer,
-        bool allow_quiet_checks,
         bool use_see_for_ordering,
         const HistoryTable& history,
         SearchDiagnostics& diagnostics
     )
         : board_(board),
           side_to_move_(board.side_to_move()),
-          mode_(mode),
           previous_pv_move_(previous_pv_move),
           tt_move_(tt_move),
           first_killer_(first_killer),
           second_killer_(second_killer),
-          allow_quiet_checks_(allow_quiet_checks),
           use_see_for_ordering_(use_see_for_ordering),
           history_(history),
           diagnostics_(diagnostics) {
@@ -377,8 +366,6 @@ private:
         int tactical_exchange_score = 0;
         bool quiet_score_known = false;
         int quiet_score = 0;
-        bool gives_check_known = false;
-        bool gives_check = false;
         bool see_known = false;
         int see_score = 0;
     };
@@ -394,12 +381,10 @@ private:
 
     Board& board_;
     Color side_to_move_ = Color::White;
-    MovePickerMode mode_ = MovePickerMode::AllMoves;
     Move previous_pv_move_;
     Move tt_move_;
     Move first_killer_;
     Move second_killer_;
-    bool allow_quiet_checks_ = false;
     bool use_see_for_ordering_ = true;
     const HistoryTable& history_;
     SearchDiagnostics& diagnostics_;
@@ -413,7 +398,7 @@ private:
         remainder_built_ = true;
         for (std::size_t index = 0; index < moves_.size(); ++index) {
             ScoredMove& state = moves_[index];
-            if (state.emitted || !is_candidate_for_mode(state)) {
+            if (state.emitted) {
                 continue;
             }
             remainder_.emplace_back(index, move_order_score(state));
@@ -446,26 +431,13 @@ private:
         return state.is_tactical ? state.tactical_score : quiet_move_order_score(state);
     }
 
-    bool is_candidate_for_mode(ScoredMove& state) {
-        if (mode_ == MovePickerMode::AllMoves) {
-            return true;
-        }
-        if (state.move.is_capture() || state.move.is_promotion()) {
-            return true;
-        }
-        if (!allow_quiet_checks_) {
-            return false;
-        }
-        return gives_check(state);
-    }
-
     bool pick_special(const Move& move, PickedMove& picked) {
         if (!is_valid_move_shape(move)) {
             return false;
         }
         for (std::size_t index = 0; index < moves_.size(); ++index) {
             ScoredMove& state = moves_[index];
-            if (state.emitted || !same_move_identity(state.move, move) || !is_candidate_for_mode(state)) {
+            if (state.emitted || !same_move_identity(state.move, move)) {
                 continue;
             }
             emit(state, picked);
@@ -507,8 +479,6 @@ private:
         }
         picked = PickedMove{
             state.move,
-            state.gives_check_known,
-            state.gives_check,
             state.see_known,
             state.see_score,
         };
@@ -554,15 +524,6 @@ private:
             state.quiet_score = history_[color_index(side_to_move_)][state.move.from][state.move.to];
         }
         return state.quiet_score;
-    }
-
-    bool gives_check(ScoredMove& state) {
-        if (!state.gives_check_known) {
-            state.gives_check_known = true;
-            ++diagnostics_.move_gives_check_calls;
-            state.gives_check = chess::engine::move_gives_check(board_, state.move);
-        }
-        return state.gives_check;
     }
 
     int see(const Board& board, const Move& move) {
@@ -806,12 +767,10 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
     MovePicker picker{
         board,
         moves,
-        MovePickerMode::AllMoves,
         pv_move,
         tt_move,
         ply < kMaxPly ? killer_moves_[ply][0] : Move{},
         ply < kMaxPly ? killer_moves_[ply][1] : Move{},
-        false,
         true,
         history_,
         diagnostics_,
@@ -935,12 +894,10 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
     MovePicker picker{
         board,
         moves,
-        MovePickerMode::AllMoves,
         Move{},
         tt_move,
         ply < kMaxPly ? killer_moves_[ply][0] : Move{},
         ply < kMaxPly ? killer_moves_[ply][1] : Move{},
-        allow_quiet_checks,
         false,
         history_,
         diagnostics_,
@@ -962,12 +919,8 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
                 && (stand_pat + immediate_capture_gain(board, move) + kDeltaPruningMargin <= alpha
                     || needs_see_for_loss_detection(board, move));
             if (capture_needs_check_status) {
-                if (picked.gives_check_known) {
-                    gives_check = picked.gives_check;
-                } else {
-                    ++diagnostics_.move_gives_check_calls;
-                    gives_check = chess::engine::move_gives_check(board, move);
-                }
+                ++diagnostics_.move_gives_check_calls;
+                gives_check = chess::engine::move_gives_check(board, move);
             }
             if (move.is_capture() && !move.is_promotion()) {
                 if (!gives_check && stand_pat + immediate_capture_gain(board, move) + kDeltaPruningMargin <= alpha) {
