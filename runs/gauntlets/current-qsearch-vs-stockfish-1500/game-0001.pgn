@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.03"]
+[Round "1"]
+[White "current-qsearch"]
+[Black "stockfish-1500"]
+[Result "1-0"]
+[Opening "startpos"]
+[SetUp "1"]
+[FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
+[Termination "white_win:engine_failure:stockfish-1500:_protocol_timeout"]
+
+1. b1c3 g8f6 2. a1b1 e7e5 3. g1f3 e5e4 4. f3g5 f8e7 5. g5e4 f6g4 6. e2e3 d7d5 7. h2h3 g4h6 8. e4g3 1-0

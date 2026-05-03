@@ -119,7 +119,7 @@ class UciEngine:
         white_increment_ms: int,
         black_increment_ms: int,
         moves_to_go: int,
-        expected_budget_ms: int,
+        maximum_response_ms: int,
     ) -> str:
         command = f"position fen {fen}"
         if moves:
@@ -132,7 +132,7 @@ class UciEngine:
         if moves_to_go > 0:
             go_command += f" movestogo {moves_to_go}"
         self._send(go_command)
-        deadline = time.monotonic() + max(self.protocol_timeout, expected_budget_ms / 1000.0 + self.protocol_timeout)
+        deadline = time.monotonic() + max(self.protocol_timeout, maximum_response_ms / 1000.0 + self.protocol_timeout)
         return self._read_bestmove(deadline)
 
     def _read_bestmove(self, deadline: float) -> str:
@@ -253,18 +253,6 @@ def sanitize_reason(value: str) -> str:
     return sanitized.replace(" ", "_")
 
 
-def allocated_budget_ms(remaining_ms: int, increment_ms: int, moves_to_go: int) -> int:
-    if remaining_ms <= 0:
-        return 0
-    expected_moves = moves_to_go if moves_to_go > 0 else 30
-    safety = min(20, max(0, remaining_ms // 10))
-    usable = max(1, remaining_ms - safety)
-    base = usable // expected_moves
-    increment_part = increment_ms * 3 // 4
-    cap = max(1, usable // 4)
-    return max(1, min(cap, base + increment_part))
-
-
 def write_pgn(path: Path, game: GameResult, start_fen: str) -> None:
     headers = {
         "Event": "ChessEngine Gauntlet",
@@ -332,7 +320,7 @@ def play_game(
         try:
             if time_control.uses_clock():
                 increment = time_control.increment_ms
-                budget_ms = allocated_budget_ms(clocks[side], increment, time_control.moves_to_go)
+                maximum_response_ms = max(1, clocks[side] + increment)
                 started = time.monotonic()
                 move = engine.bestmove_clock(
                     start_fen,
@@ -342,7 +330,7 @@ def play_game(
                     increment,
                     increment,
                     time_control.moves_to_go,
-                    budget_ms,
+                    maximum_response_ms,
                 )
                 elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
                 clocks[side] = clocks[side] - elapsed_ms + increment
