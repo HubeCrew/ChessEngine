@@ -308,6 +308,14 @@ TEST_CASE("evaluation rewards attacks on loose major pieces") {
             > chess::engine::evaluate_white_perspective(safe_queen));
 }
 
+TEST_CASE("evaluation rewards lower-value pressure on major pieces") {
+    const chess::Board queen_attacked_by_knight = chess::board_from_fen("k7/8/8/8/1q6/3N4/8/7K b - - 0 1");
+    const chess::Board queen_not_attacked = chess::board_from_fen("k7/8/8/8/1q6/8/3N4/7K b - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_white_perspective(queen_attacked_by_knight)
+            > chess::engine::evaluate_white_perspective(queen_not_attacked) + 40);
+}
+
 TEST_CASE("evaluation rewards pawn attacks on higher-value pieces") {
     const chess::Board pawn_attacks_rook = chess::board_from_fen("k7/8/8/4r3/3P4/8/8/7K w - - 0 1");
     const chess::Board pawn_misses_rook = chess::board_from_fen("k7/8/8/4r3/2P5/8/8/7K w - - 0 1");

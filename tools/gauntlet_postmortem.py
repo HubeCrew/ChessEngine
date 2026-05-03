@@ -97,6 +97,7 @@ class MoveRecord:
     reply_san: str = ""
     score_after_reply_cp: int | None = None
     sequence_delta_cp: int | None = None
+    engine_recaptures_available: list[str] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
     severity: int = 0
     engine_bestmove: str = ""
@@ -323,6 +324,11 @@ def add_category(record: MoveRecord, category: str, severity_bonus: int = 0) -> 
     record.severity += severity_bonus
 
 
+def remove_category(record: MoveRecord, category: str) -> None:
+    if category in record.categories:
+        record.categories.remove(category)
+
+
 def analyze_game(
     game: GameRecord,
     engine_name: str,
@@ -390,7 +396,15 @@ def analyze_game(
             previous_engine_record.sequence_delta_cp = (
                 previous_engine_record.score_after_reply_cp - previous_engine_record.score_before_cp
             )
-            if previous_engine_record.sequence_delta_cp <= -trade_drop_threshold:
+            previous_engine_record.engine_recaptures_available = [
+                legal.uci()
+                for legal in board.legal_moves
+                if board.is_capture(legal) and legal.to_square == move.to_square
+            ]
+            if previous_engine_record.engine_recaptures_available:
+                add_category(previous_engine_record, "engine-recapture-available", 20)
+                remove_category(previous_engine_record, "bad-trade-sequence")
+            elif previous_engine_record.sequence_delta_cp <= -trade_drop_threshold:
                 add_category(previous_engine_record, "bad-trade-sequence", 120 + -previous_engine_record.sequence_delta_cp)
         trace_after = trace_engine.trace(fen_after) if should_analyze else {}
         score_after = trace_for_side(trace_after, side) if should_analyze else 0
@@ -468,6 +482,7 @@ def select_events(records: list[MoveRecord], max_events: int) -> list[MoveRecord
         "opponent-recapture",
         "low-value-capture-drop",
         "bad-trade-sequence",
+        "engine-recapture-available",
         "capture-hurts-king-safety",
         "capture-hurts-trade-context",
     }
@@ -600,6 +615,11 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
                         if event.sequence_delta_cp is not None and event.score_after_reply_cp is not None
                         else "- Sequence after reply: `n/a`"
                     ),
+                    (
+                        f"- Engine recaptures available: `{', '.join(event.engine_recaptures_available)}`"
+                        if event.engine_recaptures_available
+                        else "- Engine recaptures available: `none`"
+                    ),
                     f"- Material: `{event.moving_piece}` captures `{event.captured_piece or '-'}` "
                     f"for `{event.capture_value}` cp",
                     f"- Component movement: {format_trace_delta(event)}",
@@ -620,6 +640,7 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
         "opponent-recapture",
         "low-value-capture-drop",
         "bad-trade-sequence",
+        "engine-recapture-available",
         "capture-hurts-king-safety",
         "capture-hurts-trade-context",
     }

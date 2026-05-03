@@ -690,6 +690,49 @@ int minor_threat_bonus(PieceType victim) {
     return 0;
 }
 
+int least_attacker_value(const AttackMap& attacks, Bitboard target) {
+    for (const PieceType attacker : {
+             PieceType::Pawn,
+             PieceType::Knight,
+             PieceType::Bishop,
+             PieceType::Rook,
+             PieceType::Queen,
+             PieceType::King,
+         }) {
+        if ((attacks.by_type[piece_index(attacker)] & target) != 0) {
+            return material_value(attacker);
+        }
+    }
+    return 0;
+}
+
+int lower_value_attacker_pressure(PieceType victim, int attacker_value, bool defended) {
+    const int victim_value = material_value(victim);
+    if (attacker_value <= 0 || attacker_value >= victim_value) {
+        return 0;
+    }
+
+    int bonus = 0;
+    switch (victim) {
+        case PieceType::Queen:
+            bonus = attacker_value <= material_value(PieceType::Pawn) ? 85 : 65;
+            break;
+        case PieceType::Rook:
+            bonus = attacker_value <= material_value(PieceType::Pawn) ? 55 : 35;
+            break;
+        case PieceType::Knight:
+        case PieceType::Bishop:
+            bonus = attacker_value <= material_value(PieceType::Pawn) ? 16 : 0;
+            break;
+        case PieceType::Pawn:
+        case PieceType::King:
+        case PieceType::None:
+            return 0;
+    }
+
+    return defended ? bonus / 2 : bonus;
+}
+
 int threat_score(const Board& board, Color color, const AttackMap& own_attacks, const AttackMap& enemy_attacks) {
     const Color enemy = opposite(color);
     int score = 0;
@@ -718,6 +761,8 @@ int threat_score(const Board& board, Color color, const AttackMap& own_attacks, 
         if (minor_attack && material_value(victim) > material_value(PieceType::Bishop)) {
             score += minor_threat_bonus(victim);
         }
+
+        score += lower_value_attacker_pressure(victim, least_attacker_value(own_attacks, target), defended);
     }
 
     return score;
