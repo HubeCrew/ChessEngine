@@ -1,4 +1,5 @@
 import csv
+import json
 import subprocess
 import sys
 import tempfile
@@ -135,6 +136,16 @@ def require_successful_self_play(gauntlet: Path, chess_uci: Path, referee: Path)
             return 1
         if not (output_dir / "game-0001.pgn").exists():
             print("missing PGN output", file=sys.stderr)
+            return 1
+        live_state = json.loads((output_dir / "live-state.json").read_text(encoding="utf-8"))
+        if live_state["schema"] != 1 or live_state["total_games"] != 2:
+            print(f"unexpected live state header: {live_state}", file=sys.stderr)
+            return 1
+        if live_state["summary"]["games"] != 2 or len(live_state["results"]) != 2:
+            print(f"unexpected live state results: {live_state}", file=sys.stderr)
+            return 1
+        if live_state["current"]["game"] != 2 or not isinstance(live_state["current"]["moves"], list):
+            print(f"unexpected current live game: {live_state}", file=sys.stderr)
             return 1
 
     return 0

@@ -141,6 +141,16 @@ Run a clock-based gauntlet instead of fixed per-move time:
 
 The gauntlet launches both engines as UCI subprocesses, alternates colors, uses a built-in balanced opening suite with color reversal, validates every move through `chess_referee`, writes PGNs to `gauntlet-results/`, and reports score plus a rough Elo difference. It supports either fixed `movetime` or clock-based `wtime/btime/winc/binc` games. Non-clean games, such as crashes, timeouts, protocol failures, or illegal moves, are separated from normal chess results.
 
+Watch a gauntlet live in the browser:
+
+```bash
+python3 tools/gauntlet_live_server.py \
+  --state runs/gauntlets/current-qsearch-vs-stockfish-1500-fixed/live-state.json \
+  --port 8765
+```
+
+Open `http://127.0.0.1:8765`, then run `tools/gauntlet.py` with the same `--output-dir`. The runner maintains `live-state.json` after every move, and the viewer polls it to render the current board, clocks, move stream, and match score.
+
 ## Architecture
 
 - `chess_core`: board state, bitboards, FEN, legal move generation, make/unmake, perft.
@@ -152,6 +162,7 @@ The gauntlet launches both engines as UCI subprocesses, alternates colors, uses 
 - `chess_bench`: repeatable benchmark/tactical harness for measuring strength and speed changes.
 - `chess_referee`: machine-readable game adjudicator used by the gauntlet.
 - `tools/gauntlet.py`: UCI engine-vs-engine gauntlet with PGN/CSV output and rough Elo reporting.
+- `tools/gauntlet_live_server.py`: local browser viewer for following the gauntlet live from `live-state.json`.
 
 ## Next Engine Work
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import json
 import math
 import queue
 import shlex
@@ -11,7 +12,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Callable, Iterable
 
 
 OPENING_FENS = [
@@ -253,6 +254,96 @@ def sanitize_reason(value: str) -> str:
     return sanitized.replace(" ", "_")
 
 
+def result_to_dict(result: GameResult) -> dict[str, Any]:
+    return {
+        "game": result.game,
+        "opening": result.opening,
+        "white": result.white,
+        "black": result.black,
+        "result": result.result,
+        "reason": result.reason,
+        "plies": result.plies,
+        "moves": result.moves,
+        "clean": result.clean,
+    }
+
+
+def summarize_results(results: list[GameResult], engine_a: str, engine_b: str) -> dict[str, Any]:
+    games = len(results)
+    score_a = score_for_engine(results, engine_a)
+    score_b = games - score_a
+    return {
+        "games": games,
+        "clean_games": sum(1 for result in results if result.clean),
+        "score_a": score_a,
+        "score_b": score_b,
+        "wins_a": sum(
+            1
+            for result in results
+            if (result.result == "1-0" and result.white == engine_a)
+            or (result.result == "0-1" and result.black == engine_a)
+        ),
+        "wins_b": sum(
+            1
+            for result in results
+            if (result.result == "1-0" and result.white == engine_b)
+            or (result.result == "0-1" and result.black == engine_b)
+        ),
+        "draws": sum(1 for result in results if result.result == "1/2-1/2"),
+        "elo_diff_a": elo_diff(score_a, games),
+    }
+
+
+def write_live_state(
+    output_dir: Path,
+    total_games: int,
+    engine_a: str,
+    engine_b: str,
+    results: list[GameResult],
+    current: dict[str, Any] | None,
+) -> None:
+    state = {
+        "schema": 1,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "total_games": total_games,
+        "engine_a": engine_a,
+        "engine_b": engine_b,
+        "summary": summarize_results(results, engine_a, engine_b),
+        "current": current,
+        "results": [result_to_dict(result) for result in results],
+    }
+    path = output_dir / "live-state.json"
+    temporary = output_dir / "live-state.json.tmp"
+    temporary.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def current_game_state(
+    game_number: int,
+    opening_name: str,
+    start_fen: str,
+    white_name: str,
+    black_name: str,
+    moves: list[str],
+    status: dict[str, str],
+    clocks: dict[str, int],
+) -> dict[str, Any]:
+    return {
+        "game": game_number,
+        "opening": opening_name,
+        "start_fen": start_fen,
+        "white": white_name,
+        "black": black_name,
+        "moves": moves,
+        "last_move": moves[-1] if moves else None,
+        "plies": len(moves),
+        "side": status.get("side"),
+        "outcome": status.get("outcome", "ongoing"),
+        "reason": status.get("reason", ""),
+        "clocks": clocks,
+    }
+
+
 def write_pgn(path: Path, game: GameResult, start_fen: str) -> None:
     headers = {
         "Event": "ChessEngine Gauntlet",
@@ -309,10 +400,22 @@ def play_game(
     time_control: TimeControl,
     max_plies: int,
     referee_timeout: float,
+    live_update: Callable[[dict[str, Any]], None] | None = None,
 ) -> GameResult:
     moves: list[str] = []
     clocks = {"white": time_control.initial_ms, "black": time_control.initial_ms}
     status = run_referee(referee, start_fen, moves, referee_timeout)
+    if live_update is not None:
+        live_update(current_game_state(
+            game_number,
+            opening_name,
+            start_fen,
+            white.config.name,
+            black.config.name,
+            moves,
+            status,
+            clocks.copy(),
+        ))
 
     while status["outcome"] == "ongoing" and len(moves) < max_plies:
         side = status["side"]
@@ -376,6 +479,17 @@ def play_game(
                 False,
             )
         moves.append(move)
+        if live_update is not None:
+            live_update(current_game_state(
+                game_number,
+                opening_name,
+                start_fen,
+                white.config.name,
+                black.config.name,
+                moves,
+                status,
+                clocks.copy(),
+            ))
 
     if status["outcome"] == "ongoing":
         return GameResult(
@@ -518,8 +632,15 @@ def main() -> int:
     engine_a = UciEngine(config_a, args.protocol_timeout)
     engine_b = UciEngine(config_b, args.protocol_timeout)
     results: list[GameResult] = []
+    current_live_state: dict[str, Any] | None = None
+
+    def update_live_state(current: dict[str, Any] | None) -> None:
+        nonlocal current_live_state
+        current_live_state = current
+        write_live_state(output_dir, args.games, args.name_a, args.name_b, results, current_live_state)
 
     try:
+        update_live_state(None)
         engine_a.start()
         engine_b.start()
         for game_index in range(args.games):
@@ -541,8 +662,25 @@ def main() -> int:
                 time_control,
                 args.max_plies,
                 args.protocol_timeout,
+                update_live_state,
             )
             results.append(result)
+            update_live_state({
+                "game": result.game,
+                "opening": result.opening,
+                "start_fen": fen,
+                "white": result.white,
+                "black": result.black,
+                "moves": result.moves,
+                "last_move": result.moves[-1] if result.moves else None,
+                "plies": result.plies,
+                "side": None,
+                "outcome": result.reason.split(":", 1)[0],
+                "reason": result.reason,
+                "clocks": None,
+                "result": result.result,
+                "clean": result.clean,
+            })
             print(
                 f"game {result.game}: {result.white} vs {result.black} "
                 f"{result.result} {result.reason} plies={result.plies}",
