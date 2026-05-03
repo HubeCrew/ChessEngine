@@ -153,6 +153,10 @@ bool move_gives_check(Board& board, const Move& move) {
     return gives_check;
 }
 
+bool move_is_legal_after_make(const Board& board, Color moving_side) {
+    return !board.in_check(moving_side);
+}
+
 bool is_passed_pawn_after_move(const Board& board, Square square, Color color) {
     const Color enemy = opposite(color);
     const int direction = color == Color::White ? 1 : -1;
@@ -592,10 +596,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
     }
 
     const bool in_check = board.in_check(board.side_to_move());
-    MoveList moves = generate_legal_moves(board);
-    if (moves.empty()) {
-        return in_check ? -kMateScore + ply : 0;
-    }
+    MoveList moves = ply == 0 ? generate_legal_moves(board) : generate_pseudo_legal_moves(board);
 
     if (null_move_pruning_
         && can_try_null_move(board, depth, ply, alpha, beta, in_check, allow_null_move)
@@ -638,6 +639,10 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
         const Move& move = picked.move;
         const Color moving_side = board.side_to_move();
         const UndoState undo = board.make_move(move);
+        if (!move_is_legal_after_make(board, moving_side)) {
+            board.unmake_move(undo);
+            continue;
+        }
         const bool gives_check = board.in_check(board.side_to_move());
         const int extension = search_extensions_
             ? extension_for_move(board, move, in_check, gives_check, moving_side, depth, extensions_used)
@@ -689,6 +694,10 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
         }
     }
 
+    if (move_index == 0) {
+        return in_check ? -kMateScore + ply : 0;
+    }
+
     Bound bound = Bound::Exact;
     if (best_score <= original_alpha) {
         bound = Bound::Upper;
@@ -721,10 +730,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         tt_move = entry->best_move;
     }
 
-    MoveList moves = generate_legal_moves(board);
-    if (in_check && moves.empty()) {
-        return -kMateScore + ply;
-    }
+    MoveList moves = generate_pseudo_legal_moves(board);
     const bool allow_quiet_checks = !in_check
         && qply < kMaxQuiescenceQuietCheckPly
         && ply < kMaxPly - 1
@@ -742,6 +748,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         history_,
     };
 
+    int legal_moves_searched = 0;
     PickedMove picked;
     while (picker.next(picked)) {
         const Move& move = picked.move;
@@ -762,13 +769,22 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
             }
         }
 
+        const Color moving_side = board.side_to_move();
         const UndoState undo = board.make_move(move);
+        if (!move_is_legal_after_make(board, moving_side)) {
+            board.unmake_move(undo);
+            continue;
+        }
+        ++legal_moves_searched;
         const int score = -quiescence(board, ply + 1, -beta, -alpha, qply + 1);
         board.unmake_move(undo);
         if (score >= beta) {
             return beta;
         }
         alpha = std::max(alpha, score);
+    }
+    if (in_check && legal_moves_searched == 0) {
+        return -kMateScore + ply;
     }
     return alpha;
 }

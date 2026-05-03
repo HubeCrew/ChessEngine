@@ -25,6 +25,12 @@ bool is_legal_best_move(chess::Board& board, const chess::Move& best_move) {
     });
 }
 
+bool contains_uci_move(const chess::MoveList& moves, std::string_view uci) {
+    return std::any_of(moves.begin(), moves.end(), [&](const chess::Move& move) {
+        return chess::move_to_uci(move) == uci;
+    });
+}
+
 chess::Move legal_move_by_uci(chess::Board& board, const std::string& uci) {
     const chess::MoveList moves = chess::generate_legal_moves(board);
     const auto found = std::find_if(moves.begin(), moves.end(), [&](const chess::Move& move) {
@@ -100,6 +106,40 @@ TEST_CASE("search keeps mate-in-one tactical behavior") {
     chess::engine::Searcher searcher;
 
     const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{2});
+
+    REQUIRE(chess::move_to_uci(result.best_move) == "f1f8");
+}
+
+TEST_CASE("pseudo-legal pinned moves are filtered before they become legal search moves") {
+    chess::Board board = chess::board_from_fen("4k3/4n3/8/5Q2/8/8/P7/K3R3 b - - 0 1");
+
+    REQUIRE(contains_uci_move(chess::generate_pseudo_legal_moves(board), "e7f5"));
+    REQUIRE_FALSE(contains_uci_move(chess::generate_legal_moves(board), "e7f5"));
+}
+
+TEST_CASE("search skips illegal pinned captures during child quiescence") {
+    chess::Board board = chess::board_from_fen("4k3/4n3/8/5Q2/8/8/P7/K3R3 w - - 0 1");
+    chess::engine::Searcher searcher;
+    searcher.set_hash_size_mb(1);
+
+    const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{1});
+
+    REQUIRE(result.depth == 1);
+    REQUIRE(is_legal_best_move(board, result.best_move));
+    REQUIRE(result.score_centipawns > 700);
+    REQUIRE(board.hash_key() == board.recompute_hash());
+}
+
+TEST_CASE("search detects mate when the mated side has pseudo-legal evasions only") {
+    chess::Board mated = chess::board_from_fen("5Rk1/6pp/8/2B5/8/8/6PP/6K1 b - - 1 1");
+
+    REQUIRE(mated.in_check(chess::Color::Black));
+    REQUIRE(contains_uci_move(chess::generate_pseudo_legal_moves(mated), "g8f8"));
+    REQUIRE(chess::generate_legal_moves(mated).empty());
+
+    chess::Board before_mate = chess::board_from_fen("6k1/6pp/8/2B5/8/8/6PP/5RK1 w - - 0 1");
+    chess::engine::Searcher searcher;
+    const chess::engine::SearchResult result = searcher.search(before_mate, chess::engine::SearchLimits{2});
 
     REQUIRE(chess::move_to_uci(result.best_move) == "f1f8");
 }
