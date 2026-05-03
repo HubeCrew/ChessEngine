@@ -18,75 +18,7 @@
 namespace chess::engine {
 
 bool move_gives_check(const Board& board, const Move& move) {
-    if (!is_valid_square(move.from) || !is_valid_square(move.to)) {
-        return false;
-    }
-
-    const Piece moved = board.piece_at(move.from);
-    if (moved == Piece::None) {
-        return false;
-    }
-
-    const Color moving_side = board.side_to_move();
-    const Color enemy = opposite(moving_side);
-    const Square enemy_king = board.king_square(enemy);
-    if (!is_valid_square(enemy_king)) {
-        return false;
-    }
-
-    if (move.is_castling() || (move.flags & EnPassant) != 0) {
-        Board copy = board;
-        const UndoState undo = copy.make_move(move);
-        const bool gives_check = copy.in_check(enemy);
-        copy.unmake_move(undo);
-        return gives_check;
-    }
-
-    const Bitboard from_bit = square_bb(move.from);
-    const Bitboard to_bit = square_bb(move.to);
-    Bitboard occupancy_after = board.occupancy();
-    occupancy_after &= ~from_bit;
-    occupancy_after |= to_bit;
-
-    const PieceType moved_type = move.is_promotion() ? move.promotion : type_of(moved);
-    if ((attacks::piece_attacks(moved_type, moving_side, move.to, occupancy_after) & square_bb(enemy_king)) != 0) {
-        return true;
-    }
-
-    Bitboard bishops = board.pieces(moving_side, PieceType::Bishop);
-    Bitboard rooks = board.pieces(moving_side, PieceType::Rook);
-    Bitboard queens = board.pieces(moving_side, PieceType::Queen);
-
-    switch (type_of(moved)) {
-        case PieceType::Bishop:
-            bishops &= ~from_bit;
-            break;
-        case PieceType::Rook:
-            rooks &= ~from_bit;
-            break;
-        case PieceType::Queen:
-            queens &= ~from_bit;
-            break;
-        default:
-            break;
-    }
-
-    switch (moved_type) {
-        case PieceType::Bishop:
-            bishops |= to_bit;
-            break;
-        case PieceType::Rook:
-            rooks |= to_bit;
-            break;
-        case PieceType::Queen:
-            queens |= to_bit;
-            break;
-        default:
-            break;
-    }
-
-    return (attacks::bishop_attacks(enemy_king, occupancy_after) & (bishops | queens)) != 0
-        || (attacks::rook_attacks(enemy_king, occupancy_after) & (rooks | queens)) != 0;
+    return chess::move_gives_check(board, move);
 }
 
 namespace {
@@ -154,6 +86,25 @@ bool needs_see_for_loss_detection(const Board& board, const Move& move) {
     }
 
     return material_value(type_of(captured_piece_for(board, move))) < material_value(type_of(attacker));
+}
+
+bool capture_target_is_defended(const Board& board, const Move& move) {
+    if (!move.is_capture() || (move.flags & EnPassant) != 0) {
+        return false;
+    }
+
+    return attacks::attackers_to(board, move.to, opposite(board.side_to_move())) != 0;
+}
+
+int cheap_capture_exchange_score(const Board& board, const Move& move) {
+    int score = immediate_capture_gain(board, move);
+    if (needs_see_for_loss_detection(board, move) && capture_target_is_defended(board, move)) {
+        const Piece attacker = board.piece_at(move.from);
+        if (attacker != Piece::None) {
+            score -= material_value(type_of(attacker));
+        }
+    }
+    return score;
 }
 
 int score_to_tt(int score, int ply) {
@@ -370,6 +321,7 @@ public:
         Move first_killer,
         Move second_killer,
         bool allow_quiet_checks,
+        bool use_see_for_ordering,
         const HistoryTable& history,
         SearchDiagnostics& diagnostics
     )
@@ -381,6 +333,7 @@ public:
           first_killer_(first_killer),
           second_killer_(second_killer),
           allow_quiet_checks_(allow_quiet_checks),
+          use_see_for_ordering_(use_see_for_ordering),
           history_(history),
           diagnostics_(diagnostics) {
         for (const Move& move : moves) {
@@ -447,6 +400,7 @@ private:
     Move first_killer_;
     Move second_killer_;
     bool allow_quiet_checks_ = false;
+    bool use_see_for_ordering_ = true;
     const HistoryTable& history_;
     SearchDiagnostics& diagnostics_;
     FixedVector<ScoredMove, MoveList::kCapacity> moves_;
@@ -576,10 +530,10 @@ private:
         }
 
         if (state.move.is_capture()) {
-            const bool see_needed = needs_see_for_loss_detection(board_, state.move);
+            const bool see_needed = use_see_for_ordering_ && needs_see_for_loss_detection(board_, state.move);
             const int exchange_score = see_needed
                 ? see(board_, state.move)
-                : immediate_capture_gain(board_, state.move);
+                : cheap_capture_exchange_score(board_, state.move);
             state.tactical_exchange_score = exchange_score;
             if (see_needed) {
                 state.see_known = true;
@@ -606,7 +560,7 @@ private:
         if (!state.gives_check_known) {
             state.gives_check_known = true;
             ++diagnostics_.move_gives_check_calls;
-            state.gives_check = move_gives_check(board_, state.move);
+            state.gives_check = chess::engine::move_gives_check(board_, state.move);
         }
         return state.gives_check;
     }
@@ -616,6 +570,12 @@ private:
         return static_exchange_eval(board, move);
     }
 };
+
+void append_moves(MoveList& destination, const MoveList& source) {
+    for (const Move& move : source) {
+        destination.push_back(move);
+    }
+}
 
 std::chrono::milliseconds allocated_time(const Board& board, const SearchLimits& limits) {
     if (limits.move_time.count() > 0) {
@@ -852,6 +812,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
         ply < kMaxPly ? killer_moves_[ply][0] : Move{},
         ply < kMaxPly ? killer_moves_[ply][1] : Move{},
         false,
+        true,
         history_,
         diagnostics_,
     };
@@ -962,21 +923,25 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         tt_move = entry->best_move;
     }
 
-    MoveList moves = in_check ? generate_pseudo_legal_check_evasions(board) : generate_pseudo_legal_moves(board);
     const bool allow_quiet_checks = !in_check
         && qply < kMaxQuiescenceQuietCheckPly
         && ply < kMaxPly - 1
         && alpha > -kMateScore + kMateWindow
         && beta < kMateScore - kMateWindow;
+    MoveList moves = in_check ? generate_pseudo_legal_check_evasions(board) : generate_pseudo_legal_noisy_moves(board);
+    if (allow_quiet_checks) {
+        append_moves(moves, generate_pseudo_legal_quiet_checks(board));
+    }
     MovePicker picker{
         board,
         moves,
-        in_check ? MovePickerMode::AllMoves : MovePickerMode::Quiescence,
+        MovePickerMode::AllMoves,
         Move{},
         tt_move,
         ply < kMaxPly ? killer_moves_[ply][0] : Move{},
         ply < kMaxPly ? killer_moves_[ply][1] : Move{},
         allow_quiet_checks,
+        false,
         history_,
         diagnostics_,
     };
@@ -987,23 +952,32 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         const Move& move = picked.move;
         bool gives_check = false;
         if (!in_check) {
-            if (picked.gives_check_known) {
-                gives_check = picked.gives_check;
-            } else {
-                ++diagnostics_.move_gives_check_calls;
-                gives_check = move_gives_check(board, move);
-            }
-            if (!move.is_capture() && !move.is_promotion() && (!allow_quiet_checks || !gives_check)) {
+            const bool quiet_check = !move.is_capture() && !move.is_promotion();
+            if (quiet_check && !allow_quiet_checks) {
                 continue;
             }
-            if (move.is_capture() && !move.is_promotion() && !gives_check
-                && stand_pat + immediate_capture_gain(board, move) + kDeltaPruningMargin <= alpha) {
-                continue;
+            gives_check = quiet_check;
+            const bool capture_needs_check_status = move.is_capture()
+                && !move.is_promotion()
+                && (stand_pat + immediate_capture_gain(board, move) + kDeltaPruningMargin <= alpha
+                    || needs_see_for_loss_detection(board, move));
+            if (capture_needs_check_status) {
+                if (picked.gives_check_known) {
+                    gives_check = picked.gives_check;
+                } else {
+                    ++diagnostics_.move_gives_check_calls;
+                    gives_check = chess::engine::move_gives_check(board, move);
+                }
             }
-            if (needs_see_for_loss_detection(board, move)
-                && (picked.see_known ? picked.see_score : static_exchange_with_diagnostics(board, move)) < 0
-                && !gives_check) {
-                continue;
+            if (move.is_capture() && !move.is_promotion()) {
+                if (!gives_check && stand_pat + immediate_capture_gain(board, move) + kDeltaPruningMargin <= alpha) {
+                    continue;
+                }
+                if (!gives_check
+                    && needs_see_for_loss_detection(board, move)
+                    && (picked.see_known ? picked.see_score : static_exchange_with_diagnostics(board, move)) < 0) {
+                    continue;
+                }
             }
         }
 

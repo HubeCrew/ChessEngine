@@ -101,6 +101,18 @@ std::vector<std::string> legal_uci_from_candidates(chess::Board& board, const ch
     return sorted_uci(legalized);
 }
 
+std::vector<std::string> filtered_legal_uci(chess::Board& board, bool noisy, bool quiet_check) {
+    chess::MoveList filtered;
+    for (const chess::Move& move : chess::generate_legal_moves(board)) {
+        const bool is_noisy = move.is_capture() || move.is_promotion();
+        const bool is_quiet_check = !is_noisy && chess::move_gives_check(board, move);
+        if ((noisy && is_noisy) || (quiet_check && is_quiet_check)) {
+            filtered.push_back(move);
+        }
+    }
+    return sorted_uci(filtered);
+}
+
 }  // namespace
 
 TEST_CASE("precomputed leaper attack tables cover center and edge squares") {
@@ -300,6 +312,75 @@ TEST_CASE("pseudo-legal check evasions are narrowed by check type") {
         const std::vector<std::string> uci_moves = sorted_uci(evasions);
 
         REQUIRE(std::find(uci_moves.begin(), uci_moves.end(), "e5d6") != uci_moves.end());
+    }
+}
+
+TEST_CASE("pseudo-legal noisy moves legalize to legal captures and promotions") {
+    for (const char* fen : {
+             "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+             "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+             "4k2r/6P1/8/8/8/8/8/K7 w - - 0 1",
+             "4k3/4n3/8/5Q2/8/8/P7/K3R3 b - - 0 1",
+         }) {
+        chess::Board board = chess::board_from_fen(fen);
+        INFO(fen);
+
+        const std::vector<std::string> expected = filtered_legal_uci(board, true, false);
+        const std::vector<std::string> actual =
+            legal_uci_from_candidates(board, chess::generate_pseudo_legal_noisy_moves(board));
+
+        REQUIRE(actual == expected);
+    }
+}
+
+TEST_CASE("pseudo-legal noisy moves include en-passant and all promotion choices") {
+    SECTION("en-passant is noisy") {
+        chess::Board board = chess::board_from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1");
+        const std::vector<std::string> noisy = sorted_uci(chess::generate_pseudo_legal_noisy_moves(board));
+
+        REQUIRE(std::find(noisy.begin(), noisy.end(), "e5d6") != noisy.end());
+    }
+
+    SECTION("quiet promotions and promotion captures are noisy") {
+        chess::Board board = chess::board_from_fen("4k2r/P5P1/8/8/8/8/8/K7 w - - 0 1");
+        const std::vector<std::string> noisy = sorted_uci(chess::generate_pseudo_legal_noisy_moves(board));
+
+        for (const std::string& uci : {"a7a8q", "a7a8r", "a7a8b", "a7a8n", "g7h8q", "g7h8r", "g7h8b", "g7h8n"}) {
+            INFO(uci);
+            REQUIRE(std::find(noisy.begin(), noisy.end(), uci) != noisy.end());
+        }
+    }
+
+    SECTION("non-promotion quiet moves are excluded") {
+        chess::Board board = chess::Board::start_position();
+        const chess::MoveList noisy = chess::generate_pseudo_legal_noisy_moves(board);
+
+        REQUIRE(noisy.empty());
+    }
+}
+
+TEST_CASE("pseudo-legal quiet checks legalize to legal quiet checking moves") {
+    for (const char* fen : {
+             "4k3/8/8/8/8/2N5/8/4K3 w - - 0 1",
+             "4k3/8/8/8/8/8/4B3/R3K3 w Q - 0 1",
+             "5k2/8/8/8/8/8/8/4K2R w K - 0 1",
+             "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1",
+         }) {
+        chess::Board board = chess::board_from_fen(fen);
+        INFO(fen);
+
+        const std::vector<std::string> expected = filtered_legal_uci(board, false, true);
+        const std::vector<std::string> actual =
+            legal_uci_from_candidates(board, chess::generate_pseudo_legal_quiet_checks(board));
+
+        REQUIRE(actual == expected);
+        for (const std::string& uci : actual) {
+            chess::Board check_board = chess::board_from_fen(fen);
+            const chess::Move move = chess::parse_uci_move(check_board, uci);
+            REQUIRE_FALSE(move.is_capture());
+            REQUIRE_FALSE(move.is_promotion());
+            REQUIRE(chess::move_gives_check(check_board, move));
+        }
     }
 }
 

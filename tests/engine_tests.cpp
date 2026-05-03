@@ -135,6 +135,7 @@ TEST_CASE("search skips illegal pinned captures during child quiescence") {
     REQUIRE(result.depth == 1);
     REQUIRE(is_legal_best_move(board, result.best_move));
     REQUIRE(result.score_centipawns > 700);
+    REQUIRE(result.diagnostics.illegal_pseudo_moves > 0);
     REQUIRE(board.hash_key() == board.recompute_hash());
 }
 
