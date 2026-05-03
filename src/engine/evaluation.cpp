@@ -6,6 +6,8 @@
 #include <cmath>
 #include <utility>
 
+#include "chess/core/attacks.h"
+
 namespace chess::engine {
 
 namespace {
@@ -15,29 +17,6 @@ constexpr int kMaxPhase = 24;
 constexpr std::array<int, 6> kPhaseWeights{
     0, 1, 1, 2, 4, 0,
 };
-
-constexpr std::array<std::pair<int, int>, 8> kKnightOffsets{{
-    {1, 2}, {2, 1}, {2, -1}, {1, -2},
-    {-1, -2}, {-2, -1}, {-2, 1}, {-1, 2},
-}};
-
-constexpr std::array<std::pair<int, int>, 8> kKingOffsets{{
-    {1, 1}, {1, 0}, {1, -1}, {0, -1},
-    {-1, -1}, {-1, 0}, {-1, 1}, {0, 1},
-}};
-
-constexpr std::array<std::pair<int, int>, 4> kBishopDirections{{
-    {1, 1}, {1, -1}, {-1, -1}, {-1, 1},
-}};
-
-constexpr std::array<std::pair<int, int>, 4> kRookDirections{{
-    {1, 0}, {0, -1}, {-1, 0}, {0, 1},
-}};
-
-constexpr std::array<std::pair<int, int>, 8> kQueenDirections{{
-    {1, 1}, {1, -1}, {-1, -1}, {-1, 1},
-    {1, 0}, {0, -1}, {-1, 0}, {0, 1},
-}};
 
 constexpr std::array<int, 64> kPawnMg{{
       0,   0,   0,   0,   0,   0,   0,   0,
@@ -207,89 +186,8 @@ bool has_piece(const Board& board, Square square, Color color, PieceType type) {
     return is_valid_square(square) && board.piece_at(square) == make_piece(color, type);
 }
 
-template <std::size_t Size>
-Bitboard attacks_from_offsets(Square square, const std::array<std::pair<int, int>, Size>& offsets) {
-    Bitboard attacks = 0;
-    for (const auto& [df, dr] : offsets) {
-        const int file = file_of(square) + df;
-        const int rank = rank_of(square) + dr;
-        if (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
-            attacks |= square_bb(make_square(file, rank));
-        }
-    }
-    return attacks;
-}
-
-Bitboard pawn_attacks_from(Square square, Color color) {
-    const int file = file_of(square);
-    Bitboard attacks = 0;
-    if (color == Color::White) {
-        if (file > 0 && square + 7 < kBoardSquareCount) {
-            attacks |= square_bb(square + 7);
-        }
-        if (file < 7 && square + 9 < kBoardSquareCount) {
-            attacks |= square_bb(square + 9);
-        }
-    } else {
-        if (file > 0 && square - 9 >= 0) {
-            attacks |= square_bb(square - 9);
-        }
-        if (file < 7 && square - 7 >= 0) {
-            attacks |= square_bb(square - 7);
-        }
-    }
-    return attacks;
-}
-
-Bitboard knight_attacks_from(Square square) {
-    return attacks_from_offsets(square, kKnightOffsets);
-}
-
-Bitboard king_attacks_from(Square square) {
-    return attacks_from_offsets(square, kKingOffsets);
-}
-
-template <std::size_t Size>
-Bitboard slider_attacks_from(
-    const Board& board,
-    Square from,
-    const std::array<std::pair<int, int>, Size>& directions
-) {
-    Bitboard attacks = 0;
-    for (const auto& [df, dr] : directions) {
-        int file = file_of(from) + df;
-        int rank = rank_of(from) + dr;
-        while (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
-            const Square square = make_square(file, rank);
-            attacks |= square_bb(square);
-            if (board.piece_at(square) != Piece::None) {
-                break;
-            }
-            file += df;
-            rank += dr;
-        }
-    }
-    return attacks;
-}
-
 Bitboard attacks_from_piece(const Board& board, Square from, Color color, PieceType type) {
-    switch (type) {
-        case PieceType::Pawn:
-            return pawn_attacks_from(from, color);
-        case PieceType::Knight:
-            return knight_attacks_from(from);
-        case PieceType::Bishop:
-            return slider_attacks_from(board, from, kBishopDirections);
-        case PieceType::Rook:
-            return slider_attacks_from(board, from, kRookDirections);
-        case PieceType::Queen:
-            return slider_attacks_from(board, from, kQueenDirections);
-        case PieceType::King:
-            return king_attacks_from(from);
-        case PieceType::None:
-            return 0;
-    }
-    return 0;
+    return attacks::piece_attacks(type, color, from, board.occupancy());
 }
 
 struct AttackMap {

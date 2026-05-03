@@ -114,6 +114,10 @@ TEST_CASE("precomputed leaper attack tables cover center and edge squares") {
     REQUIRE(__builtin_popcountll(chess::attacks::knight_attacks(chess::make_square(0, 0))) == 2);
     REQUIRE(__builtin_popcountll(chess::attacks::king_attacks(chess::make_square(3, 3))) == 8);
     REQUIRE(__builtin_popcountll(chess::attacks::king_attacks(chess::make_square(0, 0))) == 3);
+
+    const chess::Bitboard occupancy = chess::square_bb(chess::make_square(3, 5)) | chess::square_bb(chess::make_square(6, 3));
+    REQUIRE(chess::attacks::piece_attacks(chess::PieceType::Queen, chess::Color::White, chess::make_square(3, 3), occupancy)
+            == chess::attacks::queen_attacks(chess::make_square(3, 3), occupancy));
 }
 
 TEST_CASE("board attack detection uses all piece types and blockers") {
