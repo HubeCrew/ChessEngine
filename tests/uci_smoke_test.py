@@ -33,6 +33,17 @@ def main() -> int:
             "",
         ]
     )
+    searchmoves_commands = "\n".join(
+        [
+            "uci",
+            "isready",
+            "ucinewgame",
+            "position startpos",
+            "go depth 2 searchmoves e2e4",
+            "quit",
+            "",
+        ]
+    )
     completed = subprocess.run(
         [sys.argv[1]],
         input=commands,
@@ -101,6 +112,23 @@ def main() -> int:
     if re.search(r"bestmove ([a-h][1-8][a-h][1-8][nbrq]?|0000)", clock_completed.stdout) is None:
         print("missing time-control bestmove", file=sys.stderr)
         print(clock_completed.stdout, file=sys.stderr)
+        return 1
+
+    searchmoves_completed = subprocess.run(
+        [sys.argv[1]],
+        input=searchmoves_commands,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=10,
+    )
+    if searchmoves_completed.returncode != 0:
+        print(searchmoves_completed.stderr, file=sys.stderr)
+        return searchmoves_completed.returncode
+    if "bestmove e2e4" not in searchmoves_completed.stdout:
+        print("searchmoves did not constrain the root move", file=sys.stderr)
+        print(searchmoves_completed.stdout, file=sys.stderr)
         return 1
 
     return 0

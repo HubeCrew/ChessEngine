@@ -16,10 +16,15 @@ bool parse_bool(std::string_view value) {
     return value == "true" || value == "1" || value == "on";
 }
 
-std::chrono::milliseconds parse_milliseconds(std::istringstream& input) {
-    int milliseconds = 0;
-    input >> milliseconds;
-    return std::chrono::milliseconds{std::max(0, milliseconds)};
+bool is_go_option(std::string_view token) {
+    return token == "depth"
+        || token == "movetime"
+        || token == "wtime"
+        || token == "btime"
+        || token == "winc"
+        || token == "binc"
+        || token == "movestogo"
+        || token == "searchmoves";
 }
 
 chess::Board parse_position(std::istringstream& input) {
@@ -155,22 +160,46 @@ int main() {
                 board = parse_position(input);
             } else if (command == "go") {
                 chess::engine::SearchLimits limits;
+                std::vector<std::string> tokens;
                 std::string token;
                 while (input >> token) {
+                    tokens.push_back(token);
+                }
+                for (std::size_t index = 0; index < tokens.size(); ++index) {
+                    token = tokens[index];
                     if (token == "depth") {
-                        input >> limits.depth;
+                        if (++index < tokens.size()) {
+                            limits.depth = std::stoi(tokens[index]);
+                        }
+                    } else if (token == "searchmoves") {
+                        while (index + 1 < tokens.size() && !is_go_option(tokens[index + 1])) {
+                            ++index;
+                            limits.search_moves.push_back(chess::parse_uci_move(board, tokens[index]));
+                        }
                     } else if (token == "movetime") {
-                        limits.move_time = parse_milliseconds(input);
+                        if (++index < tokens.size()) {
+                            limits.move_time = std::chrono::milliseconds{std::max(0, std::stoi(tokens[index]))};
+                        }
                     } else if (token == "wtime") {
-                        limits.white_time = parse_milliseconds(input);
+                        if (++index < tokens.size()) {
+                            limits.white_time = std::chrono::milliseconds{std::max(0, std::stoi(tokens[index]))};
+                        }
                     } else if (token == "btime") {
-                        limits.black_time = parse_milliseconds(input);
+                        if (++index < tokens.size()) {
+                            limits.black_time = std::chrono::milliseconds{std::max(0, std::stoi(tokens[index]))};
+                        }
                     } else if (token == "winc") {
-                        limits.white_increment = parse_milliseconds(input);
+                        if (++index < tokens.size()) {
+                            limits.white_increment = std::chrono::milliseconds{std::max(0, std::stoi(tokens[index]))};
+                        }
                     } else if (token == "binc") {
-                        limits.black_increment = parse_milliseconds(input);
+                        if (++index < tokens.size()) {
+                            limits.black_increment = std::chrono::milliseconds{std::max(0, std::stoi(tokens[index]))};
+                        }
                     } else if (token == "movestogo") {
-                        input >> limits.moves_to_go;
+                        if (++index < tokens.size()) {
+                            limits.moves_to_go = std::stoi(tokens[index]);
+                        }
                     }
                 }
                 const chess::engine::SearchResult result = searcher.search(board, limits);

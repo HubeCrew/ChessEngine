@@ -19,6 +19,7 @@ struct SearchLimits {
     std::chrono::milliseconds white_increment{0};
     std::chrono::milliseconds black_increment{0};
     int moves_to_go = 0;
+    std::vector<Move> search_moves;
 };
 
 struct SearchDiagnostics {
@@ -87,6 +88,8 @@ private:
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
     std::array<std::array<std::array<int, 64>, 64>, 2> history_{};
     std::vector<Move> previous_iteration_pv_;
+    MoveList root_search_moves_;
+    bool root_search_moves_constrained_ = false;
 
     int negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move, int extensions_used);
     int quiescence(Board& board, int ply, int alpha, int beta, int qply);

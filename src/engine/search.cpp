@@ -140,6 +140,12 @@ bool same_move_identity(const Move& lhs, const Move& rhs) {
         && lhs.promotion == rhs.promotion;
 }
 
+bool contains_move_identity(const std::vector<Move>& moves, const Move& candidate) {
+    return std::any_of(moves.begin(), moves.end(), [&](const Move& move) {
+        return same_move_identity(move, candidate);
+    });
+}
+
 bool is_valid_move_shape(const Move& move) {
     return is_valid_square(move.from) && is_valid_square(move.to);
 }
@@ -584,10 +590,22 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     previous_iteration_pv_.clear();
 
     SearchResult result;
-    MoveList moves = generate_legal_moves(board);
-    if (moves.empty()) {
+    const MoveList legal_moves = generate_legal_moves(board);
+    root_search_moves_constrained_ = !limits.search_moves.empty();
+    root_search_moves_.clear();
+    if (root_search_moves_constrained_) {
+        for (const Move& move : legal_moves) {
+            if (contains_move_identity(limits.search_moves, move)) {
+                root_search_moves_.push_back(move);
+            }
+        }
+    } else {
+        root_search_moves_ = legal_moves;
+    }
+
+    if (root_search_moves_.empty()) {
         result.best_move = Move{};
-        result.score_centipawns = board.in_check(board.side_to_move()) ? -kMateScore : 0;
+        result.score_centipawns = legal_moves.empty() && board.in_check(board.side_to_move()) ? -kMateScore : 0;
         result.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start_time_
         );
@@ -636,7 +654,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
             if (root_entry != nullptr && is_valid_move_shape(root_entry->best_move)) {
                 result.best_move = root_entry->best_move;
             } else if (!is_valid_move_shape(result.best_move)) {
-                result.best_move = moves.front();
+                result.best_move = root_search_moves_.front();
             }
             result.score_centipawns = score;
             result.depth = depth;
@@ -653,7 +671,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     }
 
     if (!is_valid_move_shape(result.best_move)) {
-        result.best_move = moves.front();
+        result.best_move = root_search_moves_.front();
     }
 
     result.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -711,21 +729,25 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
     const int original_alpha = alpha;
     const int original_beta = beta;
     Move tt_move;
-    if (const TranspositionEntry* entry = tt_.probe(board.hash_key())) {
-        tt_move = entry->best_move;
-        if (entry->depth >= depth) {
-            ++tt_hits_;
-            const int tt_score = score_from_tt(entry->score, ply);
-            if (entry->bound == Bound::Exact) {
-                return tt_score;
-            }
-            if (entry->bound == Bound::Lower) {
-                alpha = std::max(alpha, tt_score);
-            } else if (entry->bound == Bound::Upper) {
-                beta = std::min(beta, tt_score);
-            }
-            if (alpha >= beta) {
-                return tt_score;
+    const bool use_tt_entry = !(ply == 0 && root_search_moves_constrained_);
+    if (use_tt_entry) {
+        const TranspositionEntry* entry = tt_.probe(board.hash_key());
+        if (entry != nullptr) {
+            tt_move = entry->best_move;
+            if (entry->depth >= depth) {
+                ++tt_hits_;
+                const int tt_score = score_from_tt(entry->score, ply);
+                if (entry->bound == Bound::Exact) {
+                    return tt_score;
+                }
+                if (entry->bound == Bound::Lower) {
+                    alpha = std::max(alpha, tt_score);
+                } else if (entry->bound == Bound::Upper) {
+                    beta = std::min(beta, tt_score);
+                }
+                if (alpha >= beta) {
+                    return tt_score;
+                }
             }
         }
     }
@@ -736,7 +758,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
 
     const bool in_check = board.in_check(board.side_to_move());
     MoveList moves = ply == 0
-        ? generate_legal_moves(board)
+        ? root_search_moves_
         : (in_check ? generate_pseudo_legal_check_evasions(board) : generate_pseudo_legal_moves(board));
 
     if (null_move_pruning_

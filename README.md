@@ -65,6 +65,13 @@ Run the benchmark and tactical suites:
 External suites use an EPD-style format: four FEN fields followed by operations such as `bm` for accepted UCI best moves, `am` for UCI moves that must be avoided, `acd` for search depth, `id`, `theme`, `c0`, `hmvc`, and `fmvn`. A position with only `am` passes when the engine avoids every listed move. The checked-in file-backed suites live under `data/suites/`.
 
 UCI `movetime` still takes priority for fixed-time tests. Without `movetime`, the engine allocates a conservative move budget from `wtime`, `btime`, `winc`, `binc`, and optional `movestogo`.
+The UCI engine also supports standard root constraints with `searchmoves`, which is useful when comparing candidate moves from a postmortem:
+
+```text
+position fen r1bq1k1r/1p4p1/p3p3/2p2p1p/4Bb2/2NP1N2/PPP2PPP/R2QR1K1 w - - 0 14
+go depth 5 searchmoves e4b7
+go depth 5 searchmoves g2g3
+```
 
 Inspect the evaluation trace for the current UCI position:
 

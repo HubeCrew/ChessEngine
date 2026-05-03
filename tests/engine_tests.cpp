@@ -378,6 +378,20 @@ TEST_CASE("search prefers winning free queen material") {
     REQUIRE(chess::move_to_uci(result.best_move) == "h1h7");
 }
 
+TEST_CASE("search can be constrained to explicit legal root moves") {
+    chess::Board board = chess::Board::start_position();
+    chess::engine::SearchLimits limits;
+    limits.depth = 2;
+    limits.search_moves.push_back(legal_move_by_uci(board, "e2e4"));
+
+    chess::engine::Searcher searcher;
+    const chess::engine::SearchResult result = searcher.search(board, limits);
+
+    REQUIRE(result.depth == 2);
+    REQUIRE(chess::move_to_uci(result.best_move) == "e2e4");
+    REQUIRE(board.hash_key() == board.recompute_hash());
+}
+
 TEST_CASE("static exchange evaluation scores free captures") {
     chess::Board board = chess::board_from_fen("4k3/8/8/8/8/8/4q3/4R2K w - - 0 1");
     const chess::Move move = legal_move_by_uci(board, "e1e2");
