@@ -59,6 +59,10 @@ def main() -> int:
                 str(output_dir),
                 "--max-events",
                 "8",
+                "--reference-engine",
+                str(engine),
+                "--reference-depth",
+                "1",
             ],
             text=True,
             stdout=subprocess.PIPE,
@@ -85,7 +89,7 @@ def main() -> int:
         if "bad-trade-sequence" not in report or "Sequence after reply" not in report:
             print(report, file=sys.stderr)
             return 1
-        if "postmortem-0001" not in positions:
+        if "postmortem-0001" not in positions or " bm " not in positions:
             print(positions, file=sys.stderr)
             return 1
 

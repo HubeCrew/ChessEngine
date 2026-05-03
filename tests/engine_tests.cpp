@@ -436,13 +436,14 @@ TEST_CASE("EPD suite loader parses metadata, depth, and best moves") {
         std::ofstream output(path);
         output << "# comment lines are ignored\n";
         output << "6k1/6pp/8/2B5/8/8/6PP/5RK1 w - - bm f1f8; id \"mate-in-one-back-rank\"; theme \"mate-in-1\"; acd 2; hmvc 0; fmvn 1; c0 \"Protected rook delivers mate\";\n";
-        output << "4k3/7q/8/8/8/8/8/4K2R w - - bm h1h7; id \"hanging-queen\"; theme \"hanging queen\"; acd 1;\n";
+        output << "4k3/7q/8/8/8/8/8/4K2R w - - bm h1h7; am e1d2; id \"hanging-queen\"; theme \"hanging queen\"; acd 1;\n";
+        output << "4k3/8/8/8/8/8/8/4K2R w - - am e1d2; id \"avoid-only\"; theme \"postmortem\"; acd 1;\n";
     }
 
     const std::vector<chess::engine::SuitePosition> positions = chess::engine::load_epd_suite(path);
     std::filesystem::remove(path);
 
-    REQUIRE(positions.size() == 2);
+    REQUIRE(positions.size() == 3);
     REQUIRE(positions[0].id == "mate-in-one-back-rank");
     REQUIRE(positions[0].theme == "mate-in-1");
     REQUIRE(positions[0].description == "Protected rook delivers mate");
@@ -454,6 +455,14 @@ TEST_CASE("EPD suite loader parses metadata, depth, and best moves") {
 
     REQUIRE(positions[1].fen == "4k3/7q/8/8/8/8/8/4K2R w - - 0 1");
     REQUIRE(positions[1].depth == 1);
+    REQUIRE(positions[1].expected_best_moves == std::vector<std::string>{"h1h7"});
+    REQUIRE(positions[1].avoided_moves == std::vector<std::string>{"e1d2"});
+    REQUIRE(chess::engine::is_expected_best_move(positions[1], "h1h7"));
+    REQUIRE(chess::engine::is_avoided_move(positions[1], "e1d2"));
+    REQUIRE_FALSE(chess::engine::is_avoided_move(positions[1], "h1h7"));
+
+    REQUIRE(positions[2].expected_best_moves.empty());
+    REQUIRE(positions[2].avoided_moves == std::vector<std::string>{"e1d2"});
 }
 
 TEST_CASE("tactical suite finds expected best moves") {

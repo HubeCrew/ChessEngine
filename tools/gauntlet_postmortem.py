@@ -102,6 +102,8 @@ class MoveRecord:
     severity: int = 0
     engine_bestmove: str = ""
     engine_bestmove_score_cp: int | None = None
+    reference_bestmove: str = ""
+    reference_score_cp: int | None = None
 
 
 class UciTraceEngine:
@@ -150,9 +152,12 @@ class UciTraceEngine:
                 self.cache[fen] = trace
                 return trace
 
-    def bestmove(self, fen: str, depth: int) -> tuple[str, int | None]:
+    def bestmove(self, fen: str, depth: int = 0, movetime_ms: int = 0) -> tuple[str, int | None]:
         self._send(f"position fen {fen}")
-        self._send(f"go depth {depth}")
+        if movetime_ms > 0:
+            self._send(f"go movetime {movetime_ms}")
+        else:
+            self._send(f"go depth {depth}")
         deadline = time.monotonic() + self.timeout
         latest_score: int | None = None
         while True:
@@ -552,9 +557,14 @@ def write_csv(path: Path, events: list[MoveRecord]) -> None:
         "reply_san",
         "score_after_reply_cp",
         "sequence_delta_cp",
+        "engine_recaptures_available",
         "moving_piece",
         "captured_piece",
         "capture_value",
+        "engine_bestmove",
+        "engine_bestmove_score_cp",
+        "reference_bestmove",
+        "reference_score_cp",
         "fen_before",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -563,19 +573,22 @@ def write_csv(path: Path, events: list[MoveRecord]) -> None:
         for event in events:
             row = {field_name: getattr(event, field_name) for field_name in fields if field_name != "categories"}
             row["categories"] = "|".join(event.categories)
+            row["engine_recaptures_available"] = "|".join(event.engine_recaptures_available)
             writer.writerow(row)
 
 
 def write_epd(path: Path, events: list[MoveRecord]) -> None:
     lines = [
         "# Positions flagged by gauntlet_postmortem.py.",
-        "# bm is the move played in the gauntlet, not necessarily the correct move.",
+        "# bm is the optional reference-engine move. am is the move played in the gauntlet and should be avoided.",
     ]
     for index, event in enumerate(events, start=1):
         board = chess.Board(event.fen_before)
         epd = " ".join(event.fen_before.split()[:4])
+        best_move = f"bm {event.reference_bestmove}; " if event.reference_bestmove else ""
+        avoid_move = f"am {event.uci}; " if event.reference_bestmove != event.uci else ""
         lines.append(
-            f'{epd} bm {event.uci}; id "postmortem-{index:04d}-g{event.game}-p{event.ply}"; '
+            f'{epd} {best_move}{avoid_move}id "postmortem-{index:04d}-g{event.game}-p{event.ply}"; '
             f'theme "{"|".join(event.categories)}"; acd 5; '
             f'hmvc {board.halfmove_clock}; fmvn {board.fullmove_number}; '
             f'c0 "{event.mover} played {event.uci} ({event.san}), delta {event.delta_cp} cp";'
@@ -631,6 +644,9 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
             if event.engine_bestmove:
                 lines.append(f"- Engine re-search: `{event.engine_bestmove}` score `{event.engine_bestmove_score_cp}`")
                 lines.append("")
+            if event.reference_bestmove:
+                lines.append(f"- Reference bestmove: `{event.reference_bestmove}` score `{event.reference_score_cp}`")
+                lines.append("")
 
     trade_categories = {
         "equal-value-capture",
@@ -672,6 +688,16 @@ def add_engine_bestmoves(events: list[MoveRecord], engine: UciTraceEngine, depth
         event.engine_bestmove_score_cp = score
 
 
+def add_reference_bestmoves(events: list[MoveRecord], engine: UciTraceEngine, depth: int, movetime_ms: int) -> None:
+    if depth <= 0 and movetime_ms <= 0:
+        return
+    for event in events:
+        bestmove, score = engine.bestmove(event.fen_before, depth, movetime_ms)
+        if bestmove != "0000":
+            event.reference_bestmove = bestmove
+            event.reference_score_cp = score
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze gauntlet PGNs for bad trades and evaluation swings.")
     parser.add_argument("--pgn-dir", required=True, type=Path, help="Gauntlet output directory or one PGN file.")
@@ -682,6 +708,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--swing-threshold", type=int, default=120)
     parser.add_argument("--trade-drop-threshold", type=int, default=50)
     parser.add_argument("--engine-depth", type=int, default=0, help="Optional depth for bestmove re-search on flagged events.")
+    parser.add_argument("--reference-engine", default="", help="Optional UCI engine command used to annotate EPD bm moves.")
+    parser.add_argument("--reference-depth", type=int, default=0, help="Reference-engine depth for EPD bm annotation.")
+    parser.add_argument("--reference-movetime-ms", type=int, default=0, help="Reference-engine movetime for EPD bm annotation.")
     parser.add_argument("--both-sides", action="store_true", help="Analyze both players instead of only --engine-name moves.")
     parser.add_argument("--protocol-timeout", type=float, default=10.0)
     return parser.parse_args()
@@ -714,6 +743,12 @@ def main() -> int:
             )
         events = select_events(records, args.max_events)
         add_engine_bestmoves(events, trace_engine, args.engine_depth)
+    if args.reference_engine:
+        reference_depth = args.reference_depth
+        if reference_depth <= 0 and args.reference_movetime_ms <= 0:
+            reference_depth = 8
+        with UciTraceEngine(args.reference_engine, args.protocol_timeout) as reference_engine:
+            add_reference_bestmoves(events, reference_engine, reference_depth, args.reference_movetime_ms)
 
     summary = summarize(records, events, args.engine_name)
     write_json(args.output_dir / "postmortem.json", summary, events)

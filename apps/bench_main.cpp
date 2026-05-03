@@ -43,6 +43,7 @@ struct RunResult {
     int depth = 0;
     std::string best_move;
     std::string expected;
+    std::string avoided;
     bool matched = true;
     int score = 0;
     std::uint64_t nodes = 0;
@@ -144,6 +145,17 @@ std::string expected_moves_string(const chess::engine::SuitePosition& position) 
     return result;
 }
 
+std::string avoided_moves_string(const chess::engine::SuitePosition& position) {
+    std::string result;
+    for (const std::string& move : position.avoided_moves) {
+        if (!result.empty()) {
+            result.push_back('|');
+        }
+        result += move;
+    }
+    return result;
+}
+
 std::string expected_moves_string(const chess::engine::TacticalPosition& position) {
     std::string result;
     for (std::size_t index = 0; index < position.expected_best_move_count; ++index) {
@@ -184,7 +196,7 @@ RunResult run_search(
 }
 
 void print_csv_header() {
-    std::cout << "id,theme,depth,bestmove,expected,matched,score_cp,nodes,nps,time_ms,description,qnodes\n";
+    std::cout << "id,theme,depth,bestmove,expected,avoided,matched,score_cp,nodes,nps,time_ms,description,qnodes\n";
 }
 
 std::string csv_escape(const std::string& value) {
@@ -207,6 +219,7 @@ void print_csv_row(const RunResult& result) {
               << result.depth << ','
               << csv_escape(result.best_move) << ','
               << csv_escape(result.expected) << ','
+              << csv_escape(result.avoided) << ','
               << (result.matched ? "true" : "false") << ','
               << result.score << ','
               << result.nodes << ','
@@ -416,8 +429,12 @@ int main(int argc, char** argv) {
                     depth,
                     expected_moves_string(position)
                 );
-                if (!position.expected_best_moves.empty()) {
-                    result.matched = chess::engine::is_expected_best_move(position, result.best_move);
+                result.avoided = avoided_moves_string(position);
+                if (!position.expected_best_moves.empty() || !position.avoided_moves.empty()) {
+                    const bool expected_ok = position.expected_best_moves.empty()
+                        || chess::engine::is_expected_best_move(position, result.best_move);
+                    const bool avoided_ok = !chess::engine::is_avoided_move(position, result.best_move);
+                    result.matched = expected_ok && avoided_ok;
                 }
                 if (options.progress) {
                     print_progress_update(result, total_positions, progress);

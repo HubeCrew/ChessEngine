@@ -34,6 +34,7 @@ def main() -> int:
         "depth",
         "bestmove",
         "expected",
+        "avoided",
         "matched",
         "score_cp",
         "nodes",

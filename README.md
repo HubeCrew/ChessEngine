@@ -62,7 +62,7 @@ Run the benchmark and tactical suites:
 `--disable-null-move` is available for A/B checks when measuring the null-move pruning search feature.
 `--disable-extensions` is available for A/B checks when measuring bounded search extensions.
 `--progress` writes per-position progress updates to stderr, so normal table and CSV output on stdout remain clean.
-External suites use an EPD-style format: four FEN fields followed by operations such as `bm` for accepted UCI best moves, `acd` for search depth, `id`, `theme`, `c0`, `hmvc`, and `fmvn`. The checked-in file-backed suites live under `data/suites/`.
+External suites use an EPD-style format: four FEN fields followed by operations such as `bm` for accepted UCI best moves, `am` for UCI moves that must be avoided, `acd` for search depth, `id`, `theme`, `c0`, `hmvc`, and `fmvn`. A position with only `am` passes when the engine avoids every listed move. The checked-in file-backed suites live under `data/suites/`.
 
 UCI `movetime` still takes priority for fixed-time tests. Without `movetime`, the engine allocates a conservative move budget from `wtime`, `btime`, `winc`, `binc`, and optional `movestogo`.
 
@@ -168,10 +168,12 @@ Analyze a completed gauntlet after the PGNs are written:
   --engine-name current-eval \
   --output-dir runs/postmortems/current-eval-vs-stockfish-1500 \
   --max-events 80 \
-  --engine-depth 1
+  --engine-depth 1 \
+  --reference-engine /usr/games/stockfish \
+  --reference-depth 8
 ```
 
-The postmortem writes `report.md`, `events.csv`, `postmortem.json`, and `positions.epd`. It uses `python-chess` for PGN/FEN reconstruction and the engine's own `eval` command for trace components, then flags eval swings, loss-context moves, equal trades, queen trades, opponent recaptures, and bad trade sequences.
+The postmortem writes `report.md`, `events.csv`, `postmortem.json`, and `positions.epd`. It uses `python-chess` for PGN/FEN reconstruction and the engine's own `eval` command for trace components, then flags eval swings, loss-context moves, equal trades, queen trades, opponent recaptures, and bad trade sequences. `positions.epd` records the gauntlet move as `am` when there is no reference move or when the reference engine disagrees with it; when a reference engine is supplied, its best move is recorded as `bm`, making the file suitable for blunder-regression checks with `chess_bench`.
 
 Watch a gauntlet live in the browser:
 

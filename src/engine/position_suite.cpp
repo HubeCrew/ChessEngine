@@ -167,6 +167,9 @@ SuitePosition parse_epd_line(std::string_view line, const std::filesystem::path&
     if (const auto found = operations.find("bm"); found != operations.end()) {
         position.expected_best_moves = parse_best_moves(found->second);
     }
+    if (const auto found = operations.find("am"); found != operations.end()) {
+        position.avoided_moves = parse_best_moves(found->second);
+    }
 
     (void)board_from_fen(position.fen);
     return position;
@@ -697,6 +700,11 @@ bool is_expected_best_move(const TacticalPosition& position, std::string_view mo
 bool is_expected_best_move(const SuitePosition& position, std::string_view move) {
     return std::find(position.expected_best_moves.begin(), position.expected_best_moves.end(), move)
         != position.expected_best_moves.end();
+}
+
+bool is_avoided_move(const SuitePosition& position, std::string_view move) {
+    return std::find(position.avoided_moves.begin(), position.avoided_moves.end(), move)
+        != position.avoided_moves.end();
 }
 
 std::vector<SuitePosition> load_epd_suite(const std::filesystem::path& path) {
