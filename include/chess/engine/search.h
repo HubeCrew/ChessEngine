@@ -64,7 +64,6 @@ private:
 
     int negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move, int extensions_used);
     int quiescence(Board& board, int ply, int alpha, int beta, int qply);
-    void order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const;
     void age_history();
     void record_cutoff(
         const Move& move,

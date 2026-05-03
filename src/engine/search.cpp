@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 #include "chess/core/movegen.h"
 #include "chess/engine/evaluation.h"
@@ -29,6 +31,9 @@ constexpr int kDefaultMovesToGo = 30;
 constexpr int kMinAllocatedMoveTimeMs = 10;
 constexpr int kMoveTimeSafetyMs = 20;
 constexpr std::size_t kMaxHistoryQuiets = 256;
+constexpr std::size_t kNoMoveIndex = static_cast<std::size_t>(-1);
+
+using HistoryTable = std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, 2>;
 
 int color_index(Color color) {
     return static_cast<int>(color);
@@ -171,10 +176,6 @@ bool is_advanced_passed_pawn_move(const Board& board_after_move, const Move& mov
     return advanced_rank >= 5 && is_passed_pawn_after_move(board_after_move, move.to, moving_side);
 }
 
-bool is_quiescence_candidate(Board& board, const Move& move, bool allow_quiet_checks) {
-    return move.is_capture() || move.is_promotion() || (allow_quiet_checks && move_gives_check(board, move));
-}
-
 int extension_for_move(
     const Board& board_after_move,
     const Move& move,
@@ -199,6 +200,203 @@ int extension_for_move(
 int clamp_history(int value) {
     return std::clamp(value, -kHistoryLimit, kHistoryLimit);
 }
+
+enum class MovePickerMode {
+    AllMoves,
+    Quiescence,
+};
+
+struct PickedMove {
+    Move move;
+    bool gives_check_known = false;
+    bool gives_check = false;
+    bool see_known = false;
+    int see_score = 0;
+};
+
+class MovePicker {
+public:
+    MovePicker(
+        Board& board,
+        MoveList moves,
+        MovePickerMode mode,
+        Move previous_pv_move,
+        Move tt_move,
+        Move first_killer,
+        Move second_killer,
+        bool allow_quiet_checks,
+        const HistoryTable& history
+    )
+        : board_(board),
+          side_to_move_(board.side_to_move()),
+          mode_(mode),
+          previous_pv_move_(previous_pv_move),
+          tt_move_(tt_move),
+          first_killer_(first_killer),
+          second_killer_(second_killer),
+          allow_quiet_checks_(allow_quiet_checks),
+          history_(history) {
+        moves_.reserve(moves.size());
+        for (const Move& move : moves) {
+            moves_.push_back(MoveState{move});
+        }
+        build_order();
+    }
+
+    bool next(PickedMove& picked) {
+        if (ordered_cursor_ >= ordered_indices_.size()) {
+            return false;
+        }
+
+        MoveState& state = moves_[ordered_indices_[ordered_cursor_++]];
+        picked = PickedMove{
+            state.move,
+            state.gives_check_known,
+            state.gives_check,
+            state.see_known,
+            state.see_score,
+        };
+        return true;
+    }
+
+private:
+    struct MoveState {
+        Move move;
+        bool tactical_classified = false;
+        bool is_tactical = false;
+        int tactical_score = 0;
+        bool quiet_score_known = false;
+        int quiet_score = 0;
+        bool gives_check_known = false;
+        bool gives_check = false;
+        bool see_known = false;
+        int see_score = 0;
+    };
+
+    struct ScoredIndex {
+        std::size_t index = kNoMoveIndex;
+        int score = 0;
+    };
+
+    Board& board_;
+    Color side_to_move_ = Color::White;
+    MovePickerMode mode_ = MovePickerMode::AllMoves;
+    Move previous_pv_move_;
+    Move tt_move_;
+    Move first_killer_;
+    Move second_killer_;
+    bool allow_quiet_checks_ = false;
+    const HistoryTable& history_;
+    std::vector<MoveState> moves_;
+    std::vector<std::size_t> ordered_indices_;
+    std::size_t ordered_cursor_ = 0;
+
+    void build_order() {
+        ordered_indices_.reserve(moves_.size());
+        std::vector<ScoredIndex> candidates;
+        candidates.reserve(moves_.size());
+
+        for (std::size_t index = 0; index < moves_.size(); ++index) {
+            MoveState& state = moves_[index];
+            if (!is_candidate_for_mode(state)) {
+                continue;
+            }
+            candidates.push_back(ScoredIndex{index, move_order_score(state)});
+        }
+
+        std::stable_sort(candidates.begin(), candidates.end(), [](const ScoredIndex& lhs, const ScoredIndex& rhs) {
+            return lhs.score > rhs.score;
+        });
+
+        for (const ScoredIndex& candidate : candidates) {
+            ordered_indices_.push_back(candidate.index);
+        }
+    }
+
+    int move_order_score(MoveState& state) {
+        if (is_valid_move_shape(previous_pv_move_) && same_move_identity(state.move, previous_pv_move_)) {
+            return 1'100'000;
+        }
+        if (is_valid_move_shape(tt_move_) && same_move_identity(state.move, tt_move_)) {
+            return 1'000'000;
+        }
+
+        classify_tactical(state);
+        if (state.is_tactical) {
+            return state.tactical_score;
+        }
+
+        int score = 0;
+        if (same_move(state.move, first_killer_)) {
+            score += 30'000;
+        } else if (same_move(state.move, second_killer_)) {
+            score += 29'000;
+        }
+        score += quiet_score(state);
+        return score;
+    }
+
+    bool is_candidate_for_mode(MoveState& state) {
+        if (mode_ == MovePickerMode::AllMoves) {
+            return true;
+        }
+        if (state.move.is_capture() || state.move.is_promotion()) {
+            return true;
+        }
+        if (!allow_quiet_checks_) {
+            return false;
+        }
+        return gives_check(state);
+    }
+
+    void classify_tactical(MoveState& state) {
+        if (state.tactical_classified) {
+            return;
+        }
+        state.tactical_classified = true;
+        state.is_tactical = state.move.is_capture() || state.move.is_promotion();
+        if (!state.is_tactical) {
+            return;
+        }
+
+        if (state.move.is_promotion()) {
+            state.tactical_score += 90'000 + material_value(state.move.promotion);
+        }
+
+        if (state.move.is_capture()) {
+            const bool see_needed = needs_see_for_loss_detection(board_, state.move);
+            const int exchange_score = see_needed
+                ? static_exchange_eval(board_, state.move)
+                : immediate_capture_gain(board_, state.move);
+            if (see_needed) {
+                state.see_known = true;
+                state.see_score = exchange_score;
+            }
+
+            if (exchange_score >= 0) {
+                state.tactical_score += 70'000 + exchange_score + mvv_lva_score(board_, state.move);
+            } else {
+                state.tactical_score += 5'000 + exchange_score + mvv_lva_score(board_, state.move);
+            }
+        }
+    }
+
+    int quiet_score(MoveState& state) {
+        if (!state.quiet_score_known) {
+            state.quiet_score_known = true;
+            state.quiet_score = history_[color_index(side_to_move_)][state.move.from][state.move.to];
+        }
+        return state.quiet_score;
+    }
+
+    bool gives_check(MoveState& state) {
+        if (!state.gives_check_known) {
+            state.gives_check_known = true;
+            state.gives_check = move_gives_check(board_, state.move);
+        }
+        return state.gives_check;
+    }
+};
 
 std::chrono::milliseconds allocated_time(const Board& board, const SearchLimits& limits) {
     if (limits.move_time.count() > 0) {
@@ -415,8 +613,6 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
         }
     }
 
-    order_moves(board, moves, tt_move, ply);
-
     Move best_move;
     int best_score = -kInfinity;
     int move_index = 0;
@@ -424,9 +620,22 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
     if (ply == 0 && !previous_iteration_pv_.empty()) {
         pv_move = previous_iteration_pv_.front();
     }
+    MovePicker picker{
+        board,
+        std::move(moves),
+        MovePickerMode::AllMoves,
+        pv_move,
+        tt_move,
+        ply < kMaxPly ? killer_moves_[ply][0] : Move{},
+        ply < kMaxPly ? killer_moves_[ply][1] : Move{},
+        false,
+        history_,
+    };
     std::array<Move, kMaxHistoryQuiets> quiets_tried_before_cutoff{};
     std::size_t quiet_count = 0;
-    for (const Move& move : moves) {
+    PickedMove picked;
+    while (picker.next(picked)) {
+        const Move& move = picked.move;
         const Color moving_side = board.side_to_move();
         const UndoState undo = board.make_move(move);
         const bool gives_check = board.in_check(board.side_to_move());
@@ -513,32 +722,42 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
     }
 
     MoveList moves = generate_legal_moves(board);
-    if (!in_check) {
-        const bool allow_quiet_checks = qply < kMaxQuiescenceQuietCheckPly
-            && ply < kMaxPly - 1
-            && alpha > -kMateScore + kMateWindow
-            && beta < kMateScore - kMateWindow;
-        moves.erase(
-            std::remove_if(moves.begin(), moves.end(), [&](const Move& move) {
-                return !is_quiescence_candidate(board, move, allow_quiet_checks);
-            }),
-            moves.end()
-        );
-    } else if (moves.empty()) {
+    if (in_check && moves.empty()) {
         return -kMateScore + ply;
     }
-    order_moves(board, moves, tt_move, ply);
+    const bool allow_quiet_checks = !in_check
+        && qply < kMaxQuiescenceQuietCheckPly
+        && ply < kMaxPly - 1
+        && alpha > -kMateScore + kMateWindow
+        && beta < kMateScore - kMateWindow;
+    MovePicker picker{
+        board,
+        std::move(moves),
+        in_check ? MovePickerMode::AllMoves : MovePickerMode::Quiescence,
+        Move{},
+        tt_move,
+        ply < kMaxPly ? killer_moves_[ply][0] : Move{},
+        ply < kMaxPly ? killer_moves_[ply][1] : Move{},
+        allow_quiet_checks,
+        history_,
+    };
 
-    for (const Move& move : moves) {
+    PickedMove picked;
+    while (picker.next(picked)) {
+        const Move& move = picked.move;
         bool gives_check = false;
         if (!in_check) {
-            gives_check = move_gives_check(board, move);
+            gives_check = picked.gives_check_known ? picked.gives_check : move_gives_check(board, move);
+            if (!move.is_capture() && !move.is_promotion() && (!allow_quiet_checks || !gives_check)) {
+                continue;
+            }
             if (move.is_capture() && !move.is_promotion() && !gives_check
                 && stand_pat + immediate_capture_gain(board, move) + kDeltaPruningMargin <= alpha) {
                 continue;
             }
             if (needs_see_for_loss_detection(board, move)
-                && static_exchange_eval(board, move) < 0 && !gives_check) {
+                && (picked.see_known ? picked.see_score : static_exchange_eval(board, move)) < 0
+                && !gives_check) {
                 continue;
             }
         }
@@ -552,61 +771,6 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         alpha = std::max(alpha, score);
     }
     return alpha;
-}
-
-void Searcher::order_moves(Board& board, MoveList& moves, const Move& tt_move, int ply) const {
-    const Color side = board.side_to_move();
-    Move pv_move;
-    if (ply == 0 && !previous_iteration_pv_.empty()) {
-        pv_move = previous_iteration_pv_.front();
-    }
-
-    struct ScoredMove {
-        Move move;
-        int score = 0;
-    };
-
-    std::vector<ScoredMove> scored_moves;
-    scored_moves.reserve(moves.size());
-
-    for (const Move& move : moves) {
-        int score = 0;
-        if (is_valid_move_shape(pv_move) && same_move_identity(move, pv_move)) {
-            score = 1'100'000;
-        } else if (is_valid_move_shape(tt_move) && same_move_identity(move, tt_move)) {
-            score = 1'000'000;
-        } else {
-            if (move.is_promotion()) {
-                score += 90'000 + material_value(move.promotion);
-            }
-            if (move.is_capture()) {
-                const int see_score = needs_see_for_loss_detection(board, move)
-                    ? static_exchange_eval(board, move)
-                    : immediate_capture_gain(board, move);
-                if (see_score >= 0) {
-                    score += 70'000 + see_score + mvv_lva_score(board, move);
-                } else {
-                    score += 5'000 + see_score + mvv_lva_score(board, move);
-                }
-            } else if (ply < kMaxPly) {
-                if (same_move(move, killer_moves_[ply][0])) {
-                    score += 30'000;
-                } else if (same_move(move, killer_moves_[ply][1])) {
-                    score += 29'000;
-                }
-                score += history_[color_index(side)][move.from][move.to];
-            }
-        }
-        scored_moves.push_back(ScoredMove{move, score});
-    }
-
-    std::stable_sort(scored_moves.begin(), scored_moves.end(), [](const ScoredMove& lhs, const ScoredMove& rhs) {
-        return lhs.score > rhs.score;
-    });
-
-    for (std::size_t index = 0; index < moves.size(); ++index) {
-        moves[index] = scored_moves[index].move;
-    }
 }
 
 void Searcher::age_history() {

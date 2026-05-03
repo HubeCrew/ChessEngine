@@ -294,6 +294,7 @@ Bitboard attacks_from_piece(const Board& board, Square from, Color color, PieceT
 
 struct AttackMap {
     std::array<Bitboard, 6> by_type{};
+    std::array<Bitboard, kBoardSquareCount> by_square{};
     Bitboard all = 0;
 };
 
@@ -633,7 +634,7 @@ int king_attack_penalty(const Board& board, Color defender, const AttackMap& att
             const Square from = __builtin_ctzll(pieces);
             pieces &= pieces - 1;
 
-            const int hits = __builtin_popcountll(attacks_from_piece(board, from, attacker, type) & ring_mask);
+            const int hits = __builtin_popcountll(attacker_map.by_square[from] & ring_mask);
             if (hits > 0) {
                 ++attackers;
                 attack_units += king_attack_piece_weight(type) + hits * 2;
@@ -814,6 +815,7 @@ int evaluate_white_perspective(const Board& board) {
 
         const Bitboard attacks = attacks_from_piece(board, square, color, type);
         attack_maps[static_cast<int>(color)].by_type[piece_index(type)] |= attacks;
+        attack_maps[static_cast<int>(color)].by_square[square] = attacks;
         attack_maps[static_cast<int>(color)].all |= attacks;
 
         const int mobility = mobility_for_piece(type, attacks, board.occupancy(color));
