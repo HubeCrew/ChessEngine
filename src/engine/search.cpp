@@ -279,6 +279,12 @@ enum class MovePickerMode {
     Quiescence,
 };
 
+enum class MovePickerStage {
+    PreviousPv,
+    Remainder,
+    Done,
+};
+
 struct PickedMove {
     Move move;
     bool gives_check_known = false;
@@ -316,6 +322,10 @@ public:
 
     [[nodiscard]] std::size_t size() const {
         return size_;
+    }
+
+    [[nodiscard]] bool empty() const {
+        return size_ == 0;
     }
 
     [[nodiscard]] T& operator[](std::size_t index) {
@@ -374,32 +384,41 @@ public:
         for (const Move& move : moves) {
             moves_.emplace_back(move);
         }
-        build_order();
     }
 
     bool next(PickedMove& picked) {
-        if (ordered_cursor_ >= ordered_indices_.size()) {
-            return false;
+        while (stage_ != MovePickerStage::Done) {
+            switch (stage_) {
+                case MovePickerStage::PreviousPv:
+                    if (pick_special(previous_pv_move_, picked)) {
+                        return true;
+                    }
+                    stage_ = MovePickerStage::Remainder;
+                    break;
+                case MovePickerStage::Remainder:
+                    if (!remainder_built_) {
+                        build_remainder();
+                    }
+                    if (pick_from_ordered(remainder_, remainder_cursor_, picked)) {
+                        return true;
+                    }
+                    stage_ = MovePickerStage::Done;
+                    break;
+                case MovePickerStage::Done:
+                    break;
+            }
         }
-
-        ScoredMove& state = moves_[ordered_indices_[ordered_cursor_].index];
-        ++ordered_cursor_;
-        picked = PickedMove{
-            state.move,
-            state.gives_check_known,
-            state.gives_check,
-            state.see_known,
-            state.see_score,
-        };
-        return true;
+        return false;
     }
 
 private:
     struct ScoredMove {
         Move move;
+        bool emitted = false;
         bool tactical_classified = false;
         bool is_tactical = false;
         int tactical_score = 0;
+        int tactical_exchange_score = 0;
         bool quiet_score_known = false;
         int quiet_score = 0;
         bool gives_check_known = false;
@@ -427,36 +446,30 @@ private:
     bool allow_quiet_checks_ = false;
     const HistoryTable& history_;
     FixedVector<ScoredMove, MoveList::kCapacity> moves_;
-    FixedVector<ScoredIndex, MoveList::kCapacity> ordered_indices_;
-    std::size_t ordered_cursor_ = 0;
+    FixedVector<ScoredIndex, MoveList::kCapacity> remainder_;
+    MovePickerStage stage_ = MovePickerStage::PreviousPv;
+    std::size_t remainder_cursor_ = 0;
+    bool remainder_built_ = false;
 
-    void build_order() {
+    void build_remainder() {
+        remainder_built_ = true;
         for (std::size_t index = 0; index < moves_.size(); ++index) {
             ScoredMove& state = moves_[index];
-            if (!is_candidate_for_mode(state)) {
+            if (state.emitted || !is_candidate_for_mode(state)) {
                 continue;
             }
-            ordered_indices_.emplace_back(index, move_order_score(state));
+            remainder_.emplace_back(index, move_order_score(state));
         }
+        sort_descending(remainder_);
+    }
 
-        std::stable_sort(ordered_indices_.begin(), ordered_indices_.end(), [](const ScoredIndex& lhs, const ScoredIndex& rhs) {
+    void sort_descending(FixedVector<ScoredIndex, MoveList::kCapacity>& indices) {
+        std::stable_sort(indices.begin(), indices.end(), [](const ScoredIndex& lhs, const ScoredIndex& rhs) {
             return lhs.score > rhs.score;
         });
     }
 
-    int move_order_score(ScoredMove& state) {
-        if (is_valid_move_shape(previous_pv_move_) && same_move_identity(state.move, previous_pv_move_)) {
-            return 1'100'000;
-        }
-        if (is_valid_move_shape(tt_move_) && same_move_identity(state.move, tt_move_)) {
-            return 1'000'000;
-        }
-
-        classify_tactical(state);
-        if (state.is_tactical) {
-            return state.tactical_score;
-        }
-
+    int quiet_move_order_score(ScoredMove& state) {
         int score = 0;
         if (same_move(state.move, first_killer_)) {
             score += 30'000;
@@ -465,6 +478,14 @@ private:
         }
         score += quiet_score(state);
         return score;
+    }
+
+    int move_order_score(ScoredMove& state) {
+        if (is_valid_move_shape(tt_move_) && same_move_identity(state.move, tt_move_)) {
+            return 1'000'000;
+        }
+        classify_tactical(state);
+        return state.is_tactical ? state.tactical_score : quiet_move_order_score(state);
     }
 
     bool is_candidate_for_mode(ScoredMove& state) {
@@ -478,6 +499,49 @@ private:
             return false;
         }
         return gives_check(state);
+    }
+
+    bool pick_special(const Move& move, PickedMove& picked) {
+        if (!is_valid_move_shape(move)) {
+            return false;
+        }
+        for (std::size_t index = 0; index < moves_.size(); ++index) {
+            ScoredMove& state = moves_[index];
+            if (state.emitted || !same_move_identity(state.move, move) || !is_candidate_for_mode(state)) {
+                continue;
+            }
+            emit(state, picked);
+            return true;
+        }
+        return false;
+    }
+
+    bool pick_from_ordered(
+        FixedVector<ScoredIndex, MoveList::kCapacity>& indices,
+        std::size_t& cursor,
+        PickedMove& picked
+    ) {
+        while (cursor < indices.size()) {
+            ScoredMove& state = moves_[indices[cursor].index];
+            ++cursor;
+            if (state.emitted) {
+                continue;
+            }
+            emit(state, picked);
+            return true;
+        }
+        return false;
+    }
+
+    void emit(ScoredMove& state, PickedMove& picked) {
+        state.emitted = true;
+        picked = PickedMove{
+            state.move,
+            state.gives_check_known,
+            state.gives_check,
+            state.see_known,
+            state.see_score,
+        };
     }
 
     void classify_tactical(ScoredMove& state) {
@@ -499,6 +563,7 @@ private:
             const int exchange_score = see_needed
                 ? static_exchange_eval(board_, state.move)
                 : immediate_capture_gain(board_, state.move);
+            state.tactical_exchange_score = exchange_score;
             if (see_needed) {
                 state.see_known = true;
                 state.see_score = exchange_score;
