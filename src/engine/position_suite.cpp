@@ -288,13 +288,13 @@ constexpr std::array<TacticalPosition, 50> kTacticalPositions{{
         1,
     },
     {
-        "queen-mate-h7",
-        "mate-in-1",
-        "Queen captures h7 with bishop support for mate",
+        "queen-mating-net",
+        "mate-net",
+        "Queen and bishop coordinate a forced king hunt",
         "6k1/6pp/7Q/8/8/3B4/6PP/6K1 w - - 0 1",
         2,
-        {"h6h7", {}, {}, {}},
-        1,
+        {"h6e6", "h6h7", "d3c4", {}},
+        3,
     },
     {
         "black-rook-back-rank-mate",

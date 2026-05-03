@@ -7,6 +7,7 @@
 #include "chess/core/fen.h"
 #include "chess/core/move.h"
 #include "chess/core/movegen.h"
+#include "chess/engine/evaluation.h"
 #include "chess/engine/search.h"
 
 namespace {
@@ -99,6 +100,28 @@ std::string pv_to_string(const std::vector<chess::Move>& principal_variation) {
     return result;
 }
 
+void print_eval_trace(const chess::Board& board) {
+    const chess::engine::EvalTrace trace = chess::engine::evaluate_trace_white_perspective(board);
+    std::cout << "info string eval"
+              << " material " << trace.material
+              << " piece_square " << trace.piece_square
+              << " mobility " << trace.mobility
+              << " safe_mobility " << trace.safe_mobility
+              << " king_safety " << trace.king_safety
+              << " threats " << trace.threats
+              << " pawn_structure " << trace.pawn_structure
+              << " outposts " << trace.outposts
+              << " rook_files " << trace.rook_files
+              << " space " << trace.space
+              << " center_control " << trace.center_control
+              << " bishop_quality " << trace.bishop_quality
+              << " pawn_dynamics " << trace.pawn_dynamics
+              << " development " << trace.development
+              << " trade_context " << trace.trade_context
+              << " total " << trace.total
+              << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -164,6 +187,8 @@ int main() {
                 std::cout << "bestmove " << chess::move_to_uci(result.best_move) << '\n';
             } else if (command == "d") {
                 std::cout << board.to_fen() << '\n';
+            } else if (command == "eval") {
+                print_eval_trace(board);
             } else if (command == "quit") {
                 break;
             }

@@ -52,17 +52,28 @@ Run the benchmark and tactical suites:
 ./build-release/chess_bench --suite bench --depth 5 --disable-null-move
 ./build-release/chess_bench --suite bench --depth 5 --disable-extensions
 ./build-release/chess_bench --suite epd --epd data/suites/tactics.epd
+./build-release/chess_bench --suite epd --epd data/suites/strategy.epd --progress
 ./build-release/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd
 ./build-release/chess_bench --suite epd --epd data/suites/lichess_tactics_250.epd --progress
 ```
 
 `chess_bench` reports depth, best move, expected move for tactical cases, score, nodes, qsearch nodes, NPS, and elapsed time. The tactical suite currently contains 50 curated positions across mates, promotions, forks, hanging pieces, winning captures, pawn tactics, checks, and loose-piece tactics. Tactical runs return a non-zero exit code if any expected best move is missed.
+`data/suites/strategy.epd` is a separate aspirational strategic suite for quieter positional choices such as central breaks, outposts, castling, open-file play, space, and preserving attacking potential. It is useful for diagnosis and tuning; unlike the tactical smoke suite, it is not yet a required no-regression gate because the current engine still misses many of these long-term choices.
 `--disable-null-move` is available for A/B checks when measuring the null-move pruning search feature.
 `--disable-extensions` is available for A/B checks when measuring bounded search extensions.
 `--progress` writes per-position progress updates to stderr, so normal table and CSV output on stdout remain clean.
 External suites use an EPD-style format: four FEN fields followed by operations such as `bm` for accepted UCI best moves, `acd` for search depth, `id`, `theme`, `c0`, `hmvc`, and `fmvn`. The checked-in file-backed suites live under `data/suites/`.
 
 UCI `movetime` still takes priority for fixed-time tests. Without `movetime`, the engine allocates a conservative move budget from `wtime`, `btime`, `winc`, `binc`, and optional `movestogo`.
+
+Inspect the evaluation trace for the current UCI position:
+
+```text
+position startpos moves e2e4 e7e5 g1f3
+eval
+```
+
+The custom `eval` command prints white-perspective components for material, piece-square tables, mobility, safe mobility, king safety, threats, pawn structure, outposts, rook files, space, center control, bishop quality, pawn dynamics, development, trade context, and total score.
 
 Generate an imported Lichess tactical suite from the official CC0 puzzle database:
 

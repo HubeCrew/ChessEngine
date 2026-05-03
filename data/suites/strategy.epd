@@ -1,0 +1,13 @@
+# Strategic benchmark positions. These are intentionally separate from tactics:
+# the target moves emphasize development, outposts, king safety, open files,
+# central control, space, and preserving attacking potential.
+rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - bm e2e4 d2d4 c2c4 g1f3; id "opening-center-claim"; theme "center-control"; acd 4; hmvc 0; fmvn 1; c0 "Claim central space without a forcing tactic";
+rnbqk2r/pppp1ppp/5n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - bm e1g1; id "king-safety-castle"; theme "king-safety"; acd 4; hmvc 3; fmvn 4; c0 "Castle before starting operations in the center";
+4k3/8/8/8/8/3P4/3N4/4K3 w - - bm d2e4; id "knight-central-outpost"; theme "outpost"; acd 3; hmvc 0; fmvn 1; c0 "Improve the knight to a protected central outpost";
+4k3/8/8/8/8/2P1P3/3N4/4K3 w - - bm d2e4 d2c4; id "knight-supported-outpost"; theme "outpost"; acd 3; hmvc 0; fmvn 1; c0 "Choose a square supported by the pawn chain";
+r2q1rk1/ppp2ppp/2n2n2/3bp3/3P4/2PBPN2/PP3PPP/RNBQ1RK1 w - - bm e3e4; id "central-break"; theme "pawn-break"; acd 4; hmvc 0; fmvn 8; c0 "Use a central pawn break instead of drifting";
+2r2rk1/pp2qppp/2n1bn2/3p4/3P4/2NBPN2/PPQ2PPP/2RR2K1 w - - bm c1d1; id "contest-open-file"; theme "rook-file"; acd 4; hmvc 0; fmvn 13; c0 "Stack pressure on the open d-file";
+r1bq1rk1/ppp2ppp/2n2n2/3pp3/3PP3/2N1BN2/PPP2PPP/R2QKB1R w KQ - bm d4e5; id "space-to-break"; theme "space"; acd 4; hmvc 0; fmvn 7; c0 "Use space to open central lines";
+r2q1rk1/ppp2ppp/2n2n2/3bp3/3P4/2PBPN2/PP2QPPP/RNB2RK1 w - - bm c2c4; id "queenside-space"; theme "space"; acd 4; hmvc 0; fmvn 9; c0 "Gain queenside space while keeping the king safe";
+2kr3r/ppp2ppp/2n2n2/3p4/3P4/2N1PN2/PP3PPP/2RR2K1 w - - bm c1c2 c1d2; id "double-rooks-file"; theme "rook-file"; acd 4; hmvc 0; fmvn 13; c0 "Coordinate rooks instead of taking an equal-value trade";
+6k1/5ppp/8/6Q1/2B5/5N2/8/6K1 w - - bm c4d3 c4a2 h2h3; id "preserve-attack"; theme "attacking-potential"; acd 4; hmvc 0; fmvn 1; c0 "Keep attacking pieces and avoid premature simplification";

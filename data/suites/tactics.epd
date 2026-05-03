@@ -6,7 +6,7 @@
 2q1k3/8/8/1N6/8/8/8/4K3 w - - bm b5d6; id "knight-fork"; theme "fork"; acd 2; hmvc 0; fmvn 1; c0 "Knight fork checks the king and attacks the queen";
 7k/4P3/8/8/8/8/8/4K3 w - - bm e7e8q; id "passed-pawn-push"; theme "passed pawn"; acd 1; hmvc 0; fmvn 1; c0 "Convert the advanced passer into a queen";
 r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w - - bm d2h6; id "sparkchess-mate-in-two"; theme "mate-in-2"; acd 5; hmvc 0; fmvn 1; c0 "Queen sacrifice forces Bxf6 mate";
-6k1/6pp/7Q/8/8/3B4/6PP/6K1 w - - bm h6h7; id "queen-mate-h7"; theme "mate-in-1"; acd 2; hmvc 0; fmvn 1; c0 "Queen captures h7 with bishop support for mate";
+6k1/6pp/7Q/8/8/3B4/6PP/6K1 w - - bm h6e6 h6h7 d3c4; id "queen-mating-net"; theme "mate-net"; acd 2; hmvc 0; fmvn 1; c0 "Queen and bishop coordinate a forced king hunt";
 5rk1/6pp/8/8/2b5/8/6PP/6K1 b - - bm f8f1; id "black-rook-back-rank-mate"; theme "mate-in-1"; acd 2; hmvc 0; fmvn 1; c0 "Black rook mates on f1 with bishop support";
 4k3/8/7q/8/8/8/8/2B1K3 w - - bm c1h6; id "bishop-wins-queen"; theme "hanging queen"; acd 1; hmvc 0; fmvn 1; c0 "Bishop wins an undefended queen on h6";
 4k3/8/8/8/7q/5N2/8/4K3 w - - bm f3h4; id "knight-wins-queen"; theme "hanging queen"; acd 1; hmvc 0; fmvn 1; c0 "Knight captures a loose queen on h4";

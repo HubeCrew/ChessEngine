@@ -190,6 +190,31 @@ TEST_CASE("evaluation scores king-only positions near equal") {
     REQUIRE(std::abs(chess::engine::evaluate_white_perspective(board)) <= 5);
 }
 
+TEST_CASE("evaluation trace totals match public evaluation") {
+    const chess::Board board = chess::board_from_fen(
+        "r2q1rk1/ppp2ppp/2n2n2/3bp3/3P4/2PBPN2/PP3PPP/RNBQ1RK1 w - - 0 8"
+    );
+    const chess::engine::EvalTrace trace = chess::engine::evaluate_trace_white_perspective(board);
+    const int component_total = trace.material
+        + trace.piece_square
+        + trace.mobility
+        + trace.safe_mobility
+        + trace.king_safety
+        + trace.threats
+        + trace.pawn_structure
+        + trace.outposts
+        + trace.rook_files
+        + trace.space
+        + trace.center_control
+        + trace.bishop_quality
+        + trace.pawn_dynamics
+        + trace.development
+        + trace.trade_context;
+
+    REQUIRE(trace.total == component_total);
+    REQUIRE(trace.total == chess::engine::evaluate_white_perspective(board));
+}
+
 TEST_CASE("evaluation rewards extra material") {
     const chess::Board board = chess::board_from_fen("4k3/8/8/8/8/8/8/R3K3 w - - 0 1");
     REQUIRE(chess::engine::evaluate_white_perspective(board) > 450);
@@ -289,6 +314,43 @@ TEST_CASE("evaluation rewards pawn attacks on higher-value pieces") {
 
     REQUIRE(chess::engine::evaluate_white_perspective(pawn_attacks_rook)
             > chess::engine::evaluate_white_perspective(pawn_misses_rook));
+}
+
+TEST_CASE("evaluation trace rewards safe mobility over pawn-hit mobility") {
+    const chess::Board safe = chess::board_from_fen("4k3/8/8/8/3N4/8/8/4K3 w - - 0 1");
+    const chess::Board pawn_hit = chess::board_from_fen("4k3/8/2p1p3/8/3N4/8/8/4K3 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_trace_white_perspective(safe).safe_mobility
+            > chess::engine::evaluate_trace_white_perspective(pawn_hit).safe_mobility);
+}
+
+TEST_CASE("evaluation trace exposes strategic positional terms") {
+    const chess::Board outpost = chess::board_from_fen("4k3/8/8/3N4/2P1P3/8/8/4K3 w - - 0 1");
+    const chess::Board rook_file = chess::board_from_fen("4k3/8/8/8/8/8/8/3RK3 w - - 0 1");
+    const chess::Board space = chess::board_from_fen("4k3/8/8/3PP3/8/8/8/4K3 w - - 0 1");
+    const chess::Board center = chess::board_from_fen("4k3/8/8/8/3PP3/8/8/4K3 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_trace_white_perspective(outpost).outposts > 0);
+    REQUIRE(chess::engine::evaluate_trace_white_perspective(rook_file).rook_files > 0);
+    REQUIRE(chess::engine::evaluate_trace_white_perspective(space).space > 0);
+    REQUIRE(chess::engine::evaluate_trace_white_perspective(center).center_control > 0);
+}
+
+TEST_CASE("evaluation trace detects bad bishops and pawn dynamics") {
+    const chess::Board bad_bishop = chess::board_from_fen("4k3/8/8/1P1P1P2/P1B1P3/8/8/4K3 w - - 0 1");
+    const chess::Board active_bishop = chess::board_from_fen("4k3/8/8/8/8/2B5/8/4K3 w - - 0 1");
+    const chess::Board candidate = chess::board_from_fen("4k3/8/8/3P4/2P5/8/8/4K3 w - - 0 1");
+
+    REQUIRE(chess::engine::evaluate_trace_white_perspective(bad_bishop).bishop_quality
+            < chess::engine::evaluate_trace_white_perspective(active_bishop).bishop_quality);
+    REQUIRE(chess::engine::evaluate_trace_white_perspective(candidate).pawn_dynamics > 0);
+}
+
+TEST_CASE("evaluation trace rewards keeping attacking complexity") {
+    const chess::Board attacking = chess::board_from_fen("q5k1/5ppp/8/6Q1/2B5/5N2/8/6K1 w - - 0 1");
+    const chess::engine::EvalTrace trace = chess::engine::evaluate_trace_white_perspective(attacking);
+
+    REQUIRE(trace.trade_context > 0);
 }
 
 TEST_CASE("king safety and threats mirror by color") {

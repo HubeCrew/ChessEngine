@@ -16,6 +16,7 @@ def main() -> int:
             "isready",
             "ucinewgame",
             "position startpos moves e2e4 e7e5",
+            "eval",
             "go depth 3",
             "quit",
             "",
@@ -53,6 +54,7 @@ def main() -> int:
         "option name SearchExtensions type check default true",
         "uciok",
         "readyok",
+        "info string eval material ",
         "bestmove ",
     ]
     for fragment in required_fragments:
@@ -66,6 +68,11 @@ def main() -> int:
     )
     if info_pattern.search(output) is None:
         print("missing standard depth-3 info output", file=sys.stderr)
+        print(output, file=sys.stderr)
+        return 1
+
+    if " safe_mobility " not in output or " trade_context " not in output or " total " not in output:
+        print("missing eval trace components", file=sys.stderr)
         print(output, file=sys.stderr)
         return 1
 

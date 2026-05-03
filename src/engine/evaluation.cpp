@@ -196,6 +196,59 @@ struct AttackMap {
     Bitboard all = 0;
 };
 
+int signed_score(Color color, int score) {
+    return color == Color::White ? score : -score;
+}
+
+struct EvalTracePair {
+    EvalTrace mg;
+    EvalTrace eg;
+};
+
+void add_score(int& component, Color color, int score) {
+    component += signed_score(color, score);
+}
+
+int blended_score(int mg_score, int eg_score, int phase) {
+    const int eg_phase = kMaxPhase - phase;
+    return (mg_score * phase + eg_score * eg_phase) / kMaxPhase;
+}
+
+EvalTrace blend_trace(const EvalTracePair& pair, int phase) {
+    EvalTrace trace;
+    trace.material = blended_score(pair.mg.material, pair.eg.material, phase);
+    trace.piece_square = blended_score(pair.mg.piece_square, pair.eg.piece_square, phase);
+    trace.mobility = blended_score(pair.mg.mobility, pair.eg.mobility, phase);
+    trace.safe_mobility = blended_score(pair.mg.safe_mobility, pair.eg.safe_mobility, phase);
+    trace.king_safety = blended_score(pair.mg.king_safety, pair.eg.king_safety, phase);
+    trace.threats = blended_score(pair.mg.threats, pair.eg.threats, phase);
+    trace.pawn_structure = blended_score(pair.mg.pawn_structure, pair.eg.pawn_structure, phase);
+    trace.outposts = blended_score(pair.mg.outposts, pair.eg.outposts, phase);
+    trace.rook_files = blended_score(pair.mg.rook_files, pair.eg.rook_files, phase);
+    trace.space = blended_score(pair.mg.space, pair.eg.space, phase);
+    trace.center_control = blended_score(pair.mg.center_control, pair.eg.center_control, phase);
+    trace.bishop_quality = blended_score(pair.mg.bishop_quality, pair.eg.bishop_quality, phase);
+    trace.pawn_dynamics = blended_score(pair.mg.pawn_dynamics, pair.eg.pawn_dynamics, phase);
+    trace.development = blended_score(pair.mg.development, pair.eg.development, phase);
+    trace.trade_context = blended_score(pair.mg.trade_context, pair.eg.trade_context, phase);
+    trace.total = trace.material
+        + trace.piece_square
+        + trace.mobility
+        + trace.safe_mobility
+        + trace.king_safety
+        + trace.threats
+        + trace.pawn_structure
+        + trace.outposts
+        + trace.rook_files
+        + trace.space
+        + trace.center_control
+        + trace.bishop_quality
+        + trace.pawn_dynamics
+        + trace.development
+        + trace.trade_context;
+    return trace;
+}
+
 int mobility_for_piece(PieceType type, Bitboard attacks, Bitboard own_occupancy) {
     const int mobility = __builtin_popcountll(attacks & ~own_occupancy);
     switch (type) {
@@ -215,26 +268,50 @@ int mobility_for_piece(PieceType type, Bitboard attacks, Bitboard own_occupancy)
     return 0;
 }
 
+Bitboard pawn_attack_map(const Board& board, Color color) {
+    Bitboard attacks = 0;
+    Bitboard pawns = board.pieces(color, PieceType::Pawn);
+    while (pawns != 0) {
+        const Square square = __builtin_ctzll(pawns);
+        pawns &= pawns - 1;
+        attacks |= attacks::pawn_attacks(color, square);
+    }
+    return attacks;
+}
+
+int safe_mobility_for_piece(PieceType type, Bitboard attacks, Bitboard own_occupancy, Bitboard enemy_pawn_attacks) {
+    const int mobility = __builtin_popcountll(attacks & ~own_occupancy & ~enemy_pawn_attacks);
+    switch (type) {
+        case PieceType::Knight:
+            return mobility * 2;
+        case PieceType::Bishop:
+            return mobility * 2;
+        case PieceType::Rook:
+            return mobility;
+        case PieceType::Queen:
+            return mobility / 2;
+        case PieceType::Pawn:
+        case PieceType::King:
+        case PieceType::None:
+            return 0;
+    }
+    return 0;
+}
+
 bool has_pawn_on_file(const Board& board, Color color, int file) {
     if (file < 0 || file > 7) {
         return false;
     }
-    for (int rank = 0; rank < 8; ++rank) {
-        if (board.piece_at(make_square(file, rank)) == make_piece(color, PieceType::Pawn)) {
-            return true;
-        }
-    }
-    return false;
+    constexpr Bitboard kAFile = 0x0101010101010101ULL;
+    return (board.pieces(color, PieceType::Pawn) & (kAFile << file)) != 0;
 }
 
 int count_pawns_on_file(const Board& board, Color color, int file) {
-    int count = 0;
-    for (int rank = 0; rank < 8; ++rank) {
-        if (board.piece_at(make_square(file, rank)) == make_piece(color, PieceType::Pawn)) {
-            ++count;
-        }
+    if (file < 0 || file > 7) {
+        return 0;
     }
-    return count;
+    constexpr Bitboard kAFile = 0x0101010101010101ULL;
+    return __builtin_popcountll(board.pieces(color, PieceType::Pawn) & (kAFile << file));
 }
 
 bool is_passed_pawn(const Board& board, Square square, Color color) {
@@ -289,17 +366,7 @@ bool is_blocked_by_enemy(const Board& board, Square square, Color color) {
 }
 
 bool is_protected_by_pawn(const Board& board, Square square, Color color) {
-    const int support_rank = rank_of(square) + (color == Color::White ? -1 : 1);
-    if (support_rank < 0 || support_rank >= 8) {
-        return false;
-    }
-    for (const int file : {file_of(square) - 1, file_of(square) + 1}) {
-        if (file >= 0 && file < 8
-            && board.piece_at(make_square(file, support_rank)) == make_piece(color, PieceType::Pawn)) {
-            return true;
-        }
-    }
-    return false;
+    return (attacks::pawn_attacks(opposite(color), square) & board.pieces(color, PieceType::Pawn)) != 0;
 }
 
 bool has_connected_pawn(const Board& board, Square square, Color color) {
@@ -554,10 +621,6 @@ int king_attack_penalty(const Board& board, Color defender, const AttackMap& att
     return penalty;
 }
 
-int king_safety_score(const Board& board, Color color, const AttackMap& enemy_attacks) {
-    return king_shelter_score(board, color) - king_attack_penalty(board, color, enemy_attacks);
-}
-
 int loose_piece_bonus(PieceType type) {
     switch (type) {
         case PieceType::Pawn:
@@ -660,8 +723,319 @@ int threat_score(const Board& board, Color color, const AttackMap& own_attacks, 
     return score;
 }
 
-int signed_score(Color color, int score) {
-    return color == Color::White ? score : -score;
+bool is_light_square(Square square) {
+    return ((file_of(square) + rank_of(square)) & 1) == 0;
+}
+
+bool file_has_pawn_ahead(const Board& board, Color color, int file, int rank) {
+    const int direction = color == Color::White ? 1 : -1;
+    for (int scan_rank = rank + direction; scan_rank >= 0 && scan_rank < 8; scan_rank += direction) {
+        if (board.piece_at(make_square(file, scan_rank)) == make_piece(color, PieceType::Pawn)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool enemy_pawn_can_challenge(const Board& board, Square square, Color color) {
+    const Color enemy = opposite(color);
+    const int enemy_direction = enemy == Color::White ? 1 : -1;
+    for (const int file : {file_of(square) - 1, file_of(square) + 1}) {
+        if (file < 0 || file >= 8) {
+            continue;
+        }
+        for (int rank = rank_of(square) - enemy_direction; rank >= 0 && rank < 8; rank -= enemy_direction) {
+            if (board.piece_at(make_square(file, rank)) == make_piece(enemy, PieceType::Pawn)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+int outpost_score(const Board& board, Color color, Bitboard enemy_pawn_attacks) {
+    int score = 0;
+    Bitboard knights = board.pieces(color, PieceType::Knight);
+    while (knights != 0) {
+        const Square square = __builtin_ctzll(knights);
+        knights &= knights - 1;
+
+        const int advanced_rank = color == Color::White ? rank_of(square) : 7 - rank_of(square);
+        if (advanced_rank < 3 || !is_protected_by_pawn(board, square, color)
+            || (enemy_pawn_attacks & square_bb(square)) != 0 || enemy_pawn_can_challenge(board, square, color)) {
+            continue;
+        }
+
+        const bool central = file_of(square) >= 2 && file_of(square) <= 5;
+        score += 18 + advanced_rank * 4 + (central ? 10 : 0);
+    }
+    return score;
+}
+
+int rook_file_score(const Board& board, Color color) {
+    const Color enemy = opposite(color);
+    int score = 0;
+    Bitboard rooks = board.pieces(color, PieceType::Rook);
+    while (rooks != 0) {
+        const Square square = __builtin_ctzll(rooks);
+        rooks &= rooks - 1;
+
+        const int file = file_of(square);
+        const bool own_pawn = has_pawn_on_file(board, color, file);
+        const bool enemy_pawn = has_pawn_on_file(board, enemy, file);
+        if (!own_pawn && !enemy_pawn) {
+            score += 24;
+        } else if (!own_pawn) {
+            score += 12;
+        }
+
+        const int rank = color == Color::White ? 6 : 1;
+        if (rank_of(square) == rank) {
+            score += 22;
+        }
+
+        const Square enemy_king = board.king_square(enemy);
+        if (is_valid_square(enemy_king) && file_of(enemy_king) == file && !own_pawn) {
+            score += enemy_pawn ? 8 : 16;
+        }
+    }
+    return score;
+}
+
+int center_control_score(const Board& board, Color color, const AttackMap& attack_map) {
+    constexpr std::array<Square, 4> center{
+        make_square(3, 3), make_square(4, 3), make_square(3, 4), make_square(4, 4),
+    };
+    constexpr std::array<Square, 12> extended_center{
+        make_square(2, 2), make_square(3, 2), make_square(4, 2), make_square(5, 2),
+        make_square(2, 3), make_square(5, 3), make_square(2, 4), make_square(5, 4),
+        make_square(2, 5), make_square(3, 5), make_square(4, 5), make_square(5, 5),
+    };
+
+    int score = 0;
+    for (const Square square : center) {
+        const Bitboard bit = square_bb(square);
+        if ((attack_map.all & bit) != 0) {
+            score += 6;
+        }
+        if ((attack_map.by_type[piece_index(PieceType::Pawn)] & bit) != 0) {
+            score += 4;
+        }
+        if (board.piece_at(square) == make_piece(color, PieceType::Pawn)) {
+            score += 10;
+        }
+    }
+    for (const Square square : extended_center) {
+        if ((attack_map.all & square_bb(square)) != 0) {
+            score += 2;
+        }
+    }
+    return score;
+}
+
+int space_score(const Board& board, Color color, const AttackMap& attack_map, Bitboard enemy_pawn_attacks) {
+    int score = 0;
+    for (Square square = 0; square < kBoardSquareCount; ++square) {
+        const int advanced_rank = color == Color::White ? rank_of(square) : 7 - rank_of(square);
+        if (advanced_rank < 4) {
+            continue;
+        }
+        const Bitboard bit = square_bb(square);
+        if ((attack_map.all & bit) == 0 || (enemy_pawn_attacks & bit) != 0) {
+            continue;
+        }
+        const Piece occupant = board.piece_at(square);
+        if (occupant != Piece::None && color_of(occupant) == color) {
+            continue;
+        }
+        score += file_of(square) >= 2 && file_of(square) <= 5 ? 3 : 1;
+    }
+    return std::min(score, 48);
+}
+
+bool is_backward_pawn(const Board& board, Square square, Color color, Bitboard enemy_pawn_attacks) {
+    if (is_passed_pawn(board, square, color) || is_protected_by_pawn(board, square, color)) {
+        return false;
+    }
+
+    const int direction = color == Color::White ? 1 : -1;
+    const int front_rank = rank_of(square) + direction;
+    if (front_rank < 0 || front_rank >= 8) {
+        return false;
+    }
+    const Square front = make_square(file_of(square), front_rank);
+    if ((enemy_pawn_attacks & square_bb(front)) == 0) {
+        return false;
+    }
+
+    for (const int file : {file_of(square) - 1, file_of(square) + 1}) {
+        if (file < 0 || file >= 8) {
+            continue;
+        }
+        if (file_has_pawn_ahead(board, color, file, rank_of(square) - direction)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_candidate_passed_pawn(const Board& board, Square square, Color color) {
+    if (is_passed_pawn(board, square, color) || is_blocked_by_enemy(board, square, color)) {
+        return false;
+    }
+    const Color enemy = opposite(color);
+    const int direction = color == Color::White ? 1 : -1;
+    int blockers = 0;
+    for (int file = std::max(0, file_of(square) - 1); file <= std::min(7, file_of(square) + 1); ++file) {
+        for (int rank = rank_of(square) + direction; rank >= 0 && rank < 8; rank += direction) {
+            if (board.piece_at(make_square(file, rank)) == make_piece(enemy, PieceType::Pawn)) {
+                ++blockers;
+            }
+        }
+    }
+    return blockers <= 1 && (is_protected_by_pawn(board, square, color) || has_connected_pawn(board, square, color));
+}
+
+int pawn_dynamics_score(const Board& board, Color color, Bitboard enemy_pawn_attacks) {
+    int score = 0;
+    Bitboard pawns = board.pieces(color, PieceType::Pawn);
+    while (pawns != 0) {
+        const Square square = __builtin_ctzll(pawns);
+        pawns &= pawns - 1;
+        const int advanced_rank = color == Color::White ? rank_of(square) : 7 - rank_of(square);
+
+        if (is_backward_pawn(board, square, color, enemy_pawn_attacks)) {
+            score -= 12 + advanced_rank * 2;
+        }
+        if (is_candidate_passed_pawn(board, square, color)) {
+            score += 10 + advanced_rank * 4;
+        }
+        if (is_protected_by_pawn(board, square, color)) {
+            score += 4;
+        }
+
+        const Bitboard pawn_attacks = attacks::pawn_attacks(color, square);
+        Bitboard enemy_pawns = pawn_attacks & board.pieces(opposite(color), PieceType::Pawn);
+        if (enemy_pawns != 0) {
+            score += advanced_rank >= 3 ? 8 : 4;
+        }
+    }
+    return score;
+}
+
+int bishop_quality_score(const Board& board, Color color, const AttackMap& attack_map) {
+    int score = 0;
+    Bitboard bishops = board.pieces(color, PieceType::Bishop);
+    while (bishops != 0) {
+        const Square bishop = __builtin_ctzll(bishops);
+        bishops &= bishops - 1;
+
+        int same_color_pawns = 0;
+        Bitboard pawns = board.pieces(color, PieceType::Pawn);
+        while (pawns != 0) {
+            const Square pawn = __builtin_ctzll(pawns);
+            pawns &= pawns - 1;
+            if (is_light_square(pawn) == is_light_square(bishop)) {
+                ++same_color_pawns;
+            }
+        }
+
+        const int mobility = __builtin_popcountll(attack_map.by_square[bishop] & ~board.occupancy(color));
+        if (same_color_pawns >= 4 && mobility <= 5) {
+            score -= 8 + (same_color_pawns - 3) * 4;
+        }
+        if (mobility >= 9) {
+            score += 8;
+        }
+    }
+    return score;
+}
+
+int development_score(const Board& board, Color color) {
+    const int home_rank = color == Color::White ? 0 : 7;
+    int score = 0;
+    if (has_piece(board, make_square(1, home_rank), color, PieceType::Knight)) {
+        score -= 8;
+    }
+    if (has_piece(board, make_square(6, home_rank), color, PieceType::Knight)) {
+        score -= 8;
+    }
+    if (has_piece(board, make_square(2, home_rank), color, PieceType::Bishop)) {
+        score -= 6;
+    }
+    if (has_piece(board, make_square(5, home_rank), color, PieceType::Bishop)) {
+        score -= 6;
+    }
+    const Square king = board.king_square(color);
+    if (is_valid_square(king) && rank_of(king) == home_rank && file_of(king) == 4
+        && (board.castling_rights() & castling_rights_for(color)) == 0) {
+        score -= 14;
+    }
+    return score;
+}
+
+int battery_score(const Board& board, Color color, const AttackMap& attack_map) {
+    const Color enemy = opposite(color);
+    int score = 0;
+    Bitboard queens = board.pieces(color, PieceType::Queen);
+    while (queens != 0) {
+        const Square queen = __builtin_ctzll(queens);
+        queens &= queens - 1;
+        Bitboard rooks = board.pieces(color, PieceType::Rook);
+        while (rooks != 0) {
+            const Square rook = __builtin_ctzll(rooks);
+            rooks &= rooks - 1;
+            if (file_of(queen) == file_of(rook) || rank_of(queen) == rank_of(rook)) {
+                const Bitboard between = attacks::between(queen, rook);
+                if ((between & board.occupancy()) == 0) {
+                    score += 10;
+                }
+            }
+        }
+    }
+
+    const Square enemy_king = board.king_square(enemy);
+    if (is_valid_square(enemy_king)) {
+        const Bitboard king_zone = attacks::king_attacks(enemy_king) | square_bb(enemy_king);
+        if ((attack_map.by_type[piece_index(PieceType::Queen)] & king_zone) != 0
+            && (attack_map.by_type[piece_index(PieceType::Rook)] & king_zone) != 0) {
+            score += 18;
+        }
+    }
+    return score;
+}
+
+int trade_context_score(
+    const Board& board,
+    Color color,
+    int material_balance,
+    int total_non_pawn,
+    int own_king_attack,
+    int enemy_king_attack,
+    int own_space,
+    int enemy_space
+) {
+    const Color enemy = opposite(color);
+    const int simplification = std::clamp((3600 - total_non_pawn) / 300, 0, 8);
+    const int complexity = std::clamp((total_non_pawn - 1200) / 300, 0, 8);
+    const int attack_balance = own_king_attack - enemy_king_attack;
+    const bool own_queen = board.pieces(color, PieceType::Queen) != 0;
+    const bool enemy_queen = board.pieces(enemy, PieceType::Queen) != 0;
+
+    int score = 0;
+    if (material_balance >= 150) {
+        score += std::min(40, (material_balance / 100) * simplification);
+    } else if (material_balance <= -150 && attack_balance > 20) {
+        score += std::min(35, attack_balance / 4 + complexity * 2);
+    }
+
+    if (attack_balance > 25 && own_queen && enemy_queen) {
+        score += std::min(42, attack_balance / 3 + complexity);
+    }
+    if (own_space + 10 < enemy_space && material_balance >= -50) {
+        score += 8 + std::min(20, (enemy_space - own_space) / 2);
+    }
+    return score;
 }
 
 }  // namespace
@@ -685,12 +1059,16 @@ int material_value(PieceType type) {
     return 0;
 }
 
-int evaluate_white_perspective(const Board& board) {
-    int mg_score = 0;
-    int eg_score = 0;
+EvalTrace evaluate_trace_white_perspective(const Board& board) {
+    EvalTracePair trace_pair;
     int phase = 0;
     std::array<int, 2> bishops{0, 0};
+    std::array<int, 2> material_by_color{0, 0};
     std::array<AttackMap, 2> attack_maps{};
+    const std::array<Bitboard, 2> pawn_attacks{
+        pawn_attack_map(board, Color::White),
+        pawn_attack_map(board, Color::Black),
+    };
 
     for (Square square = 0; square < kBoardSquareCount; ++square) {
         const Piece piece = board.piece_at(square);
@@ -701,10 +1079,11 @@ int evaluate_white_perspective(const Board& board) {
         const Color color = color_of(piece);
         const PieceType type = type_of(piece);
         const int material = material_value(type);
-        const int mg_piece = material + table_value(type, square, color, false);
-        const int eg_piece = material + table_value(type, square, color, true);
-        mg_score += signed_score(color, mg_piece);
-        eg_score += signed_score(color, eg_piece);
+        material_by_color[static_cast<int>(color)] += material;
+        add_score(trace_pair.mg.material, color, material);
+        add_score(trace_pair.eg.material, color, material);
+        add_score(trace_pair.mg.piece_square, color, table_value(type, square, color, false));
+        add_score(trace_pair.eg.piece_square, color, table_value(type, square, color, true));
         phase += kPhaseWeights[piece_index(type)];
 
         if (type == PieceType::Bishop) {
@@ -717,38 +1096,113 @@ int evaluate_white_perspective(const Board& board) {
         attack_maps[static_cast<int>(color)].all |= attacks;
 
         const int mobility = mobility_for_piece(type, attacks, board.occupancy(color));
-        mg_score += signed_score(color, mobility);
-        eg_score += signed_score(color, mobility / 2);
+        add_score(trace_pair.mg.mobility, color, mobility);
+        add_score(trace_pair.eg.mobility, color, mobility / 2);
+
+        const int safe_mobility = safe_mobility_for_piece(
+            type,
+            attacks,
+            board.occupancy(color),
+            pawn_attacks[static_cast<int>(opposite(color))]
+        );
+        add_score(trace_pair.mg.safe_mobility, color, safe_mobility);
+        add_score(trace_pair.eg.safe_mobility, color, safe_mobility / 2);
     }
 
     if (bishops[static_cast<int>(Color::White)] >= 2) {
-        mg_score += 30;
-        eg_score += 40;
+        trace_pair.mg.bishop_quality += 30;
+        trace_pair.eg.bishop_quality += 40;
     }
     if (bishops[static_cast<int>(Color::Black)] >= 2) {
-        mg_score -= 30;
-        eg_score -= 40;
+        trace_pair.mg.bishop_quality -= 30;
+        trace_pair.eg.bishop_quality -= 40;
     }
 
-    mg_score += pawn_structure_score(board, Color::White, false);
-    mg_score -= pawn_structure_score(board, Color::Black, false);
-    eg_score += pawn_structure_score(board, Color::White, true);
-    eg_score -= pawn_structure_score(board, Color::Black, true);
+    trace_pair.mg.pawn_structure += pawn_structure_score(board, Color::White, false);
+    trace_pair.mg.pawn_structure -= pawn_structure_score(board, Color::Black, false);
+    trace_pair.eg.pawn_structure += pawn_structure_score(board, Color::White, true);
+    trace_pair.eg.pawn_structure -= pawn_structure_score(board, Color::Black, true);
 
     const AttackMap& white_attacks = attack_maps[static_cast<int>(Color::White)];
     const AttackMap& black_attacks = attack_maps[static_cast<int>(Color::Black)];
 
-    mg_score += king_safety_score(board, Color::White, black_attacks);
-    mg_score -= king_safety_score(board, Color::Black, white_attacks);
+    const int black_attack_on_white_king = king_attack_penalty(board, Color::White, black_attacks);
+    const int white_attack_on_black_king = king_attack_penalty(board, Color::Black, white_attacks);
+    trace_pair.mg.king_safety += king_shelter_score(board, Color::White) - black_attack_on_white_king;
+    trace_pair.mg.king_safety -= king_shelter_score(board, Color::Black) - white_attack_on_black_king;
 
     const int white_threats = threat_score(board, Color::White, white_attacks, black_attacks);
     const int black_threats = threat_score(board, Color::Black, black_attacks, white_attacks);
-    mg_score += white_threats - black_threats;
-    eg_score += (white_threats - black_threats) / 3;
+    const int white_battery = battery_score(board, Color::White, white_attacks);
+    const int black_battery = battery_score(board, Color::Black, black_attacks);
+    trace_pair.mg.threats += white_threats - black_threats + white_battery - black_battery;
+    trace_pair.eg.threats += (white_threats - black_threats) / 3;
+
+    const int white_outposts = outpost_score(board, Color::White, pawn_attacks[static_cast<int>(Color::Black)]);
+    const int black_outposts = outpost_score(board, Color::Black, pawn_attacks[static_cast<int>(Color::White)]);
+    trace_pair.mg.outposts += white_outposts - black_outposts;
+    trace_pair.eg.outposts += (white_outposts - black_outposts) / 2;
+
+    const int white_rooks = rook_file_score(board, Color::White);
+    const int black_rooks = rook_file_score(board, Color::Black);
+    trace_pair.mg.rook_files += white_rooks - black_rooks;
+    trace_pair.eg.rook_files += (white_rooks - black_rooks) / 2;
+
+    const int white_center = center_control_score(board, Color::White, white_attacks);
+    const int black_center = center_control_score(board, Color::Black, black_attacks);
+    trace_pair.mg.center_control += white_center - black_center;
+    trace_pair.eg.center_control += (white_center - black_center) / 3;
+
+    const int white_space = space_score(board, Color::White, white_attacks, pawn_attacks[static_cast<int>(Color::Black)]);
+    const int black_space = space_score(board, Color::Black, black_attacks, pawn_attacks[static_cast<int>(Color::White)]);
+    trace_pair.mg.space += white_space - black_space;
+    trace_pair.eg.space += (white_space - black_space) / 2;
+
+    const int white_bishop_quality = bishop_quality_score(board, Color::White, white_attacks);
+    const int black_bishop_quality = bishop_quality_score(board, Color::Black, black_attacks);
+    trace_pair.mg.bishop_quality += white_bishop_quality - black_bishop_quality;
+    trace_pair.eg.bishop_quality += (white_bishop_quality - black_bishop_quality) / 2;
+
+    const int white_pawn_dynamics = pawn_dynamics_score(board, Color::White, pawn_attacks[static_cast<int>(Color::Black)]);
+    const int black_pawn_dynamics = pawn_dynamics_score(board, Color::Black, pawn_attacks[static_cast<int>(Color::White)]);
+    trace_pair.mg.pawn_dynamics += white_pawn_dynamics - black_pawn_dynamics;
+    trace_pair.eg.pawn_dynamics += (white_pawn_dynamics - black_pawn_dynamics) / 2;
+
+    trace_pair.mg.development += development_score(board, Color::White);
+    trace_pair.mg.development -= development_score(board, Color::Black);
+
+    const int material_balance = material_by_color[static_cast<int>(Color::White)]
+        - material_by_color[static_cast<int>(Color::Black)];
+    const int total_non_pawn = non_pawn_material(board, Color::White) + non_pawn_material(board, Color::Black);
+    const int white_trade = trade_context_score(
+        board,
+        Color::White,
+        material_balance,
+        total_non_pawn,
+        white_attack_on_black_king,
+        black_attack_on_white_king,
+        white_space,
+        black_space
+    );
+    const int black_trade = trade_context_score(
+        board,
+        Color::Black,
+        -material_balance,
+        total_non_pawn,
+        black_attack_on_white_king,
+        white_attack_on_black_king,
+        black_space,
+        white_space
+    );
+    trace_pair.mg.trade_context += white_trade - black_trade;
+    trace_pair.eg.trade_context += (white_trade - black_trade) / 2;
 
     phase = std::min(phase, kMaxPhase);
-    const int eg_phase = kMaxPhase - phase;
-    return (mg_score * phase + eg_score * eg_phase) / kMaxPhase;
+    return blend_trace(trace_pair, phase);
+}
+
+int evaluate_white_perspective(const Board& board) {
+    return evaluate_trace_white_perspective(board).total;
 }
 
 int evaluate(const Board& board) {
