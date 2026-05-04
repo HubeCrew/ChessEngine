@@ -108,6 +108,11 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_postmortem_suite.py
         )
         add_test(
+            NAME rebalance_nnue_dataset_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/rebalance_nnue_dataset_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/rebalance_nnue_dataset.py
+        )
+        add_test(
             NAME gauntlet_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gauntlet_smoke_test.py
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/gauntlet.py

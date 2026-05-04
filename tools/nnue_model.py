@@ -63,6 +63,33 @@ def active_features(board: chess.Board, perspective: chess.Color) -> list[int]:
 
 
 @dataclass(frozen=True)
+class BinaryNnue:
+    feature_count: int
+    hidden_size: int
+    accumulator_scale: int
+    output_scale: int
+    hidden_bias: torch.Tensor
+    feature_weights: torch.Tensor
+    output_weights: torch.Tensor
+    output_bias: int
+
+    def accumulator(self, features: list[int]) -> torch.Tensor:
+        if features:
+            indices = torch.tensor(features, dtype=torch.long)
+            return self.hidden_bias.to(torch.int32) + self.feature_weights[indices].to(torch.int32).sum(dim=0)
+        return self.hidden_bias.to(torch.int32)
+
+    def evaluate_white_perspective(self, board: chess.Board) -> int:
+        white = self.accumulator(active_features(board, chess.WHITE)).clamp(0, self.accumulator_scale)
+        black = self.accumulator(active_features(board, chess.BLACK)).clamp(0, self.accumulator_scale)
+        activations = torch.cat([white, black]).to(torch.int64)
+        total = int(self.output_bias + int((activations * self.output_weights.to(torch.int64)).sum()))
+        if total >= 0:
+            return (total + self.output_scale // 2) // self.output_scale
+        return -((-total + self.output_scale // 2) // self.output_scale)
+
+
+@dataclass(frozen=True)
 class Batch:
     white: torch.Tensor
     white_mask: torch.Tensor
@@ -145,6 +172,55 @@ def load_checkpoint(path: Path, device: torch.device) -> tuple[NnueModel, dict[s
     model.to(device)
     model.eval()
     return model, dict(checkpoint.get("metadata", {}))
+
+
+def load_binary(path: Path) -> BinaryNnue:
+    with path.open("rb") as handle:
+        magic = handle.read(len(MAGIC))
+        if magic != MAGIC:
+            raise ValueError(f"invalid NNUE magic in {path}")
+        header = handle.read(20)
+        if len(header) != 20:
+            raise ValueError(f"truncated NNUE header in {path}")
+        version, feature_count, hidden_size, accumulator_scale, output_scale = struct.unpack("<IIIII", header)
+        if version != FORMAT_VERSION:
+            raise ValueError(f"unsupported NNUE version {version}")
+        if feature_count != FEATURE_COUNT:
+            raise ValueError(f"unsupported feature count {feature_count}")
+        hidden_bias = torch.frombuffer(bytearray(handle.read(hidden_size * 2)), dtype=torch.int16).clone()
+        if hidden_bias.numel() != hidden_size:
+            raise ValueError(f"truncated hidden bias in {path}")
+        feature_weight_count = feature_count * hidden_size
+        feature_weights = torch.frombuffer(bytearray(handle.read(feature_weight_count * 2)), dtype=torch.int16).clone()
+        if feature_weights.numel() != feature_weight_count:
+            raise ValueError(f"truncated feature weights in {path}")
+        feature_weights = feature_weights.reshape(feature_count, hidden_size)
+        output_weight_count = hidden_size * 2
+        output_weights = torch.frombuffer(bytearray(handle.read(output_weight_count * 2)), dtype=torch.int16).clone()
+        if output_weights.numel() != output_weight_count:
+            raise ValueError(f"truncated output weights in {path}")
+        output_bias_data = handle.read(4)
+        if len(output_bias_data) != 4:
+            raise ValueError(f"truncated output bias in {path}")
+        (output_bias,) = struct.unpack("<i", output_bias_data)
+
+    return BinaryNnue(
+        feature_count=feature_count,
+        hidden_size=hidden_size,
+        accumulator_scale=accumulator_scale,
+        output_scale=output_scale,
+        hidden_bias=hidden_bias,
+        feature_weights=feature_weights,
+        output_weights=output_weights,
+        output_bias=output_bias,
+    )
+
+
+def evaluate_checkpoint_white_perspective(model: NnueModel, board: chess.Board, device: torch.device) -> float:
+    item = (active_features(board, chess.WHITE), active_features(board, chess.BLACK), 0.0)
+    batch = make_batch([item], device)
+    with torch.no_grad():
+        return float(model(batch.white, batch.white_mask, batch.black, batch.black_mask)[0].detach().cpu())
 
 
 def export_binary(

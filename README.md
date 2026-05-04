@@ -127,8 +127,20 @@ python3 tools/build_nnue_dataset.py \
   --progress-every 500 \
   --output runs/nnue/dataset.csv
 
+python3 tools/analyze_nnue_dataset.py \
+  --dataset runs/nnue/dataset.csv
+
+python3 tools/rebalance_nnue_dataset.py \
+  --input runs/nnue/dataset.csv \
+  --output runs/nnue/dataset_balanced.csv \
+  --limit 160000 \
+  --seed 1
+
+python3 tools/analyze_nnue_dataset.py \
+  --dataset runs/nnue/dataset_balanced.csv
+
 python3 tools/train_nnue.py \
-  --dataset runs/nnue/dataset.csv \
+  --dataset runs/nnue/dataset_balanced.csv \
   --output runs/nnue/current.pt \
   --epochs 12 \
   --batch-size 2048 \
@@ -137,6 +149,13 @@ python3 tools/train_nnue.py \
 python3 tools/export_nnue.py \
   --checkpoint runs/nnue/current.pt \
   --output runs/nnue/current.nnue
+
+python3 tools/check_nnue_parity.py \
+  --checkpoint runs/nnue/current.pt \
+  --nnue runs/nnue/current.nnue \
+  --engine ./build-release/chess_uci \
+  --dataset runs/nnue/dataset_balanced.csv \
+  --limit 256
 
 ./build-release/chess_bench \
   --suite epd \

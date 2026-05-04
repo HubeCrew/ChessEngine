@@ -61,9 +61,16 @@ def load_rows(path: Path, clip_cp: int) -> list[tuple[str, float]]:
     return rows
 
 
-def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> float:
+def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> dict[str, float]:
     loss_fn = nn.SmoothL1Loss()
     total_loss = 0.0
+    total_abs = 0.0
+    total_squared = 0.0
+    sum_prediction = 0.0
+    sum_target = 0.0
+    sum_prediction_squared = 0.0
+    sum_target_squared = 0.0
+    sum_product = 0.0
     total = 0
     model.eval()
     with torch.no_grad():
@@ -72,8 +79,30 @@ def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> floa
             prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask)
             loss = loss_fn(prediction, batch.target)
             total_loss += float(loss) * len(items)
+            diff = prediction - batch.target
+            total_abs += float(diff.abs().sum())
+            total_squared += float((diff * diff).sum())
+            sum_prediction += float(prediction.sum())
+            sum_target += float(batch.target.sum())
+            sum_prediction_squared += float((prediction * prediction).sum())
+            sum_target_squared += float((batch.target * batch.target).sum())
+            sum_product += float((prediction * batch.target).sum())
             total += len(items)
-    return total_loss / max(1, total)
+
+    total = max(1, total)
+    covariance = sum_product - (sum_prediction * sum_target / total)
+    prediction_variance = sum_prediction_squared - (sum_prediction * sum_prediction / total)
+    target_variance = sum_target_squared - (sum_target * sum_target / total)
+    if prediction_variance <= 0.0 or target_variance <= 0.0:
+        correlation = 0.0
+    else:
+        correlation = covariance / ((prediction_variance * target_variance) ** 0.5)
+    return {
+        "loss": total_loss / total,
+        "mae": total_abs / total,
+        "rmse": (total_squared / total) ** 0.5,
+        "correlation": correlation,
+    }
 
 
 def main() -> int:
@@ -138,10 +167,12 @@ def main() -> int:
                     flush=True,
                 )
         train_loss = total_loss / max(1, total)
-        validation_loss = evaluate(model, validation_loader, device)
+        validation = evaluate(model, validation_loader, device)
         elapsed = time.monotonic() - epoch_start
         print(
-            f"epoch={epoch} train_loss={train_loss:.3f} validation_loss={validation_loss:.3f} elapsed_s={elapsed:.1f}",
+            f"epoch={epoch} train_loss={train_loss:.3f} validation_loss={validation['loss']:.3f} "
+            f"validation_mae={validation['mae']:.1f} validation_rmse={validation['rmse']:.1f} "
+            f"validation_corr={validation['correlation']:.3f} elapsed_s={elapsed:.1f}",
             flush=True,
         )
 
