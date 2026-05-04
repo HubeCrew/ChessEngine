@@ -7,13 +7,14 @@ import random
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import chess
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from nnue_model import NnueModel, active_features, make_batch, save_checkpoint
+from nnue_model import Batch, NnueModel, active_features, make_batch, save_checkpoint
 
 
 class NnueDataset(Dataset):
@@ -32,9 +33,44 @@ class NnueDataset(Dataset):
         return self.items[index]
 
 
+class CachedNnueDataset(Dataset):
+    def __init__(self, path: Path, row_limit: int = 0) -> None:
+        print(f"[train] loading feature_cache={path}", file=sys.stderr, flush=True)
+        self.path = path
+        self.cache = torch.load(path, map_location="cpu", weights_only=True)
+        if int(self.cache.get("format_version", 0)) != 1:
+            raise ValueError(f"unsupported feature cache format in {path}")
+        required = ("white_indices", "white_lengths", "black_indices", "black_lengths", "target")
+        for key in required:
+            if key not in self.cache:
+                raise ValueError(f"feature cache {path} is missing {key}")
+        rows = int(self.cache["target"].numel())
+        if rows == 0:
+            raise ValueError(f"feature cache {path} is empty")
+        if row_limit > 0:
+            rows = min(rows, row_limit)
+            for key in ("white_indices", "white_lengths", "black_indices", "black_lengths", "target"):
+                self.cache[key] = self.cache[key][:rows].contiguous()
+        print(f"[train] loaded feature_cache={path} rows={rows}", file=sys.stderr, flush=True)
+
+    def __len__(self) -> int:
+        return int(self.cache["target"].numel())
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        return (
+            self.cache["white_indices"][index],
+            self.cache["white_lengths"][index],
+            self.cache["black_indices"][index],
+            self.cache["black_lengths"][index],
+            self.cache["target"][index],
+        )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a small HalfKP-style NNUE model from labeled CSV positions.")
-    parser.add_argument("--dataset", required=True, type=Path, help="CSV with fen and score_cp columns.")
+    parser.add_argument("--dataset", type=Path, help="CSV with fen and score_cp columns. Uses --validation-split.")
+    parser.add_argument("--train-cache", type=Path, help="Feature cache built by build_nnue_feature_cache.py.")
+    parser.add_argument("--validation-cache", type=Path, help="Validation feature cache built by build_nnue_feature_cache.py.")
     parser.add_argument("--output", required=True, type=Path, help="Output PyTorch checkpoint.")
     parser.add_argument("--hidden-size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=5)
@@ -43,6 +79,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-split", type=float, default=0.05)
     parser.add_argument("--clip-cp", type=int, default=1500)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--max-train-rows", type=int, default=0, help="Optional smoke-test cap. 0 means no cap.")
+    parser.add_argument("--max-validation-rows", type=int, default=0, help="Optional smoke-test cap. 0 means no cap.")
     parser.add_argument("--progress-every", type=int, default=5000, help="Feature-encoding progress interval.")
     parser.add_argument("--batch-progress-every", type=int, default=25, help="Training-batch progress interval.")
     return parser.parse_args()
@@ -61,6 +99,30 @@ def load_rows(path: Path, clip_cp: int) -> list[tuple[str, float]]:
     return rows
 
 
+def collate_csv(items: list[tuple[list[int], list[int], float]], device: torch.device) -> Batch:
+    return make_batch(items, device)
+
+
+def collate_cache(items: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]], device: torch.device) -> Batch:
+    white_indices = torch.stack([item[0] for item in items]).to(device=device, dtype=torch.long)
+    white_lengths = torch.stack([item[1] for item in items]).to(device=device, dtype=torch.long)
+    black_indices = torch.stack([item[2] for item in items]).to(device=device, dtype=torch.long)
+    black_lengths = torch.stack([item[3] for item in items]).to(device=device, dtype=torch.long)
+    target = torch.stack([item[4] for item in items]).to(device=device, dtype=torch.float32)
+
+    white_range = torch.arange(white_indices.shape[1], device=device).unsqueeze(0)
+    black_range = torch.arange(black_indices.shape[1], device=device).unsqueeze(0)
+    white_mask = (white_range < white_lengths.unsqueeze(1)).to(torch.float32)
+    black_mask = (black_range < black_lengths.unsqueeze(1)).to(torch.float32)
+    return Batch(
+        white=white_indices,
+        white_mask=white_mask,
+        black=black_indices,
+        black_mask=black_mask,
+        target=target,
+    )
+
+
 def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> dict[str, float]:
     loss_fn = nn.SmoothL1Loss()
     total_loss = 0.0
@@ -74,11 +136,11 @@ def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> dict
     total = 0
     model.eval()
     with torch.no_grad():
-        for items in loader:
-            batch = make_batch(list(items), device)
+        for batch in loader:
             prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask)
             loss = loss_fn(prediction, batch.target)
-            total_loss += float(loss) * len(items)
+            batch_size = int(batch.target.numel())
+            total_loss += float(loss) * batch_size
             diff = prediction - batch.target
             total_abs += float(diff.abs().sum())
             total_squared += float((diff * diff).sum())
@@ -87,7 +149,7 @@ def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> dict
             sum_prediction_squared += float((prediction * prediction).sum())
             sum_target_squared += float((batch.target * batch.target).sum())
             sum_product += float((prediction * batch.target).sum())
-            total += len(items)
+            total += batch_size
 
     total = max(1, total)
     covariance = sum_product - (sum_prediction * sum_target / total)
@@ -110,35 +172,86 @@ def main() -> int:
     if args.progress_every <= 0 or args.batch_progress_every <= 0:
         print("progress intervals must be positive", file=sys.stderr)
         return 2
+    csv_mode = args.dataset is not None
+    cache_mode = args.train_cache is not None or args.validation_cache is not None
+    if csv_mode == cache_mode:
+        print("provide either --dataset or both --train-cache and --validation-cache", file=sys.stderr)
+        return 2
+    if cache_mode and (args.train_cache is None or args.validation_cache is None):
+        print("cache training requires both --train-cache and --validation-cache", file=sys.stderr)
+        return 2
+    if args.max_train_rows < 0 or args.max_validation_rows < 0:
+        print("row caps must not be negative", file=sys.stderr)
+        return 2
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    rows = load_rows(args.dataset, args.clip_cp)
-    if len(rows) < 2:
-        print("dataset needs at least two rows", file=sys.stderr)
-        return 1
-    random.shuffle(rows)
-
-    validation_count = max(1, int(len(rows) * args.validation_split))
-    validation_rows = rows[:validation_count]
-    train_rows = rows[validation_count:]
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if csv_mode:
+        rows = load_rows(args.dataset, args.clip_cp)
+        if len(rows) < 2:
+            print("dataset needs at least two rows", file=sys.stderr)
+            return 1
+        random.shuffle(rows)
+
+        validation_count = max(1, int(len(rows) * args.validation_split))
+        validation_rows = rows[:validation_count]
+        train_rows = rows[validation_count:]
+        if args.max_train_rows > 0:
+            train_rows = train_rows[: args.max_train_rows]
+        if args.max_validation_rows > 0:
+            validation_rows = validation_rows[: args.max_validation_rows]
+        print("[train] encoding train positions", file=sys.stderr, flush=True)
+        train_dataset: Dataset[Any] = NnueDataset(train_rows, args.progress_every)
+        print("[train] encoding validation positions", file=sys.stderr, flush=True)
+        validation_dataset: Dataset[Any] = NnueDataset(validation_rows, args.progress_every)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            collate_fn=lambda batch: collate_csv(batch, device),
+        )
+        validation_loader = DataLoader(
+            validation_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=lambda batch: collate_csv(batch, device),
+        )
+        dataset_metadata: dict[str, object] = {
+            "dataset": str(args.dataset),
+            "rows": len(rows),
+            "validation_split": args.validation_split,
+        }
+    else:
+        train_dataset = CachedNnueDataset(args.train_cache, args.max_train_rows)
+        validation_dataset = CachedNnueDataset(args.validation_cache, args.max_validation_rows)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            collate_fn=lambda batch: collate_cache(batch, device),
+        )
+        validation_loader = DataLoader(
+            validation_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=lambda batch: collate_cache(batch, device),
+        )
+        dataset_metadata = {
+            "train_cache": str(args.train_cache),
+            "validation_cache": str(args.validation_cache),
+            "train_rows": len(train_dataset),
+            "validation_rows": len(validation_dataset),
+        }
+
     print(
-        f"[train] device={device} train={len(train_rows)} validation={len(validation_rows)} "
+        f"[train] device={device} train={len(train_dataset)} validation={len(validation_dataset)} "
         f"hidden={args.hidden_size} batch={args.batch_size} epochs={args.epochs}",
         flush=True,
     )
     if device.type == "cuda":
         print(f"[train] cuda_device={torch.cuda.get_device_name(0)}", flush=True)
-
-    print("[train] encoding train positions", file=sys.stderr, flush=True)
-    train_dataset = NnueDataset(train_rows, args.progress_every)
-    print("[train] encoding validation positions", file=sys.stderr, flush=True)
-    validation_dataset = NnueDataset(validation_rows, args.progress_every)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=lambda batch: batch)
-    validation_loader = DataLoader(validation_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=lambda batch: batch)
 
     model = NnueModel(hidden_size=args.hidden_size).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
@@ -150,15 +263,15 @@ def main() -> int:
         total_loss = 0.0
         total = 0
         batch_count = len(train_loader)
-        for batch_index, items in enumerate(train_loader, start=1):
-            batch = make_batch(list(items), device)
+        for batch_index, batch in enumerate(train_loader, start=1):
             optimizer.zero_grad(set_to_none=True)
             prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask)
             loss = loss_fn(prediction, batch.target)
             loss.backward()
             optimizer.step()
-            total_loss += float(loss.detach()) * len(items)
-            total += len(items)
+            batch_size = int(batch.target.numel())
+            total_loss += float(loss.detach()) * batch_size
+            total += batch_size
             if batch_index % args.batch_progress_every == 0 or batch_index == batch_count:
                 print(
                     f"[train] epoch={epoch}/{args.epochs} batch={batch_index}/{batch_count} "
@@ -180,8 +293,7 @@ def main() -> int:
         args.output,
         model,
         {
-            "dataset": str(args.dataset),
-            "rows": len(rows),
+            **dataset_metadata,
             "clip_cp": args.clip_cp,
             "device": str(device),
         },

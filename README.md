@@ -167,6 +167,66 @@ python3 tools/check_nnue_parity.py \
 
 The trainer uses CUDA automatically when PyTorch detects a GPU and falls back to CPU otherwise. The exported `.nnue` file is the only artifact needed by the C++ engine at runtime.
 
+Import and train from the Kaggle Stockfish NNUE dataset:
+
+```bash
+python3 tools/import_kaggle_stockfish_nnue.py \
+  --train-input data/raw/kaggle_stockfish_nnue/train.csv \
+  --test-input data/raw/kaggle_stockfish_nnue/test.csv \
+  --output-dir runs/nnue/kaggle \
+  --clip-cp 1500 \
+  --validation-fraction 0.05 \
+  --holdout-fraction 0.05 \
+  --progress-every 100000
+
+python3 tools/analyze_nnue_dataset.py \
+  --dataset runs/nnue/kaggle/train.csv
+
+python3 tools/analyze_nnue_dataset.py \
+  --dataset runs/nnue/kaggle/validation.csv
+
+python3 tools/build_nnue_feature_cache.py \
+  --dataset runs/nnue/kaggle/train.csv \
+  --output runs/nnue/kaggle/train_cache.pt \
+  --progress-every 100000
+
+python3 tools/build_nnue_feature_cache.py \
+  --dataset runs/nnue/kaggle/validation.csv \
+  --output runs/nnue/kaggle/validation_cache.pt \
+  --progress-every 100000
+
+python3 tools/train_nnue.py \
+  --train-cache runs/nnue/kaggle/train_cache.pt \
+  --validation-cache runs/nnue/kaggle/validation_cache.pt \
+  --output runs/nnue/kaggle/smoke.pt \
+  --epochs 1 \
+  --batch-size 4096 \
+  --hidden-size 64 \
+  --max-train-rows 32768 \
+  --max-validation-rows 4096
+
+python3 tools/train_nnue.py \
+  --train-cache runs/nnue/kaggle/train_cache.pt \
+  --validation-cache runs/nnue/kaggle/validation_cache.pt \
+  --output runs/nnue/kaggle/current.pt \
+  --epochs 12 \
+  --batch-size 4096 \
+  --hidden-size 256
+
+python3 tools/export_nnue.py \
+  --checkpoint runs/nnue/kaggle/current.pt \
+  --output runs/nnue/kaggle/current.nnue
+
+python3 tools/check_nnue_parity.py \
+  --checkpoint runs/nnue/kaggle/current.pt \
+  --nnue runs/nnue/kaggle/current.nnue \
+  --engine ./build-release/chess_uci \
+  --dataset runs/nnue/kaggle/holdout.csv \
+  --limit 256
+```
+
+`train.csv` from Kaggle is labeled and split deterministically into train, validation, and holdout files. Kaggle `test.csv` has empty labels, so the importer preserves it as `unlabeled_test.csv` for later inference experiments but does not use it for supervised training.
+
 Generate an imported Lichess tactical suite from the official CC0 puzzle database:
 
 ```bash

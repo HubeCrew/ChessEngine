@@ -113,6 +113,17 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/rebalance_nnue_dataset.py
         )
         add_test(
+            NAME import_kaggle_stockfish_nnue_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/import_kaggle_stockfish_nnue_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/import_kaggle_stockfish_nnue.py
+        )
+        add_test(
+            NAME nnue_feature_cache_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/nnue_feature_cache_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/build_nnue_feature_cache.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/train_nnue.py
+        )
+        add_test(
             NAME gauntlet_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gauntlet_smoke_test.py
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/gauntlet.py
