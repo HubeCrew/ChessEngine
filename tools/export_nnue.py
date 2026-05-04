@@ -21,7 +21,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     device = torch.device("cpu")
+    print(f"[export] loading checkpoint={args.checkpoint}")
     model, metadata = load_checkpoint(args.checkpoint, device)
+    print(
+        f"[export] exporting output={args.output} hidden={model.hidden_size} "
+        f"accumulator_scale={args.accumulator_scale} output_scale={args.output_scale}"
+    )
     export_binary(args.output, model, args.accumulator_scale, args.output_scale)
     print(f"wrote {args.output} hidden={model.hidden_size} metadata={metadata}")
     return 0

@@ -5,6 +5,7 @@ import argparse
 import csv
 import random
 import sys
+import time
 from pathlib import Path
 
 import chess
@@ -16,11 +17,13 @@ from nnue_model import NnueModel, active_features, make_batch, save_checkpoint
 
 
 class NnueDataset(Dataset):
-    def __init__(self, rows: list[tuple[str, float]]) -> None:
+    def __init__(self, rows: list[tuple[str, float]], progress_every: int) -> None:
         self.items: list[tuple[list[int], list[int], float]] = []
-        for fen, score in rows:
+        for index, (fen, score) in enumerate(rows, start=1):
             board = chess.Board(fen)
             self.items.append((active_features(board, chess.WHITE), active_features(board, chess.BLACK), score))
+            if index % progress_every == 0 or index == len(rows):
+                print(f"[train] encoded={index}/{len(rows)}", file=sys.stderr, flush=True)
 
     def __len__(self) -> int:
         return len(self.items)
@@ -40,10 +43,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--validation-split", type=float, default=0.05)
     parser.add_argument("--clip-cp", type=int, default=1500)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--progress-every", type=int, default=5000, help="Feature-encoding progress interval.")
+    parser.add_argument("--batch-progress-every", type=int, default=25, help="Training-batch progress interval.")
     return parser.parse_args()
 
 
 def load_rows(path: Path, clip_cp: int) -> list[tuple[str, float]]:
+    print(f"[train] loading dataset={path}", file=sys.stderr, flush=True)
     rows: list[tuple[str, float]] = []
     with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -51,6 +57,7 @@ def load_rows(path: Path, clip_cp: int) -> list[tuple[str, float]]:
             fen = row["fen"]
             score = max(-clip_cp, min(clip_cp, float(row["score_cp"])))
             rows.append((fen, score))
+    print(f"[train] loaded rows={len(rows)}", file=sys.stderr, flush=True)
     return rows
 
 
@@ -71,6 +78,10 @@ def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> floa
 
 def main() -> int:
     args = parse_args()
+    if args.progress_every <= 0 or args.batch_progress_every <= 0:
+        print("progress intervals must be positive", file=sys.stderr)
+        return 2
+
     random.seed(args.seed)
     torch.manual_seed(args.seed)
 
@@ -85,10 +96,18 @@ def main() -> int:
     train_rows = rows[validation_count:]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"device={device} train={len(train_rows)} validation={len(validation_rows)}")
+    print(
+        f"[train] device={device} train={len(train_rows)} validation={len(validation_rows)} "
+        f"hidden={args.hidden_size} batch={args.batch_size} epochs={args.epochs}",
+        flush=True,
+    )
+    if device.type == "cuda":
+        print(f"[train] cuda_device={torch.cuda.get_device_name(0)}", flush=True)
 
-    train_dataset = NnueDataset(train_rows)
-    validation_dataset = NnueDataset(validation_rows)
+    print("[train] encoding train positions", file=sys.stderr, flush=True)
+    train_dataset = NnueDataset(train_rows, args.progress_every)
+    print("[train] encoding validation positions", file=sys.stderr, flush=True)
+    validation_dataset = NnueDataset(validation_rows, args.progress_every)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=lambda batch: batch)
     validation_loader = DataLoader(validation_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=lambda batch: batch)
 
@@ -97,10 +116,12 @@ def main() -> int:
     loss_fn = nn.SmoothL1Loss()
 
     for epoch in range(1, args.epochs + 1):
+        epoch_start = time.monotonic()
         model.train()
         total_loss = 0.0
         total = 0
-        for items in train_loader:
+        batch_count = len(train_loader)
+        for batch_index, items in enumerate(train_loader, start=1):
             batch = make_batch(list(items), device)
             optimizer.zero_grad(set_to_none=True)
             prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask)
@@ -109,9 +130,20 @@ def main() -> int:
             optimizer.step()
             total_loss += float(loss.detach()) * len(items)
             total += len(items)
+            if batch_index % args.batch_progress_every == 0 or batch_index == batch_count:
+                print(
+                    f"[train] epoch={epoch}/{args.epochs} batch={batch_index}/{batch_count} "
+                    f"rows={total}/{len(train_dataset)} loss={total_loss / max(1, total):.3f}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         train_loss = total_loss / max(1, total)
         validation_loss = evaluate(model, validation_loader, device)
-        print(f"epoch={epoch} train_loss={train_loss:.3f} validation_loss={validation_loss:.3f}")
+        elapsed = time.monotonic() - epoch_start
+        print(
+            f"epoch={epoch} train_loss={train_loss:.3f} validation_loss={validation_loss:.3f} elapsed_s={elapsed:.1f}",
+            flush=True,
+        )
 
     save_checkpoint(
         args.output,

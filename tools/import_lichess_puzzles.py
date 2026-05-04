@@ -76,6 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-depth", type=int, default=4)
     parser.add_argument("--max-depth", type=int, default=6)
     parser.add_argument("--max-per-theme", type=int, default=25)
+    parser.add_argument("--progress-every", type=int, default=5000, help="Input-row progress interval written to stderr.")
     parser.add_argument("--theme", action="append", dest="themes", help="Allowed theme. Can be repeated.")
     parser.add_argument("--exclude-theme", action="append", dest="excluded_themes", help="Excluded theme. Can be repeated.")
     return parser.parse_args()
@@ -211,27 +212,65 @@ def imported_positions(rows: Iterable[dict[str, str]], args: argparse.Namespace)
     excluded_themes = set(args.excluded_themes) if args.excluded_themes else DEFAULT_EXCLUDED_THEMES
     per_theme: dict[str, int] = {}
     lines: list[str] = []
+    scanned = 0
+    kept = 0
+    rejected = 0
+    invalid = 0
 
     for row in rows:
+        scanned += 1
         keep, themes = keep_row(row, allowed_themes, excluded_themes, args)
         if not keep:
+            rejected += 1
+            if scanned % args.progress_every == 0:
+                print(
+                    f"[import] scanned={scanned} kept={kept}/{args.limit} rejected={rejected} invalid={invalid}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             continue
 
         theme = primary_theme(themes & allowed_themes)
         if per_theme.get(theme, 0) >= args.max_per_theme:
+            rejected += 1
+            if scanned % args.progress_every == 0:
+                print(
+                    f"[import] scanned={scanned} kept={kept}/{args.limit} rejected={rejected} invalid={invalid}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             continue
 
         depth = max(args.min_depth, min(args.max_depth, len(row["Moves"].split()) + 1))
         try:
             line = epd_line(row, theme, depth, args.referee)
         except (KeyError, ValueError):
+            invalid += 1
+            if scanned % args.progress_every == 0:
+                print(
+                    f"[import] scanned={scanned} kept={kept}/{args.limit} rejected={rejected} invalid={invalid}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             continue
 
         lines.append(line)
+        kept += 1
         per_theme[theme] = per_theme.get(theme, 0) + 1
+        if kept % max(1, min(args.progress_every, 1000)) == 0:
+            print(
+                f"[import] kept={kept}/{args.limit} scanned={scanned} theme={theme}",
+                file=sys.stderr,
+                flush=True,
+            )
         if len(lines) >= args.limit:
             break
 
+    print(
+        f"[import] done scanned={scanned} kept={kept} rejected={rejected} invalid={invalid}",
+        file=sys.stderr,
+        flush=True,
+    )
     return lines
 
 
@@ -243,7 +282,14 @@ def main() -> int:
         raise SystemExit("--max-per-theme must be positive")
     if args.min_depth <= 0 or args.max_depth < args.min_depth:
         raise SystemExit("invalid depth range")
+    if args.progress_every <= 0:
+        raise SystemExit("--progress-every must be positive")
 
+    print(
+        f"[import] start input={args.input} output={args.output} limit={args.limit}",
+        file=sys.stderr,
+        flush=True,
+    )
     input_file, process = open_csv(args.input)
     try:
         reader = csv.DictReader(input_file)
@@ -259,6 +305,7 @@ def main() -> int:
         print(f"warning: only imported {len(lines)} positions out of requested {args.limit}", file=sys.stderr)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    print(f"[import] writing {len(lines)} positions to {args.output}", file=sys.stderr, flush=True)
     with args.output.open("w", encoding="utf-8", newline="\n") as output:
         output.write("# Imported from the official Lichess puzzle database (CC0).\n")
         output.write("# Source: https://database.lichess.org/#puzzles\n")

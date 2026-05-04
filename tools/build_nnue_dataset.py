@@ -77,6 +77,7 @@ def random_positions(games: int, max_plies: int) -> Iterable[tuple[chess.Board, 
 def load_existing_keys(path: Path) -> set[str]:
     if not path.exists():
         return set()
+    print(f"[dataset] loading existing labels from {path}", file=sys.stderr, flush=True)
     keys: set[str] = set()
     with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -88,6 +89,7 @@ def load_existing_keys(path: Path) -> set[str]:
                 keys.add(fen_key(chess.Board(fen)))
             except ValueError:
                 continue
+    print(f"[dataset] existing labeled positions={len(keys)}", file=sys.stderr, flush=True)
     return keys
 
 
@@ -108,21 +110,34 @@ def collect_positions(
                 continue
             seen.add(key)
             collected.append((board, source))
+            if len(collected) % args.progress_every == 0:
+                print(
+                    f"[dataset] collected={len(collected)}/{target_new_positions or 'all'} latest={source}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             if target_new_positions > 0 and len(collected) >= target_new_positions:
                 return
 
     for path in args.epd:
+        print(f"[dataset] scanning epd={path}", file=sys.stderr, flush=True)
         add_many(epd_positions(path))
         if target_new_positions > 0 and len(collected) >= target_new_positions:
             return collected
 
     for directory in args.pgn_dir:
+        print(f"[dataset] scanning pgn_dir={directory}", file=sys.stderr, flush=True)
         for path in sorted(directory.glob("*.pgn")):
             add_many(pgn_positions(path))
             if target_new_positions > 0 and len(collected) >= target_new_positions:
                 return collected
 
     if args.random_games > 0:
+        print(
+            f"[dataset] generating random_games={args.random_games} random_plies={args.random_plies}",
+            file=sys.stderr,
+            flush=True,
+        )
         add_many(random_positions(args.random_games, args.random_plies))
 
     return collected[:target_new_positions] if target_new_positions > 0 else collected
@@ -151,11 +166,23 @@ def main() -> int:
     if target_new_positions == 0 and args.limit > 0:
         print(f"dataset already has at least {args.limit} positions: {args.output}")
         return 0
+    print(
+        f"[dataset] start output={args.output} target_total={args.limit or 'all'} target_new={target_new_positions or 'all'}",
+        file=sys.stderr,
+        flush=True,
+    )
     positions = collect_positions(args, existing_keys, target_new_positions)
     if not positions:
         print("no new positions collected", file=sys.stderr)
         return 0 if existing_keys else 1
 
+    print(
+        f"[dataset] labeling positions={len(positions)} stockfish={args.stockfish} "
+        f"threads={max(1, args.stockfish_threads)} hash={max(1, args.stockfish_hash)} "
+        f"depth={args.depth} nodes={args.nodes if args.nodes > 0 else 'none'}",
+        file=sys.stderr,
+        flush=True,
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     append = args.resume and args.output.exists()
     with chess.engine.SimpleEngine.popen_uci(args.stockfish) as engine, args.output.open("a" if append else "w", encoding="utf-8", newline="") as handle:
