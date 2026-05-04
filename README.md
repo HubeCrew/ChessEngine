@@ -187,17 +187,19 @@ python3 tools/analyze_nnue_dataset.py \
 
 python3 tools/build_nnue_feature_cache.py \
   --dataset runs/nnue/kaggle/train.csv \
-  --output runs/nnue/kaggle/train_cache.pt \
+  --output runs/nnue/kaggle/train_cache_halfka_v2_hm_lite.pt \
+  --feature-set halfka-v2-hm-lite \
   --progress-every 100000
 
 python3 tools/build_nnue_feature_cache.py \
   --dataset runs/nnue/kaggle/validation.csv \
-  --output runs/nnue/kaggle/validation_cache.pt \
+  --output runs/nnue/kaggle/validation_cache_halfka_v2_hm_lite.pt \
+  --feature-set halfka-v2-hm-lite \
   --progress-every 100000
 
 python3 tools/train_nnue.py \
-  --train-cache runs/nnue/kaggle/train_cache.pt \
-  --validation-cache runs/nnue/kaggle/validation_cache.pt \
+  --train-cache runs/nnue/kaggle/train_cache_halfka_v2_hm_lite.pt \
+  --validation-cache runs/nnue/kaggle/validation_cache_halfka_v2_hm_lite.pt \
   --output runs/nnue/kaggle/smoke.pt \
   --epochs 1 \
   --batch-size 4096 \
@@ -206,9 +208,9 @@ python3 tools/train_nnue.py \
   --max-validation-rows 4096
 
 python3 tools/train_nnue.py \
-  --train-cache runs/nnue/kaggle/train_cache.pt \
-  --validation-cache runs/nnue/kaggle/validation_cache.pt \
-  --run-dir runs/nnue/kaggle/v4-sf-lite-001 \
+  --train-cache runs/nnue/kaggle/train_cache_halfka_v2_hm_lite.pt \
+  --validation-cache runs/nnue/kaggle/validation_cache_halfka_v2_hm_lite.pt \
+  --run-dir runs/nnue/kaggle/v5-halfka-v2-hm-lite-001 \
   --epochs 24 \
   --batch-size 4096 \
   --hidden-size 512 \
@@ -221,7 +223,7 @@ python3 tools/train_nnue.py \
   --parity-limit 256
 
 python3 tools/train_nnue.py \
-  --resume runs/nnue/kaggle/v4-sf-lite-001/last.pt \
+  --resume runs/nnue/kaggle/v5-halfka-v2-hm-lite-001/last.pt \
   --epochs 36 \
   --holdout-dataset runs/nnue/kaggle/holdout.csv \
   --export-best \
@@ -249,7 +251,7 @@ python3 tools/evaluate_nnue_checkpoint.py \
   --batch-size 4096
 ```
 
-`train.csv` from Kaggle is labeled and split deterministically into train, validation, and holdout files. Kaggle `test.csv` has empty labels, so the importer preserves it as `unlabeled_test.csv` for later inference experiments but does not use it for supervised training. The default NNUE is now a Stockfish-inspired SF-lite architecture: side-to-move `us/them` accumulator ordering, a direct accumulator output, squared clipped ReLU plus clipped ReLU hidden features, and a compact second hidden layer. The C++ loader remains backward-compatible with older v1/v2/v3 `.nnue` files. Shaped-loss training is still available as an opt-in experiment; raw centipawn loss remains the default baseline.
+`train.csv` from Kaggle is labeled and split deterministically into train, validation, and holdout files. Kaggle `test.csv` has empty labels, so the importer preserves it as `unlabeled_test.csv` for later inference experiments but does not use it for supervised training. The default NNUE architecture is a Stockfish-inspired SF-lite stack: side-to-move `us/them` accumulator ordering, a direct accumulator output, squared clipped ReLU plus clipped ReLU hidden features, and a compact second hidden layer. The recommended feature set for new training is `halfka-v2-hm-lite`, which vertically orients each perspective, horizontally mirrors king-side positions, and uses 32 compact king buckets. Legacy `halfkp-v1` caches and v1/v2/v3/v4 `.nnue` files remain supported. Shaped-loss training is still available as an opt-in experiment; raw centipawn loss remains the default baseline.
 
 Generate an imported Lichess tactical suite from the official CC0 puzzle database:
 

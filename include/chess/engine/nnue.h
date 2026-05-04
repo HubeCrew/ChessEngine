@@ -13,12 +13,22 @@ namespace chess::engine::nnue {
 constexpr std::uint32_t kFormatVersionV1 = 1;
 constexpr std::uint32_t kFormatVersionV2 = 2;
 constexpr std::uint32_t kFormatVersionV3 = 3;
-constexpr std::uint32_t kFormatVersion = 4;
-constexpr std::uint32_t kFeatureCount = 64 * 10 * 64;
+constexpr std::uint32_t kFormatVersionV4 = 4;
+constexpr std::uint32_t kFormatVersionV5 = 5;
+constexpr std::uint32_t kFormatVersion = kFormatVersionV4;
+constexpr std::uint32_t kHalfKpFeatureCount = 64 * 10 * 64;
+constexpr std::uint32_t kHalfKaV2HmLiteKingBuckets = 32;
+constexpr std::uint32_t kHalfKaV2HmLiteFeatureCount = kHalfKaV2HmLiteKingBuckets * 10 * 64;
+constexpr std::uint32_t kFeatureCount = kHalfKpFeatureCount;
 constexpr std::uint32_t kDefaultHiddenSize = 256;
 constexpr std::uint32_t kMaxHiddenSize = 1024;
 constexpr std::uint32_t kDefaultAccumulatorScale = 256;
 constexpr std::uint32_t kDefaultOutputScale = 1024;
+
+enum class FeatureSet : std::uint32_t {
+    HalfKp = 1,
+    HalfKaV2HmLite = 2,
+};
 
 struct ModelInfo {
     std::uint32_t format_version = 0;
@@ -30,12 +40,25 @@ struct ModelInfo {
     bool sf_lite = false;
     std::uint32_t l2_size = 0;
     std::uint32_t l3_size = 0;
+    FeatureSet feature_set = FeatureSet::HalfKp;
     std::filesystem::path path;
 };
 
 [[nodiscard]] Square perspective_square(Square square, Color perspective);
-[[nodiscard]] std::uint32_t feature_index(Color perspective, Square perspective_king, Piece piece, Square square);
-[[nodiscard]] std::vector<std::uint32_t> active_feature_indices(const Board& board, Color perspective);
+[[nodiscard]] Square horizontal_mirror_square(Square square);
+[[nodiscard]] std::uint32_t feature_count(FeatureSet feature_set);
+[[nodiscard]] std::uint32_t feature_index(
+    Color perspective,
+    Square perspective_king,
+    Piece piece,
+    Square square,
+    FeatureSet feature_set = FeatureSet::HalfKp
+);
+[[nodiscard]] std::vector<std::uint32_t> active_feature_indices(
+    const Board& board,
+    Color perspective,
+    FeatureSet feature_set = FeatureSet::HalfKp
+);
 
 class Network {
 public:

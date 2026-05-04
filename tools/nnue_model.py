@@ -12,9 +12,21 @@ from torch import nn
 FORMAT_VERSION_FIXED_PERSPECTIVE = 2
 FORMAT_VERSION_SIDE_TO_MOVE_PERSPECTIVE = 3
 FORMAT_VERSION_SF_LITE = 4
+FORMAT_VERSION_FEATURE_SET = 5
 FORMAT_VERSION = FORMAT_VERSION_SF_LITE
-SUPPORTED_FORMAT_VERSIONS = (1, 2, 3, 4)
-FEATURE_COUNT = 64 * 10 * 64
+SUPPORTED_FORMAT_VERSIONS = (1, 2, 3, 4, 5)
+FEATURE_SET_HALFKP = "halfkp-v1"
+FEATURE_SET_HALFKA_V2_HM_LITE = "halfka-v2-hm-lite"
+SUPPORTED_FEATURE_SETS = (FEATURE_SET_HALFKP, FEATURE_SET_HALFKA_V2_HM_LITE)
+FEATURE_SET_IDS = {
+    FEATURE_SET_HALFKP: 1,
+    FEATURE_SET_HALFKA_V2_HM_LITE: 2,
+}
+FEATURE_SET_BY_ID = {value: key for key, value in FEATURE_SET_IDS.items()}
+HALFKP_FEATURE_COUNT = 64 * 10 * 64
+HALFKA_V2_HM_LITE_KING_BUCKETS = 32
+HALFKA_V2_HM_LITE_FEATURE_COUNT = HALFKA_V2_HM_LITE_KING_BUCKETS * 10 * 64
+FEATURE_COUNT = HALFKP_FEATURE_COUNT
 DEFAULT_HIDDEN_SIZE = 256
 DEFAULT_L2_SIZE = 64
 DEFAULT_L3_SIZE = 32
@@ -45,11 +57,56 @@ def perspective_square(square: chess.Square, perspective: chess.Color) -> chess.
     return chess.square(chess.square_file(square), 7 - chess.square_rank(square))
 
 
+def horizontal_mirror_square(square: chess.Square) -> chess.Square:
+    return chess.square(7 - chess.square_file(square), chess.square_rank(square))
+
+
+def feature_count_for(feature_set: str) -> int:
+    if feature_set == FEATURE_SET_HALFKP:
+        return HALFKP_FEATURE_COUNT
+    if feature_set == FEATURE_SET_HALFKA_V2_HM_LITE:
+        return HALFKA_V2_HM_LITE_FEATURE_COUNT
+    raise ValueError(f"unsupported NNUE feature set: {feature_set}")
+
+
+def feature_set_for_format_version(format_version: int, feature_set: str | None = None) -> str:
+    if feature_set is not None:
+        if feature_set not in SUPPORTED_FEATURE_SETS:
+            raise ValueError(f"unsupported NNUE feature set: {feature_set}")
+        return feature_set
+    if format_version >= FORMAT_VERSION_FEATURE_SET:
+        raise ValueError("feature-set-aware NNUE format requires explicit feature_set metadata")
+    return FEATURE_SET_HALFKP
+
+
+def feature_set_id(feature_set: str) -> int:
+    try:
+        return FEATURE_SET_IDS[feature_set]
+    except KeyError as exc:
+        raise ValueError(f"unsupported NNUE feature set: {feature_set}") from exc
+
+
+def feature_set_from_id(identifier: int) -> str:
+    try:
+        return FEATURE_SET_BY_ID[identifier]
+    except KeyError as exc:
+        raise ValueError(f"unsupported NNUE feature set id {identifier}") from exc
+
+
+def normalize_feature_set(feature_set: str | None) -> str:
+    if feature_set is None:
+        return FEATURE_SET_HALFKP
+    if feature_set not in SUPPORTED_FEATURE_SETS:
+        raise ValueError(f"unsupported NNUE feature set: {feature_set}")
+    return feature_set
+
+
 def feature_index(
     perspective: chess.Color,
     perspective_king: chess.Square,
     piece: chess.Piece,
     square: chess.Square,
+    feature_set: str = FEATURE_SET_HALFKP,
 ) -> int | None:
     if piece.piece_type == chess.KING:
         return None
@@ -60,16 +117,24 @@ def feature_index(
     piece_slot = relative_color * 5 + slot
     king_square = perspective_square(perspective_king, perspective)
     piece_square = perspective_square(square, perspective)
-    return ((king_square * 10 + piece_slot) * 64) + piece_square
+    if feature_set == FEATURE_SET_HALFKP:
+        return ((king_square * 10 + piece_slot) * 64) + piece_square
+    if feature_set == FEATURE_SET_HALFKA_V2_HM_LITE:
+        if chess.square_file(king_square) >= 4:
+            king_square = horizontal_mirror_square(king_square)
+            piece_square = horizontal_mirror_square(piece_square)
+        king_bucket = chess.square_rank(king_square) * 4 + chess.square_file(king_square)
+        return ((king_bucket * 10 + piece_slot) * 64) + piece_square
+    raise ValueError(f"unsupported NNUE feature set: {feature_set}")
 
 
-def active_features(board: chess.Board, perspective: chess.Color) -> list[int]:
+def active_features(board: chess.Board, perspective: chess.Color, feature_set: str = FEATURE_SET_HALFKP) -> list[int]:
     king = board.king(perspective)
     if king is None:
         return []
     features: list[int] = []
     for square, piece in board.piece_map().items():
-        index = feature_index(perspective, king, piece, square)
+        index = feature_index(perspective, king, piece, square, feature_set)
         if index is not None:
             features.append(index)
     features.sort()
@@ -80,6 +145,7 @@ def active_features(board: chess.Board, perspective: chess.Color) -> list[int]:
 class BinaryNnue:
     format_version: int
     feature_count: int
+    feature_set: str
     hidden_size: int
     accumulator_scale: int
     output_scale: int
@@ -125,8 +191,8 @@ class BinaryNnue:
             assert self.fc1_weight is not None
             assert self.fc1_bias is not None
             assert self.fc2_weight is not None
-            white = self.accumulator(active_features(board, chess.WHITE)).clamp(0.0, 1.0)
-            black = self.accumulator(active_features(board, chess.BLACK)).clamp(0.0, 1.0)
+            white = self.accumulator(active_features(board, chess.WHITE, self.feature_set)).clamp(0.0, 1.0)
+            black = self.accumulator(active_features(board, chess.BLACK, self.feature_set)).clamp(0.0, 1.0)
             stm = white if board.turn == chess.WHITE else black
             nstm = black if board.turn == chess.WHITE else white
             inputs = torch.cat([stm, nstm])
@@ -138,8 +204,8 @@ class BinaryNnue:
             white_score = stm_score if side_to_move > 0 else -stm_score
             return int(round(white_score))
 
-        white = self.accumulator(active_features(board, chess.WHITE)).clamp(0, self.accumulator_scale)
-        black = self.accumulator(active_features(board, chess.BLACK)).clamp(0, self.accumulator_scale)
+        white = self.accumulator(active_features(board, chess.WHITE, self.feature_set)).clamp(0, self.accumulator_scale)
+        black = self.accumulator(active_features(board, chess.BLACK, self.feature_set)).clamp(0, self.accumulator_scale)
         if self.format_version >= FORMAT_VERSION_SIDE_TO_MOVE_PERSPECTIVE:
             stm = white if board.turn == chess.WHITE else black
             nstm = black if board.turn == chess.WHITE else white
@@ -175,6 +241,7 @@ class NnueModel(nn.Module):
         architecture: str = ARCHITECTURE_SF_LITE,
         l2_size: int = DEFAULT_L2_SIZE,
         l3_size: int = DEFAULT_L3_SIZE,
+        feature_set: str = FEATURE_SET_HALFKP,
     ) -> None:
         super().__init__()
         if perspective_mode not in ("fixed", "side-to-move"):
@@ -183,22 +250,29 @@ class NnueModel(nn.Module):
             raise ValueError(f"unsupported NNUE architecture: {architecture}")
         if architecture == ARCHITECTURE_SF_LITE and perspective_mode != "side-to-move":
             raise ValueError("sf-lite requires side-to-move perspective mode")
+        if architecture != ARCHITECTURE_SF_LITE and feature_set != FEATURE_SET_HALFKP:
+            raise ValueError("non-HalfKP feature sets currently require sf-lite architecture")
         if l2_size <= 0 or l3_size <= 0:
             raise ValueError("dense layer sizes must be positive")
+        feature_set = normalize_feature_set(feature_set)
         self.hidden_size = hidden_size
         self.perspective_mode = perspective_mode
         self.architecture = architecture
         self.l2_size = l2_size
         self.l3_size = l3_size
+        self.feature_set = feature_set
+        self.feature_count = feature_count_for(feature_set)
         if architecture == ARCHITECTURE_SF_LITE:
-            self.format_version = FORMAT_VERSION_SF_LITE
+            self.format_version = FORMAT_VERSION_FEATURE_SET if feature_set != FEATURE_SET_HALFKP else FORMAT_VERSION_SF_LITE
         else:
             self.format_version = (
                 FORMAT_VERSION_SIDE_TO_MOVE_PERSPECTIVE
-                if perspective_mode == "side-to-move"
+                if perspective_mode == "side-to-move" and feature_set == FEATURE_SET_HALFKP
                 else FORMAT_VERSION_FIXED_PERSPECTIVE
             )
-        self.feature = nn.Embedding(FEATURE_COUNT, hidden_size)
+            if feature_set != FEATURE_SET_HALFKP:
+                self.format_version = FORMAT_VERSION_FEATURE_SET
+        self.feature = nn.Embedding(self.feature_count, hidden_size)
         self.hidden_bias = nn.Parameter(torch.zeros(hidden_size))
         if architecture == ARCHITECTURE_SF_LITE:
             self.direct = nn.Linear(hidden_size * 2, 1)
@@ -297,6 +371,8 @@ def save_checkpoint(path: Path, model: NnueModel, metadata: dict[str, object]) -
         {
             "hidden_size": model.hidden_size,
             "format_version": model.format_version,
+            "feature_set": model.feature_set,
+            "feature_count": model.feature_count,
             "perspective_mode": model.perspective_mode,
             "architecture": model.architecture,
             "l2_size": model.l2_size,
@@ -313,6 +389,9 @@ def load_checkpoint(path: Path, device: torch.device) -> tuple[NnueModel, dict[s
     format_version = int(checkpoint.get("format_version", FORMAT_VERSION_FIXED_PERSPECTIVE))
     if format_version not in SUPPORTED_FORMAT_VERSIONS:
         raise ValueError(f"unsupported NNUE checkpoint format {format_version}")
+    feature_set = str(checkpoint.get("feature_set", FEATURE_SET_HALFKP))
+    if feature_set not in SUPPORTED_FEATURE_SETS:
+        raise ValueError(f"unsupported NNUE checkpoint feature set {feature_set}")
     if format_version >= FORMAT_VERSION_SF_LITE:
         architecture = ARCHITECTURE_SF_LITE
         perspective_mode = "side-to-move"
@@ -325,7 +404,14 @@ def load_checkpoint(path: Path, device: torch.device) -> tuple[NnueModel, dict[s
         architecture=architecture,
         l2_size=int(checkpoint.get("l2_size", DEFAULT_L2_SIZE)),
         l3_size=int(checkpoint.get("l3_size", DEFAULT_L3_SIZE)),
+        feature_set=feature_set,
     )
+    stored_feature_count = int(checkpoint.get("feature_count", model.feature_count))
+    if stored_feature_count != model.feature_count:
+        raise ValueError(
+            f"checkpoint feature count {stored_feature_count} does not match "
+            f"{feature_set} feature count {model.feature_count}"
+        )
     state_dict = checkpoint["state_dict"]
     if "side_to_move_weight" not in state_dict:
         state_dict = dict(state_dict)
@@ -347,8 +433,18 @@ def load_binary(path: Path) -> BinaryNnue:
         version, feature_count, hidden_size, accumulator_scale, output_scale = struct.unpack("<IIIII", header)
         if version not in SUPPORTED_FORMAT_VERSIONS:
             raise ValueError(f"unsupported NNUE version {version}")
-        if feature_count != FEATURE_COUNT:
-            raise ValueError(f"unsupported feature count {feature_count}")
+        feature_set = FEATURE_SET_HALFKP
+        if version >= FORMAT_VERSION_FEATURE_SET:
+            feature_set_data = handle.read(4)
+            if len(feature_set_data) != 4:
+                raise ValueError(f"truncated NNUE feature-set header in {path}")
+            (feature_set_identifier,) = struct.unpack("<I", feature_set_data)
+            feature_set = feature_set_from_id(feature_set_identifier)
+        expected_feature_count = feature_count_for(feature_set)
+        if feature_count != expected_feature_count:
+            raise ValueError(
+                f"unsupported feature count {feature_count} for {feature_set}; expected {expected_feature_count}"
+            )
         if version >= FORMAT_VERSION_SF_LITE:
             dense_header = handle.read(8)
             if len(dense_header) != 8:
@@ -382,6 +478,7 @@ def load_binary(path: Path) -> BinaryNnue:
             return BinaryNnue(
                 format_version=version,
                 feature_count=feature_count,
+                feature_set=feature_set,
                 hidden_size=hidden_size,
                 accumulator_scale=accumulator_scale,
                 output_scale=output_scale,
@@ -430,6 +527,7 @@ def load_binary(path: Path) -> BinaryNnue:
     return BinaryNnue(
         format_version=version,
         feature_count=feature_count,
+        feature_set=feature_set,
         hidden_size=hidden_size,
         accumulator_scale=accumulator_scale,
         output_scale=output_scale,
@@ -443,8 +541,8 @@ def load_binary(path: Path) -> BinaryNnue:
 
 def evaluate_checkpoint_white_perspective(model: NnueModel, board: chess.Board, device: torch.device) -> float:
     item = (
-        active_features(board, chess.WHITE),
-        active_features(board, chess.BLACK),
+        active_features(board, chess.WHITE, model.feature_set),
+        active_features(board, chess.BLACK, model.feature_set),
         1 if board.turn == chess.WHITE else -1,
         0.0,
     )
@@ -481,12 +579,14 @@ def export_binary(
                 struct.pack(
                     "<IIIII",
                     model.format_version,
-                    FEATURE_COUNT,
+                    model.feature_count,
                     model.hidden_size,
                     accumulator_scale,
                     output_scale,
                 )
             )
+            if model.format_version >= FORMAT_VERSION_FEATURE_SET:
+                handle.write(struct.pack("<I", feature_set_id(model.feature_set)))
             handle.write(struct.pack("<II", model.l2_size, model.l3_size))
             handle.write(hidden_bias.numpy().tobytes())
             handle.write(feature_weights.numpy().tobytes())
@@ -511,15 +611,17 @@ def export_binary(
     with path.open("wb") as handle:
         handle.write(MAGIC)
         handle.write(
-            struct.pack(
-                "<IIIII",
-                model.format_version,
-                FEATURE_COUNT,
-                model.hidden_size,
-                accumulator_scale,
-                output_scale,
+                struct.pack(
+                    "<IIIII",
+                    model.format_version,
+                    model.feature_count,
+                    model.hidden_size,
+                    accumulator_scale,
+                    output_scale,
+                )
             )
-        )
+        if model.format_version >= FORMAT_VERSION_FEATURE_SET:
+            handle.write(struct.pack("<I", feature_set_id(model.feature_set)))
         handle.write(hidden_bias.numpy().tobytes())
         handle.write(feature_weights.contiguous().numpy().tobytes())
         handle.write(output_weights.contiguous().numpy().tobytes())

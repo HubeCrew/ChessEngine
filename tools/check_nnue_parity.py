@@ -111,10 +111,18 @@ def main() -> int:
 
     print(f"[parity] loading checkpoint={args.checkpoint}", file=sys.stderr, flush=True)
     model, metadata = load_checkpoint(args.checkpoint, torch.device("cpu"))
-    print(f"[parity] checkpoint hidden={model.hidden_size} metadata={metadata}", file=sys.stderr, flush=True)
+    print(
+        f"[parity] checkpoint hidden={model.hidden_size} feature_set={model.feature_set} metadata={metadata}",
+        file=sys.stderr,
+        flush=True,
+    )
     print(f"[parity] loading binary={args.nnue}", file=sys.stderr, flush=True)
     binary = load_binary(args.nnue)
-    print(f"[parity] binary hidden={binary.hidden_size}", file=sys.stderr, flush=True)
+    print(
+        f"[parity] binary hidden={binary.hidden_size} feature_set={binary.feature_set}",
+        file=sys.stderr,
+        flush=True,
+    )
     print(f"[parity] querying engine={args.engine} positions={len(fens)}", file=sys.stderr, flush=True)
     engine_scores = engine_nnue_scores(args.engine, args.nnue, fens)
 

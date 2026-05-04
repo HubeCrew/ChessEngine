@@ -23,22 +23,34 @@ from nnue_model import (
     DEFAULT_L2_SIZE,
     DEFAULT_L3_SIZE,
     DEFAULT_OUTPUT_SCALE,
+    FEATURE_SET_HALFKP,
+    SUPPORTED_FEATURE_SETS,
     Batch,
     NnueModel,
     active_features,
     export_binary,
+    feature_count_for,
     make_batch,
     save_checkpoint,
 )
 
 
 class NnueDataset(Dataset):
-    def __init__(self, rows: list[tuple[str, float]], progress_every: int) -> None:
+    def __init__(self, rows: list[tuple[str, float]], progress_every: int, feature_set: str) -> None:
         self.items: list[tuple[list[int], list[int], int, float]] = []
+        self.feature_set = feature_set
+        self.feature_count = feature_count_for(feature_set)
         for index, (fen, score) in enumerate(rows, start=1):
             board = chess.Board(fen)
             side_to_move = 1 if board.turn == chess.WHITE else -1
-            self.items.append((active_features(board, chess.WHITE), active_features(board, chess.BLACK), side_to_move, score))
+            self.items.append(
+                (
+                    active_features(board, chess.WHITE, feature_set),
+                    active_features(board, chess.BLACK, feature_set),
+                    side_to_move,
+                    score,
+                )
+            )
             if index % progress_every == 0 or index == len(rows):
                 print(f"[train] encoded={index}/{len(rows)}", file=sys.stderr, flush=True)
 
@@ -54,8 +66,19 @@ class CachedNnueDataset(Dataset):
         print(f"[train] loading feature_cache={path}", file=sys.stderr, flush=True)
         self.path = path
         self.cache = torch.load(path, map_location="cpu", weights_only=True)
-        if int(self.cache.get("format_version", 0)) != 2:
+        format_version = int(self.cache.get("format_version", 0))
+        if format_version not in (2, 3):
             raise ValueError(f"unsupported feature cache format in {path}")
+        self.feature_set = str(self.cache.get("feature_set", FEATURE_SET_HALFKP))
+        if self.feature_set not in SUPPORTED_FEATURE_SETS:
+            raise ValueError(f"unsupported feature cache feature_set {self.feature_set} in {path}")
+        self.feature_count = int(self.cache.get("feature_count", feature_count_for(self.feature_set)))
+        expected_feature_count = feature_count_for(self.feature_set)
+        if self.feature_count != expected_feature_count:
+            raise ValueError(
+                f"feature cache {path} feature_count={self.feature_count} does not match "
+                f"{self.feature_set} expected={expected_feature_count}"
+            )
         required = ("white_indices", "white_lengths", "black_indices", "black_lengths", "side_to_move", "target")
         for key in required:
             if key not in self.cache:
@@ -67,7 +90,12 @@ class CachedNnueDataset(Dataset):
             rows = min(rows, row_limit)
             for key in ("white_indices", "white_lengths", "black_indices", "black_lengths", "side_to_move", "target"):
                 self.cache[key] = self.cache[key][:rows].contiguous()
-        print(f"[train] loaded feature_cache={path} rows={rows}", file=sys.stderr, flush=True)
+        print(
+            f"[train] loaded feature_cache={path} rows={rows} "
+            f"feature_set={self.feature_set} feature_count={self.feature_count}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     def __len__(self) -> int:
         return int(self.cache["target"].numel())
@@ -92,6 +120,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, help="Output PyTorch checkpoint for legacy final-only training.")
     parser.add_argument("--run-dir", type=Path, help="Run directory for resumable training with last/best checkpoints and metrics.")
     parser.add_argument("--hidden-size", type=int, default=256)
+    parser.add_argument(
+        "--feature-set",
+        choices=SUPPORTED_FEATURE_SETS,
+        help="NNUE feature mapping. Cache training infers this from caches unless explicitly provided.",
+    )
     parser.add_argument(
         "--architecture",
         choices=("sf-lite", "linear"),
@@ -184,6 +217,7 @@ def checkpoint_config(args: argparse.Namespace, dataset_metadata: dict[str, obje
         "validation_cache",
         "epochs",
         "hidden_size",
+        "feature_set",
         "architecture",
         "l2_size",
         "l3_size",
@@ -229,6 +263,7 @@ def validate_resume_compatibility(args: argparse.Namespace, checkpoint: dict[str
         "l2_size": int(checkpoint.get("l2_size", DEFAULT_L2_SIZE)),
         "l3_size": int(checkpoint.get("l3_size", DEFAULT_L3_SIZE)),
         "perspective_mode": str(checkpoint.get("perspective_mode", "fixed")),
+        "feature_set": str(checkpoint.get("feature_set", FEATURE_SET_HALFKP)),
     }
     requested = {
         "hidden_size": int(args.hidden_size),
@@ -236,6 +271,7 @@ def validate_resume_compatibility(args: argparse.Namespace, checkpoint: dict[str
         "l2_size": int(args.l2_size),
         "l3_size": int(args.l3_size),
         "perspective_mode": str(args.perspective_mode),
+        "feature_set": str(args.feature_set),
     }
     if model_shape != requested:
         raise ValueError(f"resume checkpoint shape {model_shape} does not match requested shape {requested}")
@@ -254,6 +290,8 @@ def training_checkpoint(
     return {
         "hidden_size": model.hidden_size,
         "format_version": model.format_version,
+        "feature_set": model.feature_set,
+        "feature_count": model.feature_count,
         "perspective_mode": model.perspective_mode,
         "architecture": model.architecture,
         "l2_size": model.l2_size,
@@ -350,6 +388,7 @@ def export_best_checkpoint(checkpoint: Path, output: Path) -> None:
         architecture=str(loaded.get("architecture", "linear")),
         l2_size=int(loaded.get("l2_size", DEFAULT_L2_SIZE)),
         l3_size=int(loaded.get("l3_size", DEFAULT_L3_SIZE)),
+        feature_set=str(loaded.get("feature_set", FEATURE_SET_HALFKP)),
     )
     model.load_state_dict(loaded["state_dict"])
     model.eval()
@@ -512,6 +551,9 @@ def main() -> int:
     if args.architecture == "sf-lite" and args.perspective_mode != "side-to-move":
         print("sf-lite requires --perspective-mode side-to-move", file=sys.stderr)
         return 2
+    if args.architecture != "sf-lite" and args.feature_set not in (None, FEATURE_SET_HALFKP):
+        print("non-HalfKP feature sets currently require --architecture sf-lite", file=sys.stderr)
+        return 2
     if args.l2_size <= 0 or args.l3_size <= 0:
         print("dense layer sizes must be positive", file=sys.stderr)
         return 2
@@ -533,6 +575,8 @@ def main() -> int:
     if args.parity_engine is not None and not args.export_best:
         print("--parity-engine requires --export-best", file=sys.stderr)
         return 2
+    if resume_checkpoint is not None and args.feature_set is None:
+        args.feature_set = str(resume_checkpoint.get("feature_set", FEATURE_SET_HALFKP))
     if resume_checkpoint is not None:
         try:
             validate_resume_compatibility(args, resume_checkpoint)
@@ -545,6 +589,8 @@ def main() -> int:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if csv_mode:
+        if args.feature_set is None:
+            args.feature_set = FEATURE_SET_HALFKP
         rows = load_rows(args.dataset, args.clip_cp)
         if len(rows) < 2:
             print("dataset needs at least two rows", file=sys.stderr)
@@ -559,9 +605,9 @@ def main() -> int:
         if args.max_validation_rows > 0:
             validation_rows = validation_rows[: args.max_validation_rows]
         print("[train] encoding train positions", file=sys.stderr, flush=True)
-        train_dataset: Dataset[Any] = NnueDataset(train_rows, args.progress_every)
+        train_dataset: Dataset[Any] = NnueDataset(train_rows, args.progress_every, args.feature_set)
         print("[train] encoding validation positions", file=sys.stderr, flush=True)
-        validation_dataset: Dataset[Any] = NnueDataset(validation_rows, args.progress_every)
+        validation_dataset: Dataset[Any] = NnueDataset(validation_rows, args.progress_every, args.feature_set)
         train_loader = DataLoader(
             train_dataset,
             batch_size=args.batch_size,
@@ -578,10 +624,34 @@ def main() -> int:
             "dataset": str(args.dataset),
             "rows": len(rows),
             "validation_split": args.validation_split,
+            "feature_set": args.feature_set,
+            "feature_count": feature_count_for(args.feature_set),
         }
     else:
         train_dataset = CachedNnueDataset(args.train_cache, args.max_train_rows)
         validation_dataset = CachedNnueDataset(args.validation_cache, args.max_validation_rows)
+        if train_dataset.feature_set != validation_dataset.feature_set:
+            print(
+                f"cache feature-set mismatch: train={train_dataset.feature_set} "
+                f"validation={validation_dataset.feature_set}",
+                file=sys.stderr,
+            )
+            return 2
+        if train_dataset.feature_count != validation_dataset.feature_count:
+            print(
+                f"cache feature-count mismatch: train={train_dataset.feature_count} "
+                f"validation={validation_dataset.feature_count}",
+                file=sys.stderr,
+            )
+            return 2
+        if args.feature_set is None:
+            args.feature_set = train_dataset.feature_set
+        elif args.feature_set != train_dataset.feature_set:
+            print(
+                f"--feature-set {args.feature_set} does not match cache feature_set {train_dataset.feature_set}",
+                file=sys.stderr,
+            )
+            return 2
         train_loader = DataLoader(
             train_dataset,
             batch_size=args.batch_size,
@@ -599,6 +669,8 @@ def main() -> int:
             "validation_cache": str(args.validation_cache),
             "train_rows": len(train_dataset),
             "validation_rows": len(validation_dataset),
+            "feature_set": args.feature_set,
+            "feature_count": feature_count_for(args.feature_set),
         }
 
     run_dir = args.run_dir
@@ -616,6 +688,7 @@ def main() -> int:
         f"[train] device={device} train={len(train_dataset)} validation={len(validation_dataset)} "
         f"hidden={args.hidden_size} batch={args.batch_size} epochs={args.epochs} "
         f"architecture={args.architecture} l2={args.l2_size} l3={args.l3_size} "
+        f"feature_set={args.feature_set} feature_count={feature_count_for(args.feature_set)} "
         f"perspective_mode={args.perspective_mode} loss_mode={args.loss_mode} "
         f"target_scale={args.target_scale:g} shaped_weight={args.shaped_weight:g}",
         flush=True,
@@ -629,6 +702,7 @@ def main() -> int:
         architecture=args.architecture,
         l2_size=args.l2_size,
         l3_size=args.l3_size,
+        feature_set=args.feature_set,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -669,6 +743,8 @@ def main() -> int:
         **dataset_metadata,
         "clip_cp": args.clip_cp,
         "device": str(device),
+        "feature_set": args.feature_set,
+        "feature_count": feature_count_for(args.feature_set),
         "perspective_mode": args.perspective_mode,
         "architecture": args.architecture,
         "l2_size": args.l2_size,

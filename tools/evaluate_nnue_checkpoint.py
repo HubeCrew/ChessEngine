@@ -167,7 +167,14 @@ def main() -> int:
                 continue
 
             side = 1 if board.turn == chess.WHITE else -1
-            batch_items.append((active_features(board, chess.WHITE), active_features(board, chess.BLACK), side, target))
+            batch_items.append(
+                (
+                    active_features(board, chess.WHITE, model.feature_set),
+                    active_features(board, chess.BLACK, model.feature_set),
+                    side,
+                    target,
+                )
+            )
             batch_groups.append(
                 [
                     "all",

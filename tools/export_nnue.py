@@ -25,6 +25,7 @@ def main() -> int:
     model, metadata = load_checkpoint(args.checkpoint, device)
     print(
         f"[export] exporting output={args.output} hidden={model.hidden_size} "
+        f"feature_set={model.feature_set} feature_count={model.feature_count} "
         f"accumulator_scale={args.accumulator_scale} output_scale={args.output_scale}"
     )
     export_binary(args.output, model, args.accumulator_scale, args.output_scale)

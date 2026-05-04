@@ -9,7 +9,7 @@ from pathlib import Path
 import chess
 import torch
 
-from nnue_model import active_features
+from nnue_model import SUPPORTED_FEATURE_SETS, active_features, feature_count_for
 
 
 def parse_args() -> argparse.Namespace:
@@ -18,6 +18,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path, help="Output .pt feature cache.")
     parser.add_argument("--clip-cp", type=int, default=1500)
     parser.add_argument("--max-features", type=int, default=30)
+    parser.add_argument(
+        "--feature-set",
+        choices=SUPPORTED_FEATURE_SETS,
+        default="halfkp-v1",
+        help="NNUE feature mapping to encode. Existing models use halfkp-v1; new mirrored buckets use halfka-v2-hm-lite.",
+    )
     parser.add_argument("--progress-every", type=int, default=100000)
     return parser.parse_args()
 
@@ -41,7 +47,8 @@ def main() -> int:
 
     total_input = count_rows(args.dataset)
     print(
-        f"[cache] allocating rows={total_input} max_features={args.max_features} dataset={args.dataset}",
+        f"[cache] allocating rows={total_input} max_features={args.max_features} "
+        f"feature_set={args.feature_set} feature_count={feature_count_for(args.feature_set)} dataset={args.dataset}",
         file=sys.stderr,
         flush=True,
     )
@@ -61,8 +68,8 @@ def main() -> int:
             try:
                 board = chess.Board(row["fen"])
                 score = max(-args.clip_cp, min(args.clip_cp, float(row["score_cp"])))
-                white = active_features(board, chess.WHITE)
-                black = active_features(board, chess.BLACK)
+                white = active_features(board, chess.WHITE, args.feature_set)
+                black = active_features(board, chess.BLACK, args.feature_set)
             except (KeyError, ValueError):
                 invalid += 1
                 continue
@@ -91,7 +98,9 @@ def main() -> int:
         return 1
 
     cache = {
-        "format_version": 2,
+        "format_version": 3,
+        "feature_set": args.feature_set,
+        "feature_count": feature_count_for(args.feature_set),
         "dataset": str(args.dataset),
         "rows": written,
         "max_features": args.max_features,

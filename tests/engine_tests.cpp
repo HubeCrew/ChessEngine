@@ -144,6 +144,55 @@ std::filesystem::path write_constant_sf_lite_nnue_model(int side_to_move_centipa
     return path;
 }
 
+std::filesystem::path write_constant_halfka_sf_lite_nnue_model(int side_to_move_centipawns, std::uint32_t hidden_size = 2) {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "chess_engine_constant_halfka_sf_lite_test.nnue";
+    std::ofstream output(path, std::ios::binary);
+    const char magic[8] = {'C', 'E', 'N', 'N', 'U', 'E', '1', '\0'};
+    output.write(magic, sizeof(magic));
+    write_binary_value(output, chess::engine::nnue::kFormatVersionV5);
+    write_binary_value(output, chess::engine::nnue::kHalfKaV2HmLiteFeatureCount);
+    write_binary_value(output, hidden_size);
+    write_binary_value(output, chess::engine::nnue::kDefaultAccumulatorScale);
+    write_binary_value(output, chess::engine::nnue::kDefaultOutputScale);
+    const auto feature_set_id = static_cast<std::uint32_t>(chess::engine::nnue::FeatureSet::HalfKaV2HmLite);
+    write_binary_value(output, feature_set_id);
+
+    const std::uint32_t l2_size = 1;
+    const std::uint32_t l3_size = 1;
+    write_binary_value(output, l2_size);
+    write_binary_value(output, l3_size);
+
+    const std::vector<float> hidden_bias(hidden_size, 0.0F);
+    output.write(reinterpret_cast<const char*>(hidden_bias.data()), static_cast<std::streamsize>(hidden_bias.size() * sizeof(float)));
+
+    const std::vector<float> feature_weights(
+        static_cast<std::size_t>(chess::engine::nnue::kHalfKaV2HmLiteFeatureCount) * hidden_size,
+        0.0F
+    );
+    output.write(reinterpret_cast<const char*>(feature_weights.data()), static_cast<std::streamsize>(feature_weights.size() * sizeof(float)));
+
+    const std::vector<float> direct_weights(static_cast<std::size_t>(hidden_size) * 2, 0.0F);
+    output.write(reinterpret_cast<const char*>(direct_weights.data()), static_cast<std::streamsize>(direct_weights.size() * sizeof(float)));
+    const float direct_bias = static_cast<float>(side_to_move_centipawns);
+    write_binary_value(output, direct_bias);
+
+    const std::vector<float> fc0_weights(static_cast<std::size_t>(l2_size) * hidden_size * 2, 0.0F);
+    const std::vector<float> fc0_bias(l2_size, 0.0F);
+    const std::vector<float> fc1_weights(static_cast<std::size_t>(l3_size) * l2_size * 2, 0.0F);
+    const std::vector<float> fc1_bias(l3_size, 0.0F);
+    const std::vector<float> fc2_weights(l3_size, 0.0F);
+    output.write(reinterpret_cast<const char*>(fc0_weights.data()), static_cast<std::streamsize>(fc0_weights.size() * sizeof(float)));
+    output.write(reinterpret_cast<const char*>(fc0_bias.data()), static_cast<std::streamsize>(fc0_bias.size() * sizeof(float)));
+    output.write(reinterpret_cast<const char*>(fc1_weights.data()), static_cast<std::streamsize>(fc1_weights.size() * sizeof(float)));
+    output.write(reinterpret_cast<const char*>(fc1_bias.data()), static_cast<std::streamsize>(fc1_bias.size() * sizeof(float)));
+    output.write(reinterpret_cast<const char*>(fc2_weights.data()), static_cast<std::streamsize>(fc2_weights.size() * sizeof(float)));
+    const float fc2_bias = 0.0F;
+    const float side_to_move_weight = 0.0F;
+    write_binary_value(output, fc2_bias);
+    write_binary_value(output, side_to_move_weight);
+    return path;
+}
+
 }  // namespace
 
 TEST_CASE("hash is restored after every root move") {
@@ -339,6 +388,36 @@ TEST_CASE("NNUE feature extraction is deterministic and perspective-aware") {
     REQUIRE(white_feature == mirrored_black_feature);
 }
 
+TEST_CASE("HalfKAv2_hm-lite NNUE features mirror king-side positions into compact buckets") {
+    const std::uint32_t kingside = chess::engine::nnue::feature_index(
+        chess::Color::White,
+        chess::make_square(4, 0),
+        chess::Piece::WhiteKnight,
+        chess::make_square(6, 2),
+        chess::engine::nnue::FeatureSet::HalfKaV2HmLite
+    );
+    const std::uint32_t queenside = chess::engine::nnue::feature_index(
+        chess::Color::White,
+        chess::make_square(3, 0),
+        chess::Piece::WhiteKnight,
+        chess::make_square(1, 2),
+        chess::engine::nnue::FeatureSet::HalfKaV2HmLite
+    );
+    REQUIRE(kingside == queenside);
+    REQUIRE(kingside < chess::engine::nnue::kHalfKaV2HmLiteFeatureCount);
+
+    const chess::Board board = chess::Board::start_position();
+    const std::vector<std::uint32_t> white = chess::engine::nnue::active_feature_indices(
+        board,
+        chess::Color::White,
+        chess::engine::nnue::FeatureSet::HalfKaV2HmLite
+    );
+    REQUIRE(white.size() == 30);
+    REQUIRE(std::all_of(white.begin(), white.end(), [](std::uint32_t index) {
+        return index < chess::engine::nnue::kHalfKaV2HmLiteFeatureCount;
+    }));
+}
+
 TEST_CASE("NNUE model loading and opt-in searcher evaluation are safe") {
     const std::filesystem::path path = write_constant_nnue_model(123);
     chess::engine::nnue::Network network;
@@ -365,7 +444,7 @@ TEST_CASE("NNUE model loading and opt-in searcher evaluation are safe") {
     REQUIRE(std::filesystem::remove(second_path));
 }
 
-TEST_CASE("NNUE loader supports legacy models and v4 SF-lite side-to-move perspective") {
+TEST_CASE("NNUE loader supports legacy models and v4/v5 SF-lite side-to-move perspective") {
     chess::engine::nnue::Network network;
     std::string error;
 
@@ -412,11 +491,24 @@ TEST_CASE("NNUE loader supports legacy models and v4 SF-lite side-to-move perspe
     REQUIRE(network.load(v4_path, &error));
     REQUIRE(network.loaded());
     REQUIRE(network.info().format_version == chess::engine::nnue::kFormatVersion);
+    REQUIRE(network.info().feature_set == chess::engine::nnue::FeatureSet::HalfKp);
     REQUIRE(network.info().side_to_move_perspective);
     REQUIRE(network.info().sf_lite);
     REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 73);
     REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1")) == -73);
     REQUIRE(std::filesystem::remove(v4_path));
+
+    const std::filesystem::path v5_path = write_constant_halfka_sf_lite_nnue_model(91);
+    REQUIRE(network.load(v5_path, &error));
+    REQUIRE(network.loaded());
+    REQUIRE(network.info().format_version == chess::engine::nnue::kFormatVersionV5);
+    REQUIRE(network.info().feature_set == chess::engine::nnue::FeatureSet::HalfKaV2HmLite);
+    REQUIRE(network.info().feature_count == chess::engine::nnue::kHalfKaV2HmLiteFeatureCount);
+    REQUIRE(network.info().side_to_move_perspective);
+    REQUIRE(network.info().sf_lite);
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 91);
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1")) == -91);
+    REQUIRE(std::filesystem::remove(v5_path));
 }
 
 TEST_CASE("NNUE loader rejects invalid model files without keeping partial state") {

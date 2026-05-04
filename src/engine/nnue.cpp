@@ -47,6 +47,19 @@ int rounded_divide(std::int64_t value, std::int64_t scale) {
     return static_cast<int>((value - scale / 2) / scale);
 }
 
+bool feature_set_from_id(std::uint32_t identifier, FeatureSet& feature_set) {
+    switch (identifier) {
+        case static_cast<std::uint32_t>(FeatureSet::HalfKp):
+            feature_set = FeatureSet::HalfKp;
+            return true;
+        case static_cast<std::uint32_t>(FeatureSet::HalfKaV2HmLite):
+            feature_set = FeatureSet::HalfKaV2HmLite;
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace
 
 Square perspective_square(Square square, Color perspective) {
@@ -56,26 +69,52 @@ Square perspective_square(Square square, Color perspective) {
     return make_square(file_of(square), 7 - rank_of(square));
 }
 
-std::uint32_t feature_index(Color perspective, Square perspective_king, Piece piece, Square square) {
+Square horizontal_mirror_square(Square square) {
+    if (!is_valid_square(square)) {
+        return square;
+    }
+    return make_square(7 - file_of(square), rank_of(square));
+}
+
+std::uint32_t feature_count(FeatureSet feature_set) {
+    switch (feature_set) {
+        case FeatureSet::HalfKp:
+            return kHalfKpFeatureCount;
+        case FeatureSet::HalfKaV2HmLite:
+            return kHalfKaV2HmLiteFeatureCount;
+    }
+    return 0;
+}
+
+std::uint32_t feature_index(Color perspective, Square perspective_king, Piece piece, Square square, FeatureSet feature_set) {
     const PieceType type = type_of(piece);
     if (piece == Piece::None || type == PieceType::King || type == PieceType::None) {
-        return kFeatureCount;
+        return feature_count(feature_set);
     }
 
-    const Square king = perspective_square(perspective_king, perspective);
-    const Square piece_square = perspective_square(square, perspective);
+    Square king = perspective_square(perspective_king, perspective);
+    Square piece_square = perspective_square(square, perspective);
     if (!is_valid_square(king) || !is_valid_square(piece_square)) {
-        return kFeatureCount;
+        return feature_count(feature_set);
     }
 
     const int relative_color = color_of(piece) == perspective ? 0 : 1;
     const int piece_slot = relative_color * 5 + static_cast<int>(type);
-    return static_cast<std::uint32_t>(((king * 10 + piece_slot) * 64) + piece_square);
+    if (feature_set == FeatureSet::HalfKp) {
+        return static_cast<std::uint32_t>(((king * 10 + piece_slot) * 64) + piece_square);
+    }
+    if (file_of(king) >= 4) {
+        king = horizontal_mirror_square(king);
+        piece_square = horizontal_mirror_square(piece_square);
+    }
+    const int king_bucket = rank_of(king) * 4 + file_of(king);
+    return static_cast<std::uint32_t>(((king_bucket * 10 + piece_slot) * 64) + piece_square);
 }
 
-std::vector<std::uint32_t> active_feature_indices(const Board& board, Color perspective) {
+std::vector<std::uint32_t> active_feature_indices(const Board& board, Color perspective, FeatureSet feature_set) {
     std::vector<std::uint32_t> features;
     features.reserve(30);
+    const std::uint32_t maximum_feature = feature_count(feature_set);
 
     const Square king = board.king_square(perspective);
     if (!is_valid_square(king)) {
@@ -87,8 +126,8 @@ std::vector<std::uint32_t> active_feature_indices(const Board& board, Color pers
         if (piece == Piece::None || type_of(piece) == PieceType::King) {
             continue;
         }
-        const std::uint32_t index = feature_index(perspective, king, piece, square);
-        if (index < kFeatureCount) {
+        const std::uint32_t index = feature_index(perspective, king, piece, square, feature_set);
+        if (index < maximum_feature) {
             features.push_back(index);
         }
     }
@@ -129,13 +168,33 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         return false;
     }
 
-    if (version != kFormatVersionV1 && version != kFormatVersionV2 && version != kFormatVersionV3 && version != kFormatVersion) {
+    if (version != kFormatVersionV1
+        && version != kFormatVersionV2
+        && version != kFormatVersionV3
+        && version != kFormatVersionV4
+        && version != kFormatVersionV5) {
         if (error != nullptr) {
             *error = "unsupported NNUE version";
         }
         return false;
     }
-    if (feature_count != kFeatureCount || hidden_size == 0 || hidden_size > kMaxHiddenSize) {
+    FeatureSet loaded_feature_set = FeatureSet::HalfKp;
+    if (version >= kFormatVersionV5) {
+        std::uint32_t feature_set_identifier = 0;
+        if (!read_value(input, feature_set_identifier)) {
+            if (error != nullptr) {
+                *error = "truncated NNUE feature-set header";
+            }
+            return false;
+        }
+        if (!feature_set_from_id(feature_set_identifier, loaded_feature_set)) {
+            if (error != nullptr) {
+                *error = "unsupported NNUE feature set";
+            }
+            return false;
+        }
+    }
+    if (feature_count != chess::engine::nnue::feature_count(loaded_feature_set) || hidden_size == 0 || hidden_size > kMaxHiddenSize) {
         if (error != nullptr) {
             *error = "unsupported NNUE shape";
         }
@@ -156,7 +215,7 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         return false;
     }
 
-    if (version >= kFormatVersion) {
+    if (version >= kFormatVersionV4) {
         std::uint32_t l2_size = 0;
         std::uint32_t l3_size = 0;
         if (!read_value(input, l2_size) || !read_value(input, l3_size)) {
@@ -210,6 +269,7 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
             true,
             l2_size,
             l3_size,
+            loaded_feature_set,
             path,
         };
         feature_bias_.clear();
@@ -262,6 +322,7 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         false,
         0,
         0,
+        loaded_feature_set,
         path,
     };
     feature_bias_ = std::move(feature_bias);
@@ -318,7 +379,7 @@ std::vector<int> Network::accumulator(const Board& board, Color perspective) con
         values.push_back(bias);
     }
 
-    for (const std::uint32_t feature : active_feature_indices(board, perspective)) {
+    for (const std::uint32_t feature : active_feature_indices(board, perspective, info_.feature_set)) {
         const std::size_t offset = static_cast<std::size_t>(feature) * info_.hidden_size;
         for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
             values[index] += feature_weights_[offset + index];
@@ -329,7 +390,7 @@ std::vector<int> Network::accumulator(const Board& board, Color perspective) con
 
 std::vector<float> Network::accumulator_float(const Board& board, Color perspective) const {
     std::vector<float> values = hidden_bias_float_;
-    for (const std::uint32_t feature : active_feature_indices(board, perspective)) {
+    for (const std::uint32_t feature : active_feature_indices(board, perspective, info_.feature_set)) {
         const std::size_t offset = static_cast<std::size_t>(feature) * info_.hidden_size;
         for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
             values[index] += feature_weights_float_[offset + index];
