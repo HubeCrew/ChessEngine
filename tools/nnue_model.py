@@ -17,15 +17,21 @@ FORMAT_VERSION = FORMAT_VERSION_SF_LITE
 SUPPORTED_FORMAT_VERSIONS = (1, 2, 3, 4, 5)
 FEATURE_SET_HALFKP = "halfkp-v1"
 FEATURE_SET_HALFKA_V2_HM_LITE = "halfka-v2-hm-lite"
-SUPPORTED_FEATURE_SETS = (FEATURE_SET_HALFKP, FEATURE_SET_HALFKA_V2_HM_LITE)
+FEATURE_SET_HALFKA_V2_HM_THREAT_LITE = "halfka-v2-hm-threat-lite"
+SUPPORTED_FEATURE_SETS = (FEATURE_SET_HALFKP, FEATURE_SET_HALFKA_V2_HM_LITE, FEATURE_SET_HALFKA_V2_HM_THREAT_LITE)
 FEATURE_SET_IDS = {
     FEATURE_SET_HALFKP: 1,
     FEATURE_SET_HALFKA_V2_HM_LITE: 2,
+    FEATURE_SET_HALFKA_V2_HM_THREAT_LITE: 3,
 }
 FEATURE_SET_BY_ID = {value: key for key, value in FEATURE_SET_IDS.items()}
 HALFKP_FEATURE_COUNT = 64 * 10 * 64
 HALFKA_V2_HM_LITE_KING_BUCKETS = 32
 HALFKA_V2_HM_LITE_FEATURE_COUNT = HALFKA_V2_HM_LITE_KING_BUCKETS * 10 * 64
+HALFKA_V2_HM_THREAT_LITE_THREAT_FEATURE_COUNT = HALFKA_V2_HM_LITE_KING_BUCKETS * 5 * 5 * 64
+HALFKA_V2_HM_THREAT_LITE_FEATURE_COUNT = (
+    HALFKA_V2_HM_LITE_FEATURE_COUNT + HALFKA_V2_HM_THREAT_LITE_THREAT_FEATURE_COUNT
+)
 FEATURE_COUNT = HALFKP_FEATURE_COUNT
 DEFAULT_HIDDEN_SIZE = 256
 DEFAULT_L2_SIZE = 64
@@ -61,11 +67,27 @@ def horizontal_mirror_square(square: chess.Square) -> chess.Square:
     return chess.square(7 - chess.square_file(square), chess.square_rank(square))
 
 
+def halfka_v2_hm_orientation(perspective_king: chess.Square, perspective: chess.Color) -> tuple[int, bool]:
+    king_square = perspective_square(perspective_king, perspective)
+    mirror = chess.square_file(king_square) >= 4
+    if mirror:
+        king_square = horizontal_mirror_square(king_square)
+    king_bucket = chess.square_rank(king_square) * 4 + chess.square_file(king_square)
+    return king_bucket, mirror
+
+
+def halfka_v2_hm_oriented_square(square: chess.Square, perspective: chess.Color, mirror: bool) -> chess.Square:
+    oriented = perspective_square(square, perspective)
+    return horizontal_mirror_square(oriented) if mirror else oriented
+
+
 def feature_count_for(feature_set: str) -> int:
     if feature_set == FEATURE_SET_HALFKP:
         return HALFKP_FEATURE_COUNT
     if feature_set == FEATURE_SET_HALFKA_V2_HM_LITE:
         return HALFKA_V2_HM_LITE_FEATURE_COUNT
+    if feature_set == FEATURE_SET_HALFKA_V2_HM_THREAT_LITE:
+        return HALFKA_V2_HM_THREAT_LITE_FEATURE_COUNT
     raise ValueError(f"unsupported NNUE feature set: {feature_set}")
 
 
@@ -119,13 +141,45 @@ def feature_index(
     piece_square = perspective_square(square, perspective)
     if feature_set == FEATURE_SET_HALFKP:
         return ((king_square * 10 + piece_slot) * 64) + piece_square
-    if feature_set == FEATURE_SET_HALFKA_V2_HM_LITE:
-        if chess.square_file(king_square) >= 4:
-            king_square = horizontal_mirror_square(king_square)
-            piece_square = horizontal_mirror_square(piece_square)
-        king_bucket = chess.square_rank(king_square) * 4 + chess.square_file(king_square)
+    if feature_set in (FEATURE_SET_HALFKA_V2_HM_LITE, FEATURE_SET_HALFKA_V2_HM_THREAT_LITE):
+        king_bucket, mirror = halfka_v2_hm_orientation(perspective_king, perspective)
+        piece_square = halfka_v2_hm_oriented_square(square, perspective, mirror)
         return ((king_bucket * 10 + piece_slot) * 64) + piece_square
     raise ValueError(f"unsupported NNUE feature set: {feature_set}")
+
+
+def threat_feature_index(
+    perspective: chess.Color,
+    perspective_king: chess.Square,
+    attacker_type: chess.PieceType,
+    victim_type: chess.PieceType,
+    target_square: chess.Square,
+) -> int | None:
+    attacker_slot = PIECE_SLOT.get(attacker_type)
+    victim_slot = PIECE_SLOT.get(victim_type)
+    if attacker_slot is None or victim_slot is None:
+        return None
+    king_bucket, mirror = halfka_v2_hm_orientation(perspective_king, perspective)
+    oriented_target = halfka_v2_hm_oriented_square(target_square, perspective, mirror)
+    return HALFKA_V2_HM_LITE_FEATURE_COUNT + (((king_bucket * 5 + attacker_slot) * 5 + victim_slot) * 64 + oriented_target)
+
+
+def active_threat_features(board: chess.Board, perspective: chess.Color, perspective_king: chess.Square) -> list[int]:
+    features: set[int] = set()
+    for target_square, victim in board.piece_map().items():
+        if victim.color == perspective or victim.piece_type == chess.KING:
+            continue
+        attacker_types: set[chess.PieceType] = set()
+        for attacker_square in board.attackers(perspective, target_square):
+            attacker = board.piece_at(attacker_square)
+            if attacker is None or attacker.piece_type == chess.KING:
+                continue
+            attacker_types.add(attacker.piece_type)
+        for attacker_type in attacker_types:
+            index = threat_feature_index(perspective, perspective_king, attacker_type, victim.piece_type, target_square)
+            if index is not None:
+                features.add(index)
+    return sorted(features)
 
 
 def active_features(board: chess.Board, perspective: chess.Color, feature_set: str = FEATURE_SET_HALFKP) -> list[int]:
@@ -137,6 +191,8 @@ def active_features(board: chess.Board, perspective: chess.Color, feature_set: s
         index = feature_index(perspective, king, piece, square, feature_set)
         if index is not None:
             features.append(index)
+    if feature_set == FEATURE_SET_HALFKA_V2_HM_THREAT_LITE:
+        features.extend(active_threat_features(board, perspective, king))
     features.sort()
     return features
 

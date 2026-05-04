@@ -9,7 +9,7 @@ from pathlib import Path
 import chess
 import torch
 
-from nnue_model import SUPPORTED_FEATURE_SETS, active_features, feature_count_for
+from nnue_model import FEATURE_SET_HALFKA_V2_HM_THREAT_LITE, SUPPORTED_FEATURE_SETS, active_features, feature_count_for
 
 
 def parse_args() -> argparse.Namespace:
@@ -17,12 +17,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True, type=Path, help="Canonical CSV with fen and score_cp columns.")
     parser.add_argument("--output", required=True, type=Path, help="Output .pt feature cache.")
     parser.add_argument("--clip-cp", type=int, default=1500)
-    parser.add_argument("--max-features", type=int, default=30)
+    parser.add_argument("--max-features", type=int, default=30, help="Maximum active features per perspective; 0 selects a feature-set default.")
     parser.add_argument(
         "--feature-set",
         choices=SUPPORTED_FEATURE_SETS,
         default="halfkp-v1",
-        help="NNUE feature mapping to encode. Existing models use halfkp-v1; new mirrored buckets use halfka-v2-hm-lite.",
+        help="NNUE feature mapping to encode.",
     )
     parser.add_argument("--progress-every", type=int, default=100000)
     return parser.parse_args()
@@ -38,9 +38,11 @@ def main() -> int:
     if args.clip_cp <= 0:
         print("--clip-cp must be positive", file=sys.stderr)
         return 2
-    if args.max_features <= 0:
-        print("--max-features must be positive", file=sys.stderr)
+    if args.max_features < 0:
+        print("--max-features must be non-negative", file=sys.stderr)
         return 2
+    if args.max_features == 0:
+        args.max_features = 160 if args.feature_set == FEATURE_SET_HALFKA_V2_HM_THREAT_LITE else 30
     if args.progress_every <= 0:
         print("--progress-every must be positive", file=sys.stderr)
         return 2

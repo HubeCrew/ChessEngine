@@ -19,6 +19,9 @@ constexpr std::uint32_t kFormatVersion = kFormatVersionV4;
 constexpr std::uint32_t kHalfKpFeatureCount = 64 * 10 * 64;
 constexpr std::uint32_t kHalfKaV2HmLiteKingBuckets = 32;
 constexpr std::uint32_t kHalfKaV2HmLiteFeatureCount = kHalfKaV2HmLiteKingBuckets * 10 * 64;
+constexpr std::uint32_t kHalfKaV2HmThreatLiteThreatFeatureCount = kHalfKaV2HmLiteKingBuckets * 5 * 5 * 64;
+constexpr std::uint32_t kHalfKaV2HmThreatLiteFeatureCount =
+    kHalfKaV2HmLiteFeatureCount + kHalfKaV2HmThreatLiteThreatFeatureCount;
 constexpr std::uint32_t kFeatureCount = kHalfKpFeatureCount;
 constexpr std::uint32_t kDefaultHiddenSize = 256;
 constexpr std::uint32_t kMaxHiddenSize = 1024;
@@ -28,6 +31,7 @@ constexpr std::uint32_t kDefaultOutputScale = 1024;
 enum class FeatureSet : std::uint32_t {
     HalfKp = 1,
     HalfKaV2HmLite = 2,
+    HalfKaV2HmThreatLite = 3,
 };
 
 struct ModelInfo {
@@ -53,6 +57,13 @@ struct ModelInfo {
     Piece piece,
     Square square,
     FeatureSet feature_set = FeatureSet::HalfKp
+);
+[[nodiscard]] std::uint32_t threat_feature_index(
+    Color perspective,
+    Square perspective_king,
+    PieceType attacker_type,
+    PieceType victim_type,
+    Square target_square
 );
 [[nodiscard]] std::vector<std::uint32_t> active_feature_indices(
     const Board& board,

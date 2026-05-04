@@ -144,17 +144,24 @@ std::filesystem::path write_constant_sf_lite_nnue_model(int side_to_move_centipa
     return path;
 }
 
-std::filesystem::path write_constant_halfka_sf_lite_nnue_model(int side_to_move_centipawns, std::uint32_t hidden_size = 2) {
-    const std::filesystem::path path = std::filesystem::temp_directory_path() / "chess_engine_constant_halfka_sf_lite_test.nnue";
+std::filesystem::path write_constant_halfka_sf_lite_nnue_model(
+    int side_to_move_centipawns,
+    std::uint32_t hidden_size = 2,
+    chess::engine::nnue::FeatureSet feature_set = chess::engine::nnue::FeatureSet::HalfKaV2HmLite
+) {
+    const bool threat_lite = feature_set == chess::engine::nnue::FeatureSet::HalfKaV2HmThreatLite;
+    const std::filesystem::path path = std::filesystem::temp_directory_path()
+        / (threat_lite ? "chess_engine_constant_halfka_threat_sf_lite_test.nnue" : "chess_engine_constant_halfka_sf_lite_test.nnue");
+    const std::uint32_t feature_count = chess::engine::nnue::feature_count(feature_set);
     std::ofstream output(path, std::ios::binary);
     const char magic[8] = {'C', 'E', 'N', 'N', 'U', 'E', '1', '\0'};
     output.write(magic, sizeof(magic));
     write_binary_value(output, chess::engine::nnue::kFormatVersionV5);
-    write_binary_value(output, chess::engine::nnue::kHalfKaV2HmLiteFeatureCount);
+    write_binary_value(output, feature_count);
     write_binary_value(output, hidden_size);
     write_binary_value(output, chess::engine::nnue::kDefaultAccumulatorScale);
     write_binary_value(output, chess::engine::nnue::kDefaultOutputScale);
-    const auto feature_set_id = static_cast<std::uint32_t>(chess::engine::nnue::FeatureSet::HalfKaV2HmLite);
+    const auto feature_set_id = static_cast<std::uint32_t>(feature_set);
     write_binary_value(output, feature_set_id);
 
     const std::uint32_t l2_size = 1;
@@ -166,7 +173,7 @@ std::filesystem::path write_constant_halfka_sf_lite_nnue_model(int side_to_move_
     output.write(reinterpret_cast<const char*>(hidden_bias.data()), static_cast<std::streamsize>(hidden_bias.size() * sizeof(float)));
 
     const std::vector<float> feature_weights(
-        static_cast<std::size_t>(chess::engine::nnue::kHalfKaV2HmLiteFeatureCount) * hidden_size,
+        static_cast<std::size_t>(feature_count) * hidden_size,
         0.0F
     );
     output.write(reinterpret_cast<const char*>(feature_weights.data()), static_cast<std::streamsize>(feature_weights.size() * sizeof(float)));
@@ -418,6 +425,66 @@ TEST_CASE("HalfKAv2_hm-lite NNUE features mirror king-side positions into compac
     }));
 }
 
+TEST_CASE("HalfKAv2_hm-threat-lite NNUE features encode tactical attacks with mirrored buckets") {
+    REQUIRE(
+        chess::engine::nnue::feature_count(chess::engine::nnue::FeatureSet::HalfKaV2HmThreatLite)
+        == chess::engine::nnue::kHalfKaV2HmThreatLiteFeatureCount
+    );
+    REQUIRE(chess::engine::nnue::kHalfKaV2HmThreatLiteFeatureCount == 71680);
+
+    const std::uint32_t threat = chess::engine::nnue::threat_feature_index(
+        chess::Color::White,
+        chess::make_square(4, 0),
+        chess::PieceType::Knight,
+        chess::PieceType::Queen,
+        chess::make_square(7, 3)
+    );
+    REQUIRE(threat >= chess::engine::nnue::kHalfKaV2HmLiteFeatureCount);
+    REQUIRE(threat < chess::engine::nnue::kHalfKaV2HmThreatLiteFeatureCount);
+
+    const chess::Board threatened = chess::board_from_fen("4k3/8/8/8/7q/5N2/8/4K3 w - - 0 1");
+    const std::vector<std::uint32_t> placement = chess::engine::nnue::active_feature_indices(
+        threatened,
+        chess::Color::White,
+        chess::engine::nnue::FeatureSet::HalfKaV2HmLite
+    );
+    const std::vector<std::uint32_t> with_threats = chess::engine::nnue::active_feature_indices(
+        threatened,
+        chess::Color::White,
+        chess::engine::nnue::FeatureSet::HalfKaV2HmThreatLite
+    );
+    REQUIRE(with_threats.size() == placement.size() + 1);
+    REQUIRE(std::find(with_threats.begin(), with_threats.end(), threat) != with_threats.end());
+
+    const chess::Board quiet = chess::board_from_fen("4k3/8/8/8/7q/6N1/8/4K3 w - - 0 1");
+    const std::vector<std::uint32_t> quiet_features = chess::engine::nnue::active_feature_indices(
+        quiet,
+        chess::Color::White,
+        chess::engine::nnue::FeatureSet::HalfKaV2HmThreatLite
+    );
+    REQUIRE(std::find(quiet_features.begin(), quiet_features.end(), threat) == quiet_features.end());
+
+    const chess::Board mirrored = chess::board_from_fen("3k4/8/8/8/q7/2N5/8/3K4 w - - 0 1");
+    REQUIRE(
+        with_threats
+        == chess::engine::nnue::active_feature_indices(
+            mirrored,
+            chess::Color::White,
+            chess::engine::nnue::FeatureSet::HalfKaV2HmThreatLite
+        )
+    );
+
+    const chess::Board black_perspective = chess::board_from_fen("4k3/8/5n2/7Q/8/8/8/4K3 b - - 0 1");
+    REQUIRE(
+        with_threats
+        == chess::engine::nnue::active_feature_indices(
+            black_perspective,
+            chess::Color::Black,
+            chess::engine::nnue::FeatureSet::HalfKaV2HmThreatLite
+        )
+    );
+}
+
 TEST_CASE("NNUE model loading and opt-in searcher evaluation are safe") {
     const std::filesystem::path path = write_constant_nnue_model(123);
     chess::engine::nnue::Network network;
@@ -509,6 +576,22 @@ TEST_CASE("NNUE loader supports legacy models and v4/v5 SF-lite side-to-move per
     REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 91);
     REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1")) == -91);
     REQUIRE(std::filesystem::remove(v5_path));
+
+    const std::filesystem::path threat_v5_path = write_constant_halfka_sf_lite_nnue_model(
+        92,
+        2,
+        chess::engine::nnue::FeatureSet::HalfKaV2HmThreatLite
+    );
+    REQUIRE(network.load(threat_v5_path, &error));
+    REQUIRE(network.loaded());
+    REQUIRE(network.info().format_version == chess::engine::nnue::kFormatVersionV5);
+    REQUIRE(network.info().feature_set == chess::engine::nnue::FeatureSet::HalfKaV2HmThreatLite);
+    REQUIRE(network.info().feature_count == chess::engine::nnue::kHalfKaV2HmThreatLiteFeatureCount);
+    REQUIRE(network.info().side_to_move_perspective);
+    REQUIRE(network.info().sf_lite);
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 92);
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1")) == -92);
+    REQUIRE(std::filesystem::remove(threat_v5_path));
 }
 
 TEST_CASE("NNUE loader rejects invalid model files without keeping partial state") {
@@ -532,6 +615,25 @@ TEST_CASE("NNUE loader rejects invalid model files without keeping partial state
     REQUIRE(network.loaded());
     REQUIRE(network.evaluate_white_perspective(chess::Board::start_position()) == 42);
     REQUIRE(std::filesystem::remove(valid_path));
+
+    const std::filesystem::path invalid_shape_path = std::filesystem::temp_directory_path()
+        / "chess_engine_invalid_feature_set_shape_test.nnue";
+    {
+        std::ofstream output(invalid_shape_path, std::ios::binary);
+        const char magic[8] = {'C', 'E', 'N', 'N', 'U', 'E', '1', '\0'};
+        output.write(magic, sizeof(magic));
+        write_binary_value(output, chess::engine::nnue::kFormatVersionV5);
+        write_binary_value(output, chess::engine::nnue::kHalfKaV2HmThreatLiteFeatureCount);
+        const std::uint32_t hidden_size = 2;
+        write_binary_value(output, hidden_size);
+        write_binary_value(output, chess::engine::nnue::kDefaultAccumulatorScale);
+        write_binary_value(output, chess::engine::nnue::kDefaultOutputScale);
+        const auto feature_set_id = static_cast<std::uint32_t>(chess::engine::nnue::FeatureSet::HalfKaV2HmLite);
+        write_binary_value(output, feature_set_id);
+    }
+    REQUIRE_FALSE(network.load(invalid_shape_path, &error));
+    REQUIRE(network.loaded());
+    REQUIRE(std::filesystem::remove(invalid_shape_path));
 }
 
 TEST_CASE("evaluation rewards extra material") {

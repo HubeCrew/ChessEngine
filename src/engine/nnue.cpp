@@ -7,6 +7,8 @@
 #include <limits>
 #include <utility>
 
+#include "chess/core/attacks.h"
+
 namespace chess::engine::nnue {
 
 namespace {
@@ -55,9 +57,40 @@ bool feature_set_from_id(std::uint32_t identifier, FeatureSet& feature_set) {
         case static_cast<std::uint32_t>(FeatureSet::HalfKaV2HmLite):
             feature_set = FeatureSet::HalfKaV2HmLite;
             return true;
+        case static_cast<std::uint32_t>(FeatureSet::HalfKaV2HmThreatLite):
+            feature_set = FeatureSet::HalfKaV2HmThreatLite;
+            return true;
         default:
             return false;
     }
+}
+
+struct HalfKaV2HmOrientation {
+    int king_bucket = 0;
+    bool mirror = false;
+};
+
+HalfKaV2HmOrientation halfka_v2_hm_orientation(Square perspective_king, Color perspective) {
+    Square king = perspective_square(perspective_king, perspective);
+    HalfKaV2HmOrientation orientation{};
+    orientation.mirror = file_of(king) >= 4;
+    if (orientation.mirror) {
+        king = horizontal_mirror_square(king);
+    }
+    orientation.king_bucket = rank_of(king) * 4 + file_of(king);
+    return orientation;
+}
+
+Square halfka_v2_hm_oriented_square(Square square, Color perspective, bool mirror) {
+    Square oriented = perspective_square(square, perspective);
+    return mirror ? horizontal_mirror_square(oriented) : oriented;
+}
+
+int threat_piece_slot(PieceType type) {
+    if (type == PieceType::King || type == PieceType::None) {
+        return -1;
+    }
+    return static_cast<int>(type);
 }
 
 }  // namespace
@@ -82,6 +115,8 @@ std::uint32_t feature_count(FeatureSet feature_set) {
             return kHalfKpFeatureCount;
         case FeatureSet::HalfKaV2HmLite:
             return kHalfKaV2HmLiteFeatureCount;
+        case FeatureSet::HalfKaV2HmThreatLite:
+            return kHalfKaV2HmThreatLiteFeatureCount;
     }
     return 0;
 }
@@ -103,17 +138,32 @@ std::uint32_t feature_index(Color perspective, Square perspective_king, Piece pi
     if (feature_set == FeatureSet::HalfKp) {
         return static_cast<std::uint32_t>(((king * 10 + piece_slot) * 64) + piece_square);
     }
-    if (file_of(king) >= 4) {
-        king = horizontal_mirror_square(king);
-        piece_square = horizontal_mirror_square(piece_square);
+    const HalfKaV2HmOrientation orientation = halfka_v2_hm_orientation(perspective_king, perspective);
+    piece_square = halfka_v2_hm_oriented_square(square, perspective, orientation.mirror);
+    return static_cast<std::uint32_t>(((orientation.king_bucket * 10 + piece_slot) * 64) + piece_square);
+}
+
+std::uint32_t threat_feature_index(
+    Color perspective,
+    Square perspective_king,
+    PieceType attacker_type,
+    PieceType victim_type,
+    Square target_square
+) {
+    const int attacker_slot = threat_piece_slot(attacker_type);
+    const int victim_slot = threat_piece_slot(victim_type);
+    if (attacker_slot < 0 || victim_slot < 0 || !is_valid_square(perspective_king) || !is_valid_square(target_square)) {
+        return kHalfKaV2HmThreatLiteFeatureCount;
     }
-    const int king_bucket = rank_of(king) * 4 + file_of(king);
-    return static_cast<std::uint32_t>(((king_bucket * 10 + piece_slot) * 64) + piece_square);
+    const HalfKaV2HmOrientation orientation = halfka_v2_hm_orientation(perspective_king, perspective);
+    const Square target = halfka_v2_hm_oriented_square(target_square, perspective, orientation.mirror);
+    return kHalfKaV2HmLiteFeatureCount
+        + static_cast<std::uint32_t>(((orientation.king_bucket * 5 + attacker_slot) * 5 + victim_slot) * 64 + target);
 }
 
 std::vector<std::uint32_t> active_feature_indices(const Board& board, Color perspective, FeatureSet feature_set) {
     std::vector<std::uint32_t> features;
-    features.reserve(30);
+    features.reserve(feature_set == FeatureSet::HalfKaV2HmThreatLite ? 160 : 30);
     const std::uint32_t maximum_feature = feature_count(feature_set);
 
     const Square king = board.king_square(perspective);
@@ -131,6 +181,42 @@ std::vector<std::uint32_t> active_feature_indices(const Board& board, Color pers
             features.push_back(index);
         }
     }
+    if (feature_set == FeatureSet::HalfKaV2HmThreatLite) {
+        const Color enemy = opposite(perspective);
+        for (Square target = 0; target < kBoardSquareCount; ++target) {
+            const Piece victim = board.piece_at(target);
+            if (victim == Piece::None || color_of(victim) != enemy || type_of(victim) == PieceType::King) {
+                continue;
+            }
+            std::array<bool, 5> attacker_types{};
+            Bitboard attackers = attacks::attackers_to(board, target, perspective);
+            while (attackers != 0) {
+                const Square attacker_square = __builtin_ctzll(attackers);
+                attackers &= attackers - 1;
+                const Piece attacker = board.piece_at(attacker_square);
+                const int attacker_slot = threat_piece_slot(type_of(attacker));
+                if (attacker != Piece::None && attacker_slot >= 0) {
+                    attacker_types[static_cast<std::size_t>(attacker_slot)] = true;
+                }
+            }
+            for (int attacker_slot = 0; attacker_slot < 5; ++attacker_slot) {
+                if (!attacker_types[static_cast<std::size_t>(attacker_slot)]) {
+                    continue;
+                }
+                const std::uint32_t index = threat_feature_index(
+                    perspective,
+                    king,
+                    static_cast<PieceType>(attacker_slot),
+                    type_of(victim),
+                    target
+                );
+                if (index < maximum_feature) {
+                    features.push_back(index);
+                }
+            }
+        }
+    }
+    std::sort(features.begin(), features.end());
     return features;
 }
 
