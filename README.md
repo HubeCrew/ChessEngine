@@ -208,24 +208,24 @@ python3 tools/train_nnue.py \
 python3 tools/train_nnue.py \
   --train-cache runs/nnue/kaggle/train_cache.pt \
   --validation-cache runs/nnue/kaggle/validation_cache.pt \
-  --output runs/nnue/kaggle/current.pt \
+  --output runs/nnue/kaggle/current-v2.pt \
   --epochs 12 \
   --batch-size 4096 \
   --hidden-size 256
 
 python3 tools/export_nnue.py \
-  --checkpoint runs/nnue/kaggle/current.pt \
-  --output runs/nnue/kaggle/current.nnue
+  --checkpoint runs/nnue/kaggle/current-v2.pt \
+  --output runs/nnue/kaggle/current-v2.nnue
 
 python3 tools/check_nnue_parity.py \
-  --checkpoint runs/nnue/kaggle/current.pt \
-  --nnue runs/nnue/kaggle/current.nnue \
+  --checkpoint runs/nnue/kaggle/current-v2.pt \
+  --nnue runs/nnue/kaggle/current-v2.nnue \
   --engine ./build-release/chess_uci \
   --dataset runs/nnue/kaggle/holdout.csv \
   --limit 256
 ```
 
-`train.csv` from Kaggle is labeled and split deterministically into train, validation, and holdout files. Kaggle `test.csv` has empty labels, so the importer preserves it as `unlabeled_test.csv` for later inference experiments but does not use it for supervised training.
+`train.csv` from Kaggle is labeled and split deterministically into train, validation, and holdout files. Kaggle `test.csv` has empty labels, so the importer preserves it as `unlabeled_test.csv` for later inference experiments but does not use it for supervised training. The exported NNUE format includes a side-to-move weight; the C++ loader remains backward-compatible with older v1 `.nnue` files.
 
 Generate an imported Lichess tactical suite from the official CC0 puzzle database:
 

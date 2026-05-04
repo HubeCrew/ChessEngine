@@ -49,6 +49,7 @@ def main() -> int:
     black_indices = torch.zeros((total_input, args.max_features), dtype=torch.int32)
     white_lengths = torch.zeros(total_input, dtype=torch.int16)
     black_lengths = torch.zeros(total_input, dtype=torch.int16)
+    side_to_move = torch.empty(total_input, dtype=torch.int8)
     target = torch.empty(total_input, dtype=torch.float32)
 
     written = 0
@@ -74,6 +75,7 @@ def main() -> int:
                 black_indices[written, : len(black)] = torch.tensor(black, dtype=torch.int32)
             white_lengths[written] = len(white)
             black_lengths[written] = len(black)
+            side_to_move[written] = 1 if board.turn == chess.WHITE else -1
             target[written] = score
             written += 1
             if input_index % args.progress_every == 0 or input_index == total_input:
@@ -89,7 +91,7 @@ def main() -> int:
         return 1
 
     cache = {
-        "format_version": 1,
+        "format_version": 2,
         "dataset": str(args.dataset),
         "rows": written,
         "max_features": args.max_features,
@@ -98,6 +100,7 @@ def main() -> int:
         "white_lengths": white_lengths[:written].contiguous(),
         "black_indices": black_indices[:written].contiguous(),
         "black_lengths": black_lengths[:written].contiguous(),
+        "side_to_move": side_to_move[:written].contiguous(),
         "target": target[:written].contiguous(),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

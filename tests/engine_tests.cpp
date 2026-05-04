@@ -55,12 +55,17 @@ void write_binary_value(std::ofstream& output, const T& value) {
     output.write(reinterpret_cast<const char*>(&value), sizeof(T));
 }
 
-std::filesystem::path write_constant_nnue_model(int centipawns, std::uint32_t hidden_size = 2) {
+std::filesystem::path write_constant_nnue_model(
+    int centipawns,
+    std::uint32_t hidden_size = 2,
+    std::uint32_t format_version = chess::engine::nnue::kFormatVersion,
+    int white_to_move_bonus = 0
+) {
     const std::filesystem::path path = std::filesystem::temp_directory_path() / "chess_engine_constant_test.nnue";
     std::ofstream output(path, std::ios::binary);
     const char magic[8] = {'C', 'E', 'N', 'N', 'U', 'E', '1', '\0'};
     output.write(magic, sizeof(magic));
-    write_binary_value(output, chess::engine::nnue::kFormatVersion);
+    write_binary_value(output, format_version);
     write_binary_value(output, chess::engine::nnue::kFeatureCount);
     write_binary_value(output, hidden_size);
     write_binary_value(output, chess::engine::nnue::kDefaultAccumulatorScale);
@@ -83,6 +88,12 @@ std::filesystem::path write_constant_nnue_model(int centipawns, std::uint32_t hi
 
     const std::int32_t output_bias = static_cast<std::int32_t>(centipawns * static_cast<int>(chess::engine::nnue::kDefaultOutputScale));
     write_binary_value(output, output_bias);
+    if (format_version >= chess::engine::nnue::kFormatVersion) {
+        const std::int32_t side_to_move_weight = static_cast<std::int32_t>(
+            white_to_move_bonus * static_cast<int>(chess::engine::nnue::kDefaultOutputScale)
+        );
+        write_binary_value(output, side_to_move_weight);
+    }
     return path;
 }
 
@@ -305,6 +316,36 @@ TEST_CASE("NNUE model loading and opt-in searcher evaluation are safe") {
     searcher.set_eval_type(chess::engine::EvalType::Hybrid);
     REQUIRE(searcher.evaluate_white_perspective(board) == (classical - 75) / 2);
     REQUIRE(std::filesystem::remove(second_path));
+}
+
+TEST_CASE("NNUE loader supports v1 files and v2 side-to-move weight") {
+    chess::engine::nnue::Network network;
+    std::string error;
+
+    const std::filesystem::path v1_path = write_constant_nnue_model(
+        64,
+        2,
+        chess::engine::nnue::kFormatVersionV1
+    );
+    REQUIRE(network.load(v1_path, &error));
+    REQUIRE(network.loaded());
+    REQUIRE(network.info().format_version == chess::engine::nnue::kFormatVersionV1);
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 64);
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1")) == 64);
+    REQUIRE(std::filesystem::remove(v1_path));
+
+    const std::filesystem::path v2_path = write_constant_nnue_model(
+        100,
+        2,
+        chess::engine::nnue::kFormatVersion,
+        12
+    );
+    REQUIRE(network.load(v2_path, &error));
+    REQUIRE(network.loaded());
+    REQUIRE(network.info().format_version == chess::engine::nnue::kFormatVersion);
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 112);
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1")) == 88);
+    REQUIRE(std::filesystem::remove(v2_path));
 }
 
 TEST_CASE("NNUE loader rejects invalid model files without keeping partial state") {

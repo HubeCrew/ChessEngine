@@ -19,17 +19,18 @@ from nnue_model import Batch, NnueModel, active_features, make_batch, save_check
 
 class NnueDataset(Dataset):
     def __init__(self, rows: list[tuple[str, float]], progress_every: int) -> None:
-        self.items: list[tuple[list[int], list[int], float]] = []
+        self.items: list[tuple[list[int], list[int], int, float]] = []
         for index, (fen, score) in enumerate(rows, start=1):
             board = chess.Board(fen)
-            self.items.append((active_features(board, chess.WHITE), active_features(board, chess.BLACK), score))
+            side_to_move = 1 if board.turn == chess.WHITE else -1
+            self.items.append((active_features(board, chess.WHITE), active_features(board, chess.BLACK), side_to_move, score))
             if index % progress_every == 0 or index == len(rows):
                 print(f"[train] encoded={index}/{len(rows)}", file=sys.stderr, flush=True)
 
     def __len__(self) -> int:
         return len(self.items)
 
-    def __getitem__(self, index: int) -> tuple[list[int], list[int], float]:
+    def __getitem__(self, index: int) -> tuple[list[int], list[int], int, float]:
         return self.items[index]
 
 
@@ -38,9 +39,9 @@ class CachedNnueDataset(Dataset):
         print(f"[train] loading feature_cache={path}", file=sys.stderr, flush=True)
         self.path = path
         self.cache = torch.load(path, map_location="cpu", weights_only=True)
-        if int(self.cache.get("format_version", 0)) != 1:
+        if int(self.cache.get("format_version", 0)) != 2:
             raise ValueError(f"unsupported feature cache format in {path}")
-        required = ("white_indices", "white_lengths", "black_indices", "black_lengths", "target")
+        required = ("white_indices", "white_lengths", "black_indices", "black_lengths", "side_to_move", "target")
         for key in required:
             if key not in self.cache:
                 raise ValueError(f"feature cache {path} is missing {key}")
@@ -49,19 +50,20 @@ class CachedNnueDataset(Dataset):
             raise ValueError(f"feature cache {path} is empty")
         if row_limit > 0:
             rows = min(rows, row_limit)
-            for key in ("white_indices", "white_lengths", "black_indices", "black_lengths", "target"):
+            for key in ("white_indices", "white_lengths", "black_indices", "black_lengths", "side_to_move", "target"):
                 self.cache[key] = self.cache[key][:rows].contiguous()
         print(f"[train] loaded feature_cache={path} rows={rows}", file=sys.stderr, flush=True)
 
     def __len__(self) -> int:
         return int(self.cache["target"].numel())
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         return (
             self.cache["white_indices"][index],
             self.cache["white_lengths"][index],
             self.cache["black_indices"][index],
             self.cache["black_lengths"][index],
+            self.cache["side_to_move"][index],
             self.cache["target"][index],
         )
 
@@ -99,16 +101,17 @@ def load_rows(path: Path, clip_cp: int) -> list[tuple[str, float]]:
     return rows
 
 
-def collate_csv(items: list[tuple[list[int], list[int], float]], device: torch.device) -> Batch:
+def collate_csv(items: list[tuple[list[int], list[int], int, float]], device: torch.device) -> Batch:
     return make_batch(items, device)
 
 
-def collate_cache(items: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]], device: torch.device) -> Batch:
+def collate_cache(items: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]], device: torch.device) -> Batch:
     white_indices = torch.stack([item[0] for item in items]).to(device=device, dtype=torch.long)
     white_lengths = torch.stack([item[1] for item in items]).to(device=device, dtype=torch.long)
     black_indices = torch.stack([item[2] for item in items]).to(device=device, dtype=torch.long)
     black_lengths = torch.stack([item[3] for item in items]).to(device=device, dtype=torch.long)
-    target = torch.stack([item[4] for item in items]).to(device=device, dtype=torch.float32)
+    side_to_move = torch.stack([item[4] for item in items]).to(device=device, dtype=torch.float32)
+    target = torch.stack([item[5] for item in items]).to(device=device, dtype=torch.float32)
 
     white_range = torch.arange(white_indices.shape[1], device=device).unsqueeze(0)
     black_range = torch.arange(black_indices.shape[1], device=device).unsqueeze(0)
@@ -119,6 +122,7 @@ def collate_cache(items: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, to
         white_mask=white_mask,
         black=black_indices,
         black_mask=black_mask,
+        side_to_move=side_to_move,
         target=target,
     )
 
@@ -137,7 +141,7 @@ def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> dict
     model.eval()
     with torch.no_grad():
         for batch in loader:
-            prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask)
+            prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask, batch.side_to_move)
             loss = loss_fn(prediction, batch.target)
             batch_size = int(batch.target.numel())
             total_loss += float(loss) * batch_size
@@ -265,7 +269,7 @@ def main() -> int:
         batch_count = len(train_loader)
         for batch_index, batch in enumerate(train_loader, start=1):
             optimizer.zero_grad(set_to_none=True)
-            prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask)
+            prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask, batch.side_to_move)
             loss = loss_fn(prediction, batch.target)
             loss.backward()
             optimizer.step()

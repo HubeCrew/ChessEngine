@@ -9,7 +9,8 @@ import torch
 from torch import nn
 
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+SUPPORTED_FORMAT_VERSIONS = (1, 2)
 FEATURE_COUNT = 64 * 10 * 64
 DEFAULT_HIDDEN_SIZE = 256
 DEFAULT_ACCUMULATOR_SCALE = 256
@@ -72,6 +73,7 @@ class BinaryNnue:
     feature_weights: torch.Tensor
     output_weights: torch.Tensor
     output_bias: int
+    side_to_move_weight: int = 0
 
     def accumulator(self, features: list[int]) -> torch.Tensor:
         if features:
@@ -83,7 +85,12 @@ class BinaryNnue:
         white = self.accumulator(active_features(board, chess.WHITE)).clamp(0, self.accumulator_scale)
         black = self.accumulator(active_features(board, chess.BLACK)).clamp(0, self.accumulator_scale)
         activations = torch.cat([white, black]).to(torch.int64)
-        total = int(self.output_bias + int((activations * self.output_weights.to(torch.int64)).sum()))
+        side_to_move = 1 if board.turn == chess.WHITE else -1
+        total = int(
+            self.output_bias
+            + int((activations * self.output_weights.to(torch.int64)).sum())
+            + side_to_move * self.side_to_move_weight
+        )
         if total >= 0:
             return (total + self.output_scale // 2) // self.output_scale
         return -((-total + self.output_scale // 2) // self.output_scale)
@@ -95,6 +102,7 @@ class Batch:
     white_mask: torch.Tensor
     black: torch.Tensor
     black_mask: torch.Tensor
+    side_to_move: torch.Tensor
     target: torch.Tensor
 
 
@@ -105,6 +113,7 @@ class NnueModel(nn.Module):
         self.feature = nn.Embedding(FEATURE_COUNT, hidden_size)
         self.hidden_bias = nn.Parameter(torch.zeros(hidden_size))
         self.output = nn.Linear(hidden_size * 2, 1)
+        self.side_to_move_weight = nn.Parameter(torch.zeros(1))
         nn.init.normal_(self.feature.weight, mean=0.0, std=0.01)
         nn.init.normal_(self.output.weight, mean=0.0, std=0.01)
         nn.init.zeros_(self.output.bias)
@@ -120,28 +129,39 @@ class NnueModel(nn.Module):
         white_mask: torch.Tensor,
         black: torch.Tensor,
         black_mask: torch.Tensor,
+        side_to_move: torch.Tensor,
     ) -> torch.Tensor:
         white_acc = torch.clamp(self.accumulator(white, white_mask), 0.0, 1.0)
         black_acc = torch.clamp(self.accumulator(black, black_mask), 0.0, 1.0)
-        return self.output(torch.cat([white_acc, black_acc], dim=1)).squeeze(1)
+        return self.output(torch.cat([white_acc, black_acc], dim=1)).squeeze(1) + side_to_move * self.side_to_move_weight[0]
 
 
-def make_batch(items: list[tuple[list[int], list[int], float]], device: torch.device) -> Batch:
+def make_batch(items: list[tuple[list[int], list[int], float] | tuple[list[int], list[int], int, float]], device: torch.device) -> Batch:
     max_white = max(1, max(len(item[0]) for item in items))
     max_black = max(1, max(len(item[1]) for item in items))
     white = torch.zeros((len(items), max_white), dtype=torch.long)
     black = torch.zeros((len(items), max_black), dtype=torch.long)
     white_mask = torch.zeros((len(items), max_white), dtype=torch.float32)
     black_mask = torch.zeros((len(items), max_black), dtype=torch.float32)
+    side_to_move = torch.empty(len(items), dtype=torch.float32)
     target = torch.empty(len(items), dtype=torch.float32)
 
-    for row, (white_features, black_features, score) in enumerate(items):
+    for row, item in enumerate(items):
+        white_features = item[0]
+        black_features = item[1]
+        if len(item) == 4:
+            side = item[2]
+            score = item[3]
+        else:
+            side = 0
+            score = item[2]
         if white_features:
             white[row, : len(white_features)] = torch.tensor(white_features, dtype=torch.long)
             white_mask[row, : len(white_features)] = 1.0
         if black_features:
             black[row, : len(black_features)] = torch.tensor(black_features, dtype=torch.long)
             black_mask[row, : len(black_features)] = 1.0
+        side_to_move[row] = side
         target[row] = score
 
     return Batch(
@@ -149,6 +169,7 @@ def make_batch(items: list[tuple[list[int], list[int], float]], device: torch.de
         white_mask=white_mask.to(device),
         black=black.to(device),
         black_mask=black_mask.to(device),
+        side_to_move=side_to_move.to(device),
         target=target.to(device),
     )
 
@@ -158,6 +179,7 @@ def save_checkpoint(path: Path, model: NnueModel, metadata: dict[str, object]) -
     torch.save(
         {
             "hidden_size": model.hidden_size,
+            "format_version": FORMAT_VERSION,
             "state_dict": model.state_dict(),
             "metadata": metadata,
         },
@@ -168,7 +190,11 @@ def save_checkpoint(path: Path, model: NnueModel, metadata: dict[str, object]) -
 def load_checkpoint(path: Path, device: torch.device) -> tuple[NnueModel, dict[str, object]]:
     checkpoint = torch.load(path, map_location=device)
     model = NnueModel(hidden_size=int(checkpoint["hidden_size"]))
-    model.load_state_dict(checkpoint["state_dict"])
+    state_dict = checkpoint["state_dict"]
+    if "side_to_move_weight" not in state_dict:
+        state_dict = dict(state_dict)
+        state_dict["side_to_move_weight"] = torch.zeros(1)
+    model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
     return model, dict(checkpoint.get("metadata", {}))
@@ -183,7 +209,7 @@ def load_binary(path: Path) -> BinaryNnue:
         if len(header) != 20:
             raise ValueError(f"truncated NNUE header in {path}")
         version, feature_count, hidden_size, accumulator_scale, output_scale = struct.unpack("<IIIII", header)
-        if version != FORMAT_VERSION:
+        if version not in SUPPORTED_FORMAT_VERSIONS:
             raise ValueError(f"unsupported NNUE version {version}")
         if feature_count != FEATURE_COUNT:
             raise ValueError(f"unsupported feature count {feature_count}")
@@ -203,6 +229,12 @@ def load_binary(path: Path) -> BinaryNnue:
         if len(output_bias_data) != 4:
             raise ValueError(f"truncated output bias in {path}")
         (output_bias,) = struct.unpack("<i", output_bias_data)
+        side_to_move_weight = 0
+        if version >= 2:
+            side_to_move_weight_data = handle.read(4)
+            if len(side_to_move_weight_data) != 4:
+                raise ValueError(f"truncated side-to-move weight in {path}")
+            (side_to_move_weight,) = struct.unpack("<i", side_to_move_weight_data)
 
     return BinaryNnue(
         feature_count=feature_count,
@@ -213,14 +245,22 @@ def load_binary(path: Path) -> BinaryNnue:
         feature_weights=feature_weights,
         output_weights=output_weights,
         output_bias=output_bias,
+        side_to_move_weight=side_to_move_weight,
     )
 
 
 def evaluate_checkpoint_white_perspective(model: NnueModel, board: chess.Board, device: torch.device) -> float:
-    item = (active_features(board, chess.WHITE), active_features(board, chess.BLACK), 0.0)
+    item = (
+        active_features(board, chess.WHITE),
+        active_features(board, chess.BLACK),
+        1 if board.turn == chess.WHITE else -1,
+        0.0,
+    )
     batch = make_batch([item], device)
     with torch.no_grad():
-        return float(model(batch.white, batch.white_mask, batch.black, batch.black_mask)[0].detach().cpu())
+        return float(
+            model(batch.white, batch.white_mask, batch.black, batch.black_mask, batch.side_to_move)[0].detach().cpu()
+        )
 
 
 def export_binary(
@@ -235,6 +275,7 @@ def export_binary(
         hidden_bias = torch.round(model.hidden_bias.detach().cpu() * accumulator_scale).clamp(-32768, 32767).to(torch.int16)
         output_weights = torch.round(model.output.weight.detach().cpu().squeeze(0) * output_scale / accumulator_scale).clamp(-32768, 32767).to(torch.int16)
         output_bias = int(round(float(model.output.bias.detach().cpu()[0]) * output_scale))
+        side_to_move_weight = int(round(float(model.side_to_move_weight.detach().cpu()[0]) * output_scale))
 
     with path.open("wb") as handle:
         handle.write(MAGIC)
@@ -252,3 +293,4 @@ def export_binary(
         handle.write(feature_weights.contiguous().numpy().tobytes())
         handle.write(output_weights.contiguous().numpy().tobytes())
         handle.write(struct.pack("<i", output_bias))
+        handle.write(struct.pack("<i", side_to_move_weight))

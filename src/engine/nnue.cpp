@@ -128,7 +128,7 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         return false;
     }
 
-    if (version != kFormatVersion) {
+    if (version != kFormatVersionV1 && version != kFormatVersion) {
         if (error != nullptr) {
             *error = "unsupported NNUE version";
         }
@@ -159,6 +159,7 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
     std::vector<std::int16_t> feature_weights;
     std::vector<std::int16_t> output_weights;
     std::int32_t output_bias = 0;
+    std::int32_t side_to_move_weight = 0;
     if (!read_vector(input, feature_bias, hidden_size)
         || !read_vector(input, feature_weights, feature_weight_count)
         || !read_vector(input, output_weights, static_cast<std::size_t>(hidden_size) * 2)
@@ -168,8 +169,15 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         }
         return false;
     }
+    if (version >= kFormatVersion && !read_value(input, side_to_move_weight)) {
+        if (error != nullptr) {
+            *error = "truncated NNUE side-to-move weight";
+        }
+        return false;
+    }
 
     info_ = ModelInfo{
+        version,
         feature_count,
         hidden_size,
         accumulator_scale,
@@ -180,6 +188,7 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
     feature_weights_ = std::move(feature_weights);
     output_weights_ = std::move(output_weights);
     output_bias_ = output_bias;
+    side_to_move_weight_ = side_to_move_weight;
     return true;
 }
 
@@ -189,6 +198,7 @@ void Network::clear() {
     feature_weights_.clear();
     output_weights_.clear();
     output_bias_ = 0;
+    side_to_move_weight_ = 0;
 }
 
 bool Network::loaded() const {
@@ -224,6 +234,7 @@ int Network::evaluate_white_perspective(const Board& board) const {
     const std::vector<int> black = accumulator(board, Color::Black);
 
     std::int64_t sum = output_bias_;
+    sum += (board.side_to_move() == Color::White ? 1 : -1) * static_cast<std::int64_t>(side_to_move_weight_);
     for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
         const int white_activation = std::clamp(white[index], 0, static_cast<int>(info_.accumulator_scale));
         const int black_activation = std::clamp(black[index], 0, static_cast<int>(info_.accumulator_scale));
