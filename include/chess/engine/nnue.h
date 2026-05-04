@@ -11,7 +11,9 @@
 namespace chess::engine::nnue {
 
 constexpr std::uint32_t kFormatVersionV1 = 1;
-constexpr std::uint32_t kFormatVersion = 2;
+constexpr std::uint32_t kFormatVersionV2 = 2;
+constexpr std::uint32_t kFormatVersionV3 = 3;
+constexpr std::uint32_t kFormatVersion = 4;
 constexpr std::uint32_t kFeatureCount = 64 * 10 * 64;
 constexpr std::uint32_t kDefaultHiddenSize = 256;
 constexpr std::uint32_t kMaxHiddenSize = 1024;
@@ -24,6 +26,10 @@ struct ModelInfo {
     std::uint32_t hidden_size = 0;
     std::uint32_t accumulator_scale = 0;
     std::uint32_t output_scale = 0;
+    bool side_to_move_perspective = false;
+    bool sf_lite = false;
+    std::uint32_t l2_size = 0;
+    std::uint32_t l3_size = 0;
     std::filesystem::path path;
 };
 
@@ -47,8 +53,21 @@ private:
     std::vector<std::int16_t> output_weights_;
     std::int32_t output_bias_ = 0;
     std::int32_t side_to_move_weight_ = 0;
+    std::vector<float> hidden_bias_float_;
+    std::vector<float> feature_weights_float_;
+    std::vector<float> direct_weights_;
+    float direct_bias_ = 0.0F;
+    std::vector<float> fc0_weights_;
+    std::vector<float> fc0_bias_;
+    std::vector<float> fc1_weights_;
+    std::vector<float> fc1_bias_;
+    std::vector<float> fc2_weights_;
+    float fc2_bias_ = 0.0F;
+    float side_to_move_weight_float_ = 0.0F;
 
     [[nodiscard]] std::vector<int> accumulator(const Board& board, Color perspective) const;
+    [[nodiscard]] std::vector<float> accumulator_float(const Board& board, Color perspective) const;
+    [[nodiscard]] int evaluate_sf_lite_white_perspective(const Board& board) const;
 };
 
 }  // namespace chess::engine::nnue

@@ -208,44 +208,48 @@ python3 tools/train_nnue.py \
 python3 tools/train_nnue.py \
   --train-cache runs/nnue/kaggle/train_cache.pt \
   --validation-cache runs/nnue/kaggle/validation_cache.pt \
-  --output runs/nnue/kaggle/current-v2.pt \
-  --epochs 12 \
+  --run-dir runs/nnue/kaggle/v4-sf-lite-001 \
+  --epochs 24 \
   --batch-size 4096 \
-  --hidden-size 256
+  --hidden-size 512 \
+  --architecture sf-lite \
+  --l2-size 64 \
+  --l3-size 32 \
+  --holdout-dataset runs/nnue/kaggle/holdout.csv \
+  --export-best \
+  --parity-engine ./build-release/chess_uci \
+  --parity-limit 256
 
-python3 tools/export_nnue.py \
-  --checkpoint runs/nnue/kaggle/current-v2.pt \
-  --output runs/nnue/kaggle/current-v2.nnue
+python3 tools/train_nnue.py \
+  --resume runs/nnue/kaggle/v4-sf-lite-001/last.pt \
+  --epochs 36 \
+  --holdout-dataset runs/nnue/kaggle/holdout.csv \
+  --export-best \
+  --parity-engine ./build-release/chess_uci
+```
 
-python3 tools/check_nnue_parity.py \
-  --checkpoint runs/nnue/kaggle/current-v2.pt \
-  --nnue runs/nnue/kaggle/current-v2.nnue \
-  --engine ./build-release/chess_uci \
-  --dataset runs/nnue/kaggle/holdout.csv \
-  --limit 256
+Managed runs write `config.json`, `metrics.csv`, `metrics.jsonl`, `last.pt`, `best.pt`, `best.nnue`, `holdout_report.txt`, `holdout_metrics.json`, and `parity_report.txt` inside `--run-dir`. `best.pt` is selected by validation MAE; holdout is reported after training and is not used to choose the best checkpoint.
 
-python3 tools/evaluate_nnue_checkpoint.py \
-  --checkpoint runs/nnue/kaggle/current-v2.pt \
-  --dataset runs/nnue/kaggle/holdout.csv \
-  --batch-size 4096
+For apples-to-apples comparison against the older one-layer NNUE baseline:
 
+```bash
 python3 tools/train_nnue.py \
   --train-cache runs/nnue/kaggle/train_cache.pt \
   --validation-cache runs/nnue/kaggle/validation_cache.pt \
-  --output runs/nnue/kaggle/current-v3-shaped.pt \
+  --output runs/nnue/kaggle/current-v2-linear.pt \
   --epochs 12 \
   --batch-size 4096 \
   --hidden-size 256 \
-  --loss-mode shaped \
-  --target-scale 600
+  --architecture linear \
+  --perspective-mode fixed
 
 python3 tools/evaluate_nnue_checkpoint.py \
-  --checkpoint runs/nnue/kaggle/current-v3-shaped.pt \
+  --checkpoint runs/nnue/kaggle/current-v2-linear.pt \
   --dataset runs/nnue/kaggle/holdout.csv \
   --batch-size 4096
 ```
 
-`train.csv` from Kaggle is labeled and split deterministically into train, validation, and holdout files. Kaggle `test.csv` has empty labels, so the importer preserves it as `unlabeled_test.csv` for later inference experiments but does not use it for supervised training. The exported NNUE format includes a side-to-move weight; the C++ loader remains backward-compatible with older v1 `.nnue` files. Shaped-loss training is an opt-in experiment; raw centipawn loss remains the default baseline.
+`train.csv` from Kaggle is labeled and split deterministically into train, validation, and holdout files. Kaggle `test.csv` has empty labels, so the importer preserves it as `unlabeled_test.csv` for later inference experiments but does not use it for supervised training. The default NNUE is now a Stockfish-inspired SF-lite architecture: side-to-move `us/them` accumulator ordering, a direct accumulator output, squared clipped ReLU plus clipped ReLU hidden features, and a compact second hidden layer. The C++ loader remains backward-compatible with older v1/v2/v3 `.nnue` files. Shaped-loss training is still available as an opt-in experiment; raw centipawn loss remains the default baseline.
 
 Generate an imported Lichess tactical suite from the official CC0 puzzle database:
 
