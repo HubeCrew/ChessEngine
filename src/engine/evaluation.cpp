@@ -13,6 +13,7 @@ namespace chess::engine {
 namespace {
 
 constexpr int kMaxPhase = 24;
+constexpr int kPieceSquareScalePercent = 85;
 
 constexpr std::array<int, 6> kPhaseWeights{
     0, 1, 1, 2, 4, 0,
@@ -217,7 +218,7 @@ int blended_score(int mg_score, int eg_score, int phase) {
 EvalTrace blend_trace(const EvalTracePair& pair, int phase) {
     EvalTrace trace;
     trace.material = blended_score(pair.mg.material, pair.eg.material, phase);
-    trace.piece_square = blended_score(pair.mg.piece_square, pair.eg.piece_square, phase);
+    trace.piece_square = blended_score(pair.mg.piece_square, pair.eg.piece_square, phase) * kPieceSquareScalePercent / 100;
     trace.mobility = blended_score(pair.mg.mobility, pair.eg.mobility, phase);
     trace.safe_mobility = blended_score(pair.mg.safe_mobility, pair.eg.safe_mobility, phase);
     trace.king_safety = blended_score(pair.mg.king_safety, pair.eg.king_safety, phase);
