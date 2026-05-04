@@ -82,8 +82,71 @@ position startpos moves e2e4 e7e5 g1f3
 eval
 ```
 
-The custom `eval` command prints white-perspective components for material, piece-square tables, mobility, safe mobility, king safety, threats, pawn structure, outposts, rook files, space, center control, bishop quality, pawn dynamics, development, trade context, and total score.
+The custom `eval` command prints white-perspective components for material, piece-square tables, mobility, safe mobility, king safety, threats, pawn structure, outposts, rook files, space, center control, bishop quality, pawn dynamics, development, trade context, classical total, NNUE total when loaded, selected evaluator, and total score.
 The custom `see <uci-move>` command prints static exchange evaluation for a legal move in the current position, which is useful for checking whether a capture is tactically profitable before deeper search context is considered.
+
+Run with an exported NNUE network:
+
+```text
+./build-release/chess_uci
+uci
+setoption name NnueFile value runs/nnue/current.nnue
+setoption name EvalType value nnue
+isready
+position startpos
+go depth 4
+```
+
+`EvalType` supports `classical`, `nnue`, and `hybrid`. Classical remains the default. If `nnue` or `hybrid` is selected without a successfully loaded network, the engine falls back to the classical evaluator.
+
+Create and export a first large local NNUE model:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-tools.txt
+
+python3 tools/import_lichess_puzzles.py \
+  --input data/raw/lichess_db_puzzle.csv.zst \
+  --output runs/nnue/lichess_tactics_source_200k.epd \
+  --limit 200000 \
+  --max-per-theme 20000 \
+  --referee ./build-release/chess_referee
+
+python3 tools/build_nnue_dataset.py \
+  --epd runs/nnue/lichess_tactics_source_200k.epd \
+  --epd data/suites/lichess_tactics_250.epd \
+  --epd data/suites/strategy.epd \
+  --pgn-dir runs/gauntlets/current-eval-vs-stockfish-1500-smoke \
+  --stockfish /usr/games/stockfish \
+  --stockfish-threads 4 \
+  --stockfish-hash 512 \
+  --nodes 8000 \
+  --limit 200000 \
+  --resume \
+  --progress-every 500 \
+  --output runs/nnue/dataset.csv
+
+python3 tools/train_nnue.py \
+  --dataset runs/nnue/dataset.csv \
+  --output runs/nnue/current.pt \
+  --epochs 12 \
+  --batch-size 2048 \
+  --hidden-size 256
+
+python3 tools/export_nnue.py \
+  --checkpoint runs/nnue/current.pt \
+  --output runs/nnue/current.nnue
+
+./build-release/chess_bench \
+  --suite epd \
+  --epd data/suites/lichess_tactics_250.epd \
+  --eval-type nnue \
+  --nnue runs/nnue/current.nnue \
+  --progress
+```
+
+The trainer uses CUDA automatically when PyTorch detects a GPU and falls back to CPU otherwise. The exported `.nnue` file is the only artifact needed by the C++ engine at runtime.
 
 Generate an imported Lichess tactical suite from the official CC0 puzzle database:
 
@@ -217,7 +280,7 @@ Open `http://127.0.0.1:8765`, then run `tools/gauntlet.py` with the same `--outp
 - `chess_core`: board state, bitboards, FEN, legal move generation, make/unmake, perft.
 - `chess_engine`: alpha-beta negamax search, quiescence, transposition table support, and static evaluation.
 - Search infrastructure: deterministic Zobrist hashing, transposition table, PVS, aspiration windows, SEE-assisted move ordering, killer/history move ordering, LMR, conservative null-move pruning, bounded search extensions, qsearch delta pruning, limited qsearch checks, and standard UCI search info.
-- Evaluation: tapered material/PST scoring, mobility, bishop pair, pawn structure, passed pawns, and basic king terms.
+- Evaluation: tapered classical evaluation plus an opt-in HalfKP-style NNUE shadow evaluator with dependency-free C++ inference.
 - `chess_perft`: command-line perft divide tool.
 - `chess_uci`: minimal UCI protocol entrypoint.
 - `chess_bench`: repeatable benchmark/tactical harness for measuring strength and speed changes.

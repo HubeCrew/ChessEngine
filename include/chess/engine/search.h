@@ -4,9 +4,12 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <string>
 #include <vector>
 
 #include "chess/core/board.h"
+#include "chess/engine/evaluation.h"
 #include "chess/engine/transposition_table.h"
 
 namespace chess::engine {
@@ -70,6 +73,15 @@ public:
     [[nodiscard]] bool null_move_pruning() const;
     void set_search_extensions(bool enabled);
     [[nodiscard]] bool search_extensions() const;
+    void set_eval_type(EvalType type);
+    [[nodiscard]] EvalType eval_type() const;
+    [[nodiscard]] bool load_nnue(const std::filesystem::path& path, std::string* error = nullptr);
+    void clear_nnue();
+    [[nodiscard]] bool nnue_loaded() const;
+    [[nodiscard]] const nnue::ModelInfo& nnue_info() const;
+    [[nodiscard]] int evaluate_nnue_white_perspective(const Board& board) const;
+    [[nodiscard]] int evaluate_white_perspective(const Board& board) const;
+    [[nodiscard]] int evaluate_side_to_move(const Board& board) const;
     void clear();
 
 private:
@@ -83,6 +95,8 @@ private:
     bool use_deadline_ = false;
     bool null_move_pruning_ = true;
     bool search_extensions_ = true;
+    EvalType eval_type_ = EvalType::Classical;
+    nnue::Network nnue_;
     SearchDiagnostics diagnostics_{};
     TranspositionTable tt_;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};

@@ -4,11 +4,13 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <vector>
 #include <string>
 
 #include "chess/core/fen.h"
 #include "chess/core/movegen.h"
 #include "chess/engine/evaluation.h"
+#include "chess/engine/nnue.h"
 #include "chess/engine/position_suite.h"
 #include "chess/engine/search.h"
 #include "chess/engine/static_exchange.h"
@@ -46,6 +48,42 @@ bool trusted_move_gives_check(chess::Board board, const chess::Move& move) {
     const bool gives_check = board.in_check(chess::opposite(moving_side));
     board.unmake_move(undo);
     return gives_check;
+}
+
+template <typename T>
+void write_binary_value(std::ofstream& output, const T& value) {
+    output.write(reinterpret_cast<const char*>(&value), sizeof(T));
+}
+
+std::filesystem::path write_constant_nnue_model(int centipawns, std::uint32_t hidden_size = 2) {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "chess_engine_constant_test.nnue";
+    std::ofstream output(path, std::ios::binary);
+    const char magic[8] = {'C', 'E', 'N', 'N', 'U', 'E', '1', '\0'};
+    output.write(magic, sizeof(magic));
+    write_binary_value(output, chess::engine::nnue::kFormatVersion);
+    write_binary_value(output, chess::engine::nnue::kFeatureCount);
+    write_binary_value(output, hidden_size);
+    write_binary_value(output, chess::engine::nnue::kDefaultAccumulatorScale);
+    write_binary_value(output, chess::engine::nnue::kDefaultOutputScale);
+
+    const std::vector<std::int16_t> hidden_bias(hidden_size, 0);
+    output.write(reinterpret_cast<const char*>(hidden_bias.data()), static_cast<std::streamsize>(hidden_bias.size() * sizeof(std::int16_t)));
+
+    const std::vector<std::int16_t> feature_weights(
+        static_cast<std::size_t>(chess::engine::nnue::kFeatureCount) * hidden_size,
+        0
+    );
+    output.write(
+        reinterpret_cast<const char*>(feature_weights.data()),
+        static_cast<std::streamsize>(feature_weights.size() * sizeof(std::int16_t))
+    );
+
+    const std::vector<std::int16_t> output_weights(static_cast<std::size_t>(hidden_size) * 2, 0);
+    output.write(reinterpret_cast<const char*>(output_weights.data()), static_cast<std::streamsize>(output_weights.size() * sizeof(std::int16_t)));
+
+    const std::int32_t output_bias = static_cast<std::int32_t>(centipawns * static_cast<int>(chess::engine::nnue::kDefaultOutputScale));
+    write_binary_value(output, output_bias);
+    return path;
 }
 
 }  // namespace
@@ -213,6 +251,83 @@ TEST_CASE("evaluation trace totals match public evaluation") {
 
     REQUIRE(trace.total == component_total);
     REQUIRE(trace.total == chess::engine::evaluate_white_perspective(board));
+}
+
+TEST_CASE("NNUE feature extraction is deterministic and perspective-aware") {
+    const chess::Board board = chess::Board::start_position();
+    const std::vector<std::uint32_t> white_once = chess::engine::nnue::active_feature_indices(board, chess::Color::White);
+    const std::vector<std::uint32_t> white_twice = chess::engine::nnue::active_feature_indices(board, chess::Color::White);
+    const std::vector<std::uint32_t> black_once = chess::engine::nnue::active_feature_indices(board, chess::Color::Black);
+
+    REQUIRE(white_once == white_twice);
+    REQUIRE(white_once.size() == 30);
+    REQUIRE(black_once.size() == 30);
+    REQUIRE(std::all_of(white_once.begin(), white_once.end(), [](std::uint32_t index) {
+        return index < chess::engine::nnue::kFeatureCount;
+    }));
+
+    const std::uint32_t white_feature = chess::engine::nnue::feature_index(
+        chess::Color::White,
+        chess::make_square(4, 0),
+        chess::Piece::WhiteKnight,
+        chess::make_square(2, 2)
+    );
+    const std::uint32_t mirrored_black_feature = chess::engine::nnue::feature_index(
+        chess::Color::Black,
+        chess::make_square(4, 7),
+        chess::Piece::BlackKnight,
+        chess::make_square(2, 5)
+    );
+    REQUIRE(white_feature == mirrored_black_feature);
+}
+
+TEST_CASE("NNUE model loading and opt-in searcher evaluation are safe") {
+    const std::filesystem::path path = write_constant_nnue_model(123);
+    chess::engine::nnue::Network network;
+    std::string error;
+    REQUIRE(network.load(path, &error));
+    REQUIRE(network.loaded());
+    REQUIRE(network.info().hidden_size == 2);
+
+    const chess::Board board = chess::Board::start_position();
+    REQUIRE(network.evaluate_white_perspective(board) == 123);
+    REQUIRE(std::filesystem::remove(path));
+
+    chess::engine::Searcher searcher;
+    const int classical = searcher.evaluate_white_perspective(board);
+    searcher.set_eval_type(chess::engine::EvalType::Nnue);
+    REQUIRE(searcher.evaluate_white_perspective(board) == classical);
+
+    const std::filesystem::path second_path = write_constant_nnue_model(-75);
+    REQUIRE(searcher.load_nnue(second_path, &error));
+    REQUIRE(searcher.nnue_loaded());
+    REQUIRE(searcher.evaluate_white_perspective(board) == -75);
+    searcher.set_eval_type(chess::engine::EvalType::Hybrid);
+    REQUIRE(searcher.evaluate_white_perspective(board) == (classical - 75) / 2);
+    REQUIRE(std::filesystem::remove(second_path));
+}
+
+TEST_CASE("NNUE loader rejects invalid model files without keeping partial state") {
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "chess_engine_invalid_test.nnue";
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << "not-nnue";
+    }
+
+    chess::engine::nnue::Network network;
+    std::string error;
+    REQUIRE_FALSE(network.load(path, &error));
+    REQUIRE_FALSE(network.loaded());
+    REQUIRE_FALSE(error.empty());
+    REQUIRE(std::filesystem::remove(path));
+
+    const std::filesystem::path valid_path = write_constant_nnue_model(42);
+    REQUIRE(network.load(valid_path, &error));
+    REQUIRE(network.loaded());
+    REQUIRE_FALSE(network.load(path, &error));
+    REQUIRE(network.loaded());
+    REQUIRE(network.evaluate_white_perspective(chess::Board::start_position()) == 42);
+    REQUIRE(std::filesystem::remove(valid_path));
 }
 
 TEST_CASE("evaluation rewards extra material") {

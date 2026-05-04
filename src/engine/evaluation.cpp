@@ -1251,8 +1251,28 @@ int evaluate_white_perspective(const Board& board) {
     return evaluate_trace_white_perspective(board).total;
 }
 
+int evaluate_white_perspective(const Board& board, const EvaluationConfig& config) {
+    const int classical_score = evaluate_white_perspective(board);
+    if (config.type == EvalType::Classical || config.nnue == nullptr || !config.nnue->loaded()) {
+        return classical_score;
+    }
+
+    const int nnue_score = config.nnue->evaluate_white_perspective(board);
+    if (config.type == EvalType::Nnue) {
+        return nnue_score;
+    }
+
+    const int nnue_weight = std::clamp(config.hybrid_nnue_weight_percent, 0, 100);
+    return (classical_score * (100 - nnue_weight) + nnue_score * nnue_weight) / 100;
+}
+
 int evaluate(const Board& board) {
     const int score = evaluate_white_perspective(board);
+    return board.side_to_move() == Color::White ? score : -score;
+}
+
+int evaluate(const Board& board, const EvaluationConfig& config) {
+    const int score = evaluate_white_perspective(board, config);
     return board.side_to_move() == Color::White ? score : -score;
 }
 

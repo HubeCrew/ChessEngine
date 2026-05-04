@@ -11,6 +11,7 @@ __pycache__/
 build/
 build-*/
 gauntlet-results/
+runs/nnue/
 data/raw/
 data/suites/*_results.csv
 data/suites/*_misses.epd

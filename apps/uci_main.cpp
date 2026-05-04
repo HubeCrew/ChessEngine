@@ -1,5 +1,6 @@
 #include <iostream>
 #include <algorithm>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -15,6 +16,31 @@ namespace {
 
 bool parse_bool(std::string_view value) {
     return value == "true" || value == "1" || value == "on";
+}
+
+chess::engine::EvalType parse_eval_type(std::string_view value) {
+    if (value == "classical") {
+        return chess::engine::EvalType::Classical;
+    }
+    if (value == "nnue") {
+        return chess::engine::EvalType::Nnue;
+    }
+    if (value == "hybrid") {
+        return chess::engine::EvalType::Hybrid;
+    }
+    throw std::invalid_argument("EvalType must be classical, nnue, or hybrid");
+}
+
+std::string_view eval_type_name(chess::engine::EvalType type) {
+    switch (type) {
+        case chess::engine::EvalType::Classical:
+            return "classical";
+        case chess::engine::EvalType::Nnue:
+            return "nnue";
+        case chess::engine::EvalType::Hybrid:
+            return "hybrid";
+    }
+    return "classical";
 }
 
 bool is_go_option(std::string_view token) {
@@ -92,6 +118,20 @@ void apply_setoption(chess::engine::Searcher& searcher, std::istringstream& inpu
         searcher.set_null_move_pruning(parse_bool(value));
     } else if (name == "SearchExtensions" && !value.empty()) {
         searcher.set_search_extensions(parse_bool(value));
+    } else if (name == "EvalType" && !value.empty()) {
+        searcher.set_eval_type(parse_eval_type(value));
+    } else if (name == "NnueFile") {
+        if (value.empty()) {
+            searcher.clear_nnue();
+        } else {
+            std::string error;
+            if (!searcher.load_nnue(std::filesystem::path{value}, &error)) {
+                std::cout << "info string nnue load failed: " << error << '\n';
+            } else {
+                std::cout << "info string nnue loaded " << searcher.nnue_info().path.string()
+                          << " hidden " << searcher.nnue_info().hidden_size << '\n';
+            }
+        }
     }
 }
 
@@ -106,8 +146,9 @@ std::string pv_to_string(const std::vector<chess::Move>& principal_variation) {
     return result;
 }
 
-void print_eval_trace(const chess::Board& board) {
+void print_eval_trace(const chess::Board& board, const chess::engine::Searcher& searcher) {
     const chess::engine::EvalTrace trace = chess::engine::evaluate_trace_white_perspective(board);
+    const bool nnue_loaded = searcher.nnue_loaded();
     std::cout << "info string eval"
               << " material " << trace.material
               << " piece_square " << trace.piece_square
@@ -124,7 +165,19 @@ void print_eval_trace(const chess::Board& board) {
               << " pawn_dynamics " << trace.pawn_dynamics
               << " development " << trace.development
               << " trade_context " << trace.trade_context
-              << " total " << trace.total
+              << " classical_total " << trace.total
+              << " selected " << eval_type_name(searcher.eval_type())
+              << " nnue_loaded " << (nnue_loaded ? "true" : "false");
+    if (nnue_loaded) {
+        const int raw_nnue = searcher.evaluate_nnue_white_perspective(board);
+        std::cout << " nnue_total " << raw_nnue
+                  << " selected_total " << searcher.evaluate_white_perspective(board)
+                  << " delta " << (raw_nnue - trace.total);
+    } else {
+        std::cout << " selected_total " << trace.total
+                  << " delta 0";
+    }
+    std::cout << " total " << searcher.evaluate_white_perspective(board)
               << '\n';
 }
 
@@ -159,6 +212,8 @@ int main() {
                 std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
                 std::cout << "option name NullMovePruning type check default true\n";
                 std::cout << "option name SearchExtensions type check default true\n";
+                std::cout << "option name EvalType type combo default classical var classical var nnue var hybrid\n";
+                std::cout << "option name NnueFile type string default <empty>\n";
                 std::cout << "uciok\n";
             } else if (command == "isready") {
                 std::cout << "readyok\n";
@@ -228,7 +283,7 @@ int main() {
             } else if (command == "d") {
                 std::cout << board.to_fen() << '\n';
             } else if (command == "eval") {
-                print_eval_trace(board);
+                print_eval_trace(board, searcher);
             } else if (command == "see") {
                 print_static_exchange(board, input);
             } else if (command == "quit") {

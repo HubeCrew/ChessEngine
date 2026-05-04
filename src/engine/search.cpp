@@ -707,6 +707,45 @@ bool Searcher::search_extensions() const {
     return search_extensions_;
 }
 
+void Searcher::set_eval_type(EvalType type) {
+    eval_type_ = type;
+}
+
+EvalType Searcher::eval_type() const {
+    return eval_type_;
+}
+
+bool Searcher::load_nnue(const std::filesystem::path& path, std::string* error) {
+    return nnue_.load(path, error);
+}
+
+void Searcher::clear_nnue() {
+    nnue_.clear();
+}
+
+bool Searcher::nnue_loaded() const {
+    return nnue_.loaded();
+}
+
+const nnue::ModelInfo& Searcher::nnue_info() const {
+    return nnue_.info();
+}
+
+int Searcher::evaluate_nnue_white_perspective(const Board& board) const {
+    if (!nnue_.loaded()) {
+        return chess::engine::evaluate_white_perspective(board);
+    }
+    return nnue_.evaluate_white_perspective(board);
+}
+
+int Searcher::evaluate_white_perspective(const Board& board) const {
+    return chess::engine::evaluate_white_perspective(board, EvaluationConfig{eval_type_, &nnue_, 50});
+}
+
+int Searcher::evaluate_side_to_move(const Board& board) const {
+    return evaluate(board, EvaluationConfig{eval_type_, &nnue_, 50});
+}
+
 void Searcher::clear() {
     tt_.clear();
     for (auto& ply_killers : killer_moves_) {
@@ -979,7 +1018,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
 
 int Searcher::evaluate_with_diagnostics(const Board& board) {
     ++diagnostics_.evaluations;
-    return evaluate(board);
+    return evaluate_side_to_move(board);
 }
 
 int Searcher::static_exchange_with_diagnostics(const Board& board, const Move& move) {

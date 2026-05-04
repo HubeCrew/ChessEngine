@@ -33,6 +33,8 @@ struct Options {
     bool diagnostics = false;
     bool null_move_pruning = true;
     bool search_extensions = true;
+    chess::engine::EvalType eval_type = chess::engine::EvalType::Classical;
+    std::filesystem::path nnue_path;
     std::vector<std::filesystem::path> epd_paths;
 };
 
@@ -63,7 +65,7 @@ struct ProgressState {
 };
 
 void print_usage(std::ostream& out) {
-    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--disable-null-move] [--disable-extensions] [--progress] [--diagnostics] [--csv]\n";
+    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--eval-type classical|nnue|hybrid] [--nnue PATH] [--disable-null-move] [--disable-extensions] [--progress] [--diagnostics] [--csv]\n";
 }
 
 SuiteSelection parse_suite(std::string_view value) {
@@ -80,6 +82,19 @@ SuiteSelection parse_suite(std::string_view value) {
         return SuiteSelection::Epd;
     }
     throw std::invalid_argument("suite must be bench, tactics, all, or epd");
+}
+
+chess::engine::EvalType parse_eval_type(std::string_view value) {
+    if (value == "classical") {
+        return chess::engine::EvalType::Classical;
+    }
+    if (value == "nnue") {
+        return chess::engine::EvalType::Nnue;
+    }
+    if (value == "hybrid") {
+        return chess::engine::EvalType::Hybrid;
+    }
+    throw std::invalid_argument("eval type must be classical, nnue, or hybrid");
 }
 
 Options parse_options(int argc, char** argv) {
@@ -105,11 +120,21 @@ Options parse_options(int argc, char** argv) {
                 throw std::invalid_argument("--epd requires a path");
             }
             options.epd_paths.emplace_back(argv[index]);
+        } else if (arg == "--nnue") {
+            if (++index >= argc) {
+                throw std::invalid_argument("--nnue requires a path");
+            }
+            options.nnue_path = argv[index];
         } else if (arg == "--suite") {
             if (++index >= argc) {
                 throw std::invalid_argument("--suite requires a value");
             }
             options.suite = parse_suite(argv[index]);
+        } else if (arg == "--eval-type") {
+            if (++index >= argc) {
+                throw std::invalid_argument("--eval-type requires a value");
+            }
+            options.eval_type = parse_eval_type(argv[index]);
         } else if (arg == "--depth") {
             if (++index >= argc) {
                 throw std::invalid_argument("--depth requires a value");
@@ -361,6 +386,13 @@ int main(int argc, char** argv) {
         searcher.set_hash_size_mb(options.hash_mb);
         searcher.set_null_move_pruning(options.null_move_pruning);
         searcher.set_search_extensions(options.search_extensions);
+        searcher.set_eval_type(options.eval_type);
+        if (!options.nnue_path.empty()) {
+            std::string error;
+            if (!searcher.load_nnue(options.nnue_path, &error)) {
+                throw std::runtime_error(error);
+            }
+        }
 
         std::vector<RunResult> results;
         std::size_t total_positions = 0;

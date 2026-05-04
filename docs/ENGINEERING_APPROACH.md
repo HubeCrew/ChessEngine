@@ -15,6 +15,7 @@ This project should optimize for durable playing strength, not isolated benchmar
   - If SEE is wrong, fix SEE or move generation first.
 - Avoid broad penalties that punish real sacrifices. A root or eval penalty must survive tactical-suite comparison and confirmed postmortem avoid checks.
 - Make new heuristics explainable through `eval`, `see`, benchmark output, or postmortem fields before using them for tuning.
+- Treat NNUE as an evidence pipeline, not a magic switch. A neural eval must beat the classical baseline on tactical, strategic, and postmortem guardrails before it becomes the default.
 
 ## Validation Ladder
 
@@ -23,6 +24,13 @@ This project should optimize for durable playing strength, not isolated benchmar
 3. 250-position tactical suite with no solved-count regression and no unjustified best-move churn.
 4. Full postmortem regeneration.
 5. Gauntlet only after the change survives the cheaper gates.
+
+NNUE-specific ladder:
+
+1. Feature extraction and exported-model inference match between Python and C++.
+2. NNUE remains opt-in and classical remains the default fallback.
+3. Shadow evaluation is compared against classical on focused postmortem and tactical suites.
+4. Only promote NNUE into normal search after it passes the standard validation ladder.
 
 ## Current Diagnostic Focus
 

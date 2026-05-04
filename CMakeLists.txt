@@ -27,6 +27,7 @@ endif()
 
 add_library(chess_engine
     src/engine/evaluation.cpp
+    src/engine/nnue.cpp
     src/engine/position_suite.cpp
     src/engine/search.cpp
     src/engine/static_exchange.cpp

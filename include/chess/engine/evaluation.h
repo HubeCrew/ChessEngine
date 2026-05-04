@@ -1,8 +1,21 @@
 #pragma once
 
 #include "chess/core/board.h"
+#include "chess/engine/nnue.h"
 
 namespace chess::engine {
+
+enum class EvalType {
+    Classical,
+    Nnue,
+    Hybrid,
+};
+
+struct EvaluationConfig {
+    EvalType type = EvalType::Classical;
+    const nnue::Network* nnue = nullptr;
+    int hybrid_nnue_weight_percent = 50;
+};
 
 struct EvalTrace {
     int material = 0;
@@ -26,6 +39,8 @@ struct EvalTrace {
 int material_value(PieceType type);
 EvalTrace evaluate_trace_white_perspective(const Board& board);
 int evaluate_white_perspective(const Board& board);
+int evaluate_white_perspective(const Board& board, const EvaluationConfig& config);
 int evaluate(const Board& board);
+int evaluate(const Board& board, const EvaluationConfig& config);
 
 }  // namespace chess::engine
