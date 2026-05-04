@@ -103,16 +103,28 @@ class MoveRecord:
     severity: int = 0
     engine_bestmove: str = ""
     engine_bestmove_score_cp: int | None = None
+    engine_bestmove_pv: str = ""
     engine_played_score_cp: int | None = None
     engine_played_see_cp: int | None = None
+    engine_played_pv: str = ""
     engine_reference_score_cp: int | None = None
     engine_reference_see_cp: int | None = None
     engine_reference_delta_cp: int | None = None
+    engine_reference_pv: str = ""
     reference_bestmove: str = ""
     reference_score_cp: int | None = None
+    reference_pv: str = ""
     reference_played_score_cp: int | None = None
+    reference_played_pv: str = ""
     reference_delta_cp: int | None = None
     reference_avoid: bool = False
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    bestmove: str
+    score_cp: int | None
+    pv: tuple[str, ...]
 
 
 class UciTraceEngine:
@@ -121,7 +133,7 @@ class UciTraceEngine:
         self.timeout = timeout
         self.process: subprocess.Popen[str] | None = None
         self.cache: dict[str, dict[str, int]] = {}
-        self.search_cache: dict[tuple[str, int, int, tuple[str, ...]], tuple[str, int | None]] = {}
+        self.search_cache: dict[tuple[str, int, int, tuple[str, ...]], SearchResult] = {}
         self.see_cache: dict[tuple[str, str], int] = {}
 
     def __enter__(self) -> "UciTraceEngine":
@@ -163,13 +175,13 @@ class UciTraceEngine:
                 self.cache[fen] = trace
                 return trace
 
-    def bestmove(
+    def search(
         self,
         fen: str,
         depth: int = 0,
         movetime_ms: int = 0,
         search_moves: Iterable[str] = (),
-    ) -> tuple[str, int | None]:
+    ) -> SearchResult:
         search_move_tuple = tuple(search_moves)
         cache_key = (fen, depth, movetime_ms, search_move_tuple)
         cached = self.search_cache.get(cache_key)
@@ -186,6 +198,7 @@ class UciTraceEngine:
         self._send(command)
         deadline = time.monotonic() + self.timeout
         latest_score: int | None = None
+        latest_pv: tuple[str, ...] = ()
         while True:
             line = self._readline(deadline)
             if line.startswith("info ") and " score " in line:
@@ -193,11 +206,22 @@ class UciTraceEngine:
                 parsed_score = parse_uci_score(parts)
                 if parsed_score is not None:
                     latest_score = parsed_score
+                latest_pv = parse_uci_pv(parts) or latest_pv
             if line.startswith("bestmove "):
                 parts = line.split()
-                result = (parts[1] if len(parts) > 1 else "0000", latest_score)
+                result = SearchResult(parts[1] if len(parts) > 1 else "0000", latest_score, latest_pv)
                 self.search_cache[cache_key] = result
                 return result
+
+    def bestmove(
+        self,
+        fen: str,
+        depth: int = 0,
+        movetime_ms: int = 0,
+        search_moves: Iterable[str] = (),
+    ) -> tuple[str, int | None]:
+        result = self.search(fen, depth, movetime_ms, search_moves)
+        return result.bestmove, result.score_cp
 
     def see(self, fen: str, move: str) -> int:
         cache_key = (fen, move)
@@ -273,6 +297,20 @@ def parse_uci_score(parts: list[str]) -> int | None:
         magnitude = MATE_SCORE_CP - min(abs(score_value), 10_000)
         return magnitude if score_value > 0 else -magnitude
     return None
+
+
+def parse_uci_pv(parts: list[str]) -> tuple[str, ...]:
+    try:
+        pv_index = parts.index("pv")
+    except ValueError:
+        return ()
+    return tuple(part for part in parts[pv_index + 1 :] if part)
+
+
+def format_pv(pv: tuple[str, ...] | str) -> str:
+    if isinstance(pv, str):
+        return pv
+    return " ".join(pv)
 
 
 def parse_pgn(path: Path) -> GameRecord:
@@ -647,14 +685,19 @@ def write_csv(path: Path, events: list[MoveRecord]) -> None:
         "capture_value",
         "engine_bestmove",
         "engine_bestmove_score_cp",
+        "engine_bestmove_pv",
         "engine_played_score_cp",
         "engine_played_see_cp",
+        "engine_played_pv",
         "engine_reference_score_cp",
         "engine_reference_see_cp",
         "engine_reference_delta_cp",
+        "engine_reference_pv",
         "reference_bestmove",
         "reference_score_cp",
+        "reference_pv",
         "reference_played_score_cp",
+        "reference_played_pv",
         "reference_delta_cp",
         "reference_avoid",
         "fen_before",
@@ -743,9 +786,13 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
             )
             if event.engine_bestmove:
                 lines.append(f"- Engine re-search: `{event.engine_bestmove}` score `{event.engine_bestmove_score_cp}`")
+                if event.engine_bestmove_pv:
+                    lines.append(f"- Engine re-search PV: `{event.engine_bestmove_pv}`")
                 lines.append("")
             if event.engine_played_score_cp is not None:
                 lines.append(f"- Engine played-move constrained score: `{event.engine_played_score_cp}`")
+                if event.engine_played_pv:
+                    lines.append(f"- Engine played-move PV: `{event.engine_played_pv}`")
                 if event.engine_played_see_cp is not None:
                     lines.append(f"- Engine played-move SEE: `{event.engine_played_see_cp}`")
                 if event.engine_reference_score_cp is not None and event.engine_reference_delta_cp is not None:
@@ -753,16 +800,22 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
                         f"- Engine reference-move constrained score: `{event.engine_reference_score_cp}`, "
                         f"delta `{event.engine_reference_delta_cp:+d}`"
                     )
+                    if event.engine_reference_pv:
+                        lines.append(f"- Engine reference-move PV: `{event.engine_reference_pv}`")
                     if event.engine_reference_see_cp is not None:
                         lines.append(f"- Engine reference-move SEE: `{event.engine_reference_see_cp}`")
                 lines.append("")
             if event.reference_bestmove:
                 lines.append(f"- Reference bestmove: `{event.reference_bestmove}` score `{event.reference_score_cp}`")
+                if event.reference_pv:
+                    lines.append(f"- Reference PV: `{event.reference_pv}`")
                 if event.reference_played_score_cp is not None and event.reference_delta_cp is not None:
                     lines.append(
                         f"- Reference played-move score: `{event.reference_played_score_cp}`, "
                         f"delta `{event.reference_delta_cp:+d}`"
                     )
+                    if event.reference_played_pv:
+                        lines.append(f"- Reference played-move PV: `{event.reference_played_pv}`")
                 lines.append("")
 
     trade_categories = {
@@ -810,11 +863,13 @@ def add_engine_bestmoves(events: list[MoveRecord], engine: UciTraceEngine, depth
     if depth <= 0:
         return
     for event in events:
-        bestmove, score = engine.bestmove(event.fen_before, depth)
-        event.engine_bestmove = bestmove
-        event.engine_bestmove_score_cp = score
-        _, played_score = engine.bestmove(event.fen_before, depth, search_moves=(event.uci,))
-        event.engine_played_score_cp = played_score
+        best = engine.search(event.fen_before, depth)
+        event.engine_bestmove = best.bestmove
+        event.engine_bestmove_score_cp = best.score_cp
+        event.engine_bestmove_pv = format_pv(best.pv)
+        played = engine.search(event.fen_before, depth, search_moves=(event.uci,))
+        event.engine_played_score_cp = played.score_cp
+        event.engine_played_pv = format_pv(played.pv)
         event.engine_played_see_cp = engine.see(event.fen_before, event.uci)
 
 
@@ -828,11 +883,12 @@ def add_engine_reference_scores(events: list[MoveRecord], engine: UciTraceEngine
         reference_move = chess.Move.from_uci(event.reference_bestmove)
         if reference_move not in board.legal_moves:
             continue
-        _, reference_score = engine.bestmove(event.fen_before, depth, search_moves=(event.reference_bestmove,))
-        event.engine_reference_score_cp = reference_score
+        reference = engine.search(event.fen_before, depth, search_moves=(event.reference_bestmove,))
+        event.engine_reference_score_cp = reference.score_cp
+        event.engine_reference_pv = format_pv(reference.pv)
         event.engine_reference_see_cp = engine.see(event.fen_before, event.reference_bestmove)
-        if event.engine_played_score_cp is not None and reference_score is not None:
-            event.engine_reference_delta_cp = reference_score - event.engine_played_score_cp
+        if event.engine_played_score_cp is not None and reference.score_cp is not None:
+            event.engine_reference_delta_cp = reference.score_cp - event.engine_played_score_cp
 
 
 def add_engine_diagnostic_categories(events: list[MoveRecord]) -> None:
@@ -865,11 +921,12 @@ def add_reference_bestmoves(
     if depth <= 0 and movetime_ms <= 0:
         return
     for event in events:
-        bestmove, score = engine.bestmove(event.fen_before, depth, movetime_ms)
-        if bestmove != "0000":
-            event.reference_bestmove = bestmove
-            event.reference_score_cp = score
-        if bestmove == "0000" or bestmove == event.uci or score is None:
+        best = engine.search(event.fen_before, depth, movetime_ms)
+        if best.bestmove != "0000":
+            event.reference_bestmove = best.bestmove
+            event.reference_score_cp = best.score_cp
+            event.reference_pv = format_pv(best.pv)
+        if best.bestmove == "0000" or best.bestmove == event.uci or best.score_cp is None:
             continue
 
         board = chess.Board(event.fen_before)
@@ -877,25 +934,29 @@ def add_reference_bestmoves(
         if move not in board.legal_moves:
             continue
         board.push(move)
-        _, reply_score = engine.bestmove(board.fen(), depth, movetime_ms)
-        if reply_score is None:
+        reply = engine.search(board.fen(), depth, movetime_ms)
+        if reply.score_cp is None:
             continue
-        event.reference_played_score_cp = -reply_score
-        event.reference_delta_cp = score - event.reference_played_score_cp
+        event.reference_played_score_cp = -reply.score_cp
+        event.reference_played_pv = format_pv(reply.pv)
+        event.reference_delta_cp = best.score_cp - event.reference_played_score_cp
         event.reference_avoid = event.reference_delta_cp >= min_delta_cp
         if event.reference_avoid and confirm_depth > depth and movetime_ms <= 0:
-            confirmed_bestmove, confirmed_score = engine.bestmove(event.fen_before, confirm_depth)
-            if confirmed_bestmove != "0000":
-                event.reference_bestmove = confirmed_bestmove
-                event.reference_score_cp = confirmed_score
+            confirmed = engine.search(event.fen_before, confirm_depth)
+            if confirmed.bestmove != "0000":
+                event.reference_bestmove = confirmed.bestmove
+                event.reference_score_cp = confirmed.score_cp
+                event.reference_pv = format_pv(confirmed.pv)
             else:
                 event.reference_avoid = False
                 event.reference_played_score_cp = None
+                event.reference_played_pv = ""
                 event.reference_delta_cp = None
                 continue
-            if confirmed_bestmove == event.uci or confirmed_score is None:
+            if confirmed.bestmove == event.uci or confirmed.score_cp is None:
                 event.reference_avoid = False
                 event.reference_played_score_cp = None
+                event.reference_played_pv = ""
                 event.reference_delta_cp = None
                 continue
             board = chess.Board(event.fen_before)
@@ -903,17 +964,20 @@ def add_reference_bestmoves(
             if move not in board.legal_moves:
                 event.reference_avoid = False
                 event.reference_played_score_cp = None
+                event.reference_played_pv = ""
                 event.reference_delta_cp = None
                 continue
             board.push(move)
-            _, confirmed_reply_score = engine.bestmove(board.fen(), confirm_depth)
-            if confirmed_reply_score is None:
+            confirmed_reply = engine.search(board.fen(), confirm_depth)
+            if confirmed_reply.score_cp is None:
                 event.reference_avoid = False
                 event.reference_played_score_cp = None
+                event.reference_played_pv = ""
                 event.reference_delta_cp = None
                 continue
-            event.reference_played_score_cp = -confirmed_reply_score
-            event.reference_delta_cp = confirmed_score - event.reference_played_score_cp
+            event.reference_played_score_cp = -confirmed_reply.score_cp
+            event.reference_played_pv = format_pv(confirmed_reply.pv)
+            event.reference_delta_cp = confirmed.score_cp - event.reference_played_score_cp
             event.reference_avoid = event.reference_delta_cp >= min_delta_cp
 
 

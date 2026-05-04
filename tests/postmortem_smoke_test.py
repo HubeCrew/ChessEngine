@@ -100,9 +100,11 @@ def main() -> int:
         required_csv_fields = {
             "engine_played_score_cp",
             "engine_played_see_cp",
+            "engine_played_pv",
             "engine_reference_score_cp",
             "engine_reference_see_cp",
             "engine_reference_delta_cp",
+            "engine_reference_pv",
         }
         if not required_csv_fields.issubset(rows[0].keys()):
             print(f"missing CSV fields: {required_csv_fields - set(rows[0].keys())}", file=sys.stderr)
@@ -114,6 +116,9 @@ def main() -> int:
             print(report, file=sys.stderr)
             return 1
         if "Engine played-move SEE" not in report:
+            print(report, file=sys.stderr)
+            return 1
+        if "Engine played-move PV" not in report:
             print(report, file=sys.stderr)
             return 1
         if "Negative SEE Capture Audit" not in report:

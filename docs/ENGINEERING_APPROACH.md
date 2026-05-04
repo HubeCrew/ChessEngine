@@ -19,7 +19,7 @@ This project should optimize for durable playing strength, not isolated benchmar
 ## Validation Ladder
 
 1. Unit and smoke tests.
-2. Focused postmortem suite from confirmed avoid labels.
+2. Focused postmortem suite from confirmed avoid labels, generated with `tools/extract_postmortem_suite.py`.
 3. 250-position tactical suite with no solved-count regression and no unjustified best-move churn.
 4. Full postmortem regeneration.
 5. Gauntlet only after the change survives the cheaper gates.
@@ -31,6 +31,7 @@ The current postmortem flow records:
 - Engine eval trace before and after moves.
 - Engine constrained score for the played move.
 - Engine constrained score for the reference move.
+- Principal variations for the engine's unconstrained move, played-move constrained line, and reference-move constrained line.
 - Engine SEE for both candidate moves.
 - Summary buckets for engine/reference preference and negative-SEE captures.
 
@@ -39,3 +40,15 @@ The active high-level question is not "how do we stop all losing captures?" It i
 "When SEE already says a capture loses material, why does deeper search/evaluation still think the compensation is enough?"
 
 Answer that question with broad evidence before adding a new engine heuristic.
+
+Useful command:
+
+```bash
+python3 tools/extract_postmortem_suite.py \
+  --events runs/postmortems/current-eval-vs-stockfish-1500/events.csv \
+  --positions runs/postmortems/current-eval-vs-stockfish-1500/positions.epd \
+  --output /tmp/negative_see_avoid.epd \
+  --category played-negative-see \
+  --reference-avoid-only \
+  --sort severity-desc
+```

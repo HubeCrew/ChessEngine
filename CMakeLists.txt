@@ -102,6 +102,11 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/compare_benchmark_results.py
         )
         add_test(
+            NAME extract_postmortem_suite_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/extract_postmortem_suite_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/extract_postmortem_suite.py
+        )
+        add_test(
             NAME gauntlet_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gauntlet_smoke_test.py
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/gauntlet.py

@@ -185,7 +185,22 @@ Analyze a completed gauntlet after the PGNs are written:
   --reference-min-delta-cp 120
 ```
 
-The postmortem writes `report.md`, `events.csv`, `postmortem.json`, and `positions.epd`. It uses `python-chess` for PGN/FEN reconstruction and the engine's own `eval` command for trace components, then flags eval swings, loss-context moves, equal trades, queen trades, opponent recaptures, and bad trade sequences. When `--engine-depth` is set, it also uses UCI `searchmoves` to record constrained scores for the played move and, when available, the reference move, plus the engine's `see` score for each candidate. `positions.epd` records the gauntlet move as `am` when there is no reference engine, or when the reference engine's best move is clearly better by `--reference-min-delta-cp` and remains better at the optional confirmation depth. If the reference engine agrees with the gauntlet move, that move is recorded as `bm`; otherwise the reference move is kept as a comment so the regression suite tests blunder avoidance rather than exact Stockfish imitation.
+The postmortem writes `report.md`, `events.csv`, `postmortem.json`, and `positions.epd`. It uses `python-chess` for PGN/FEN reconstruction and the engine's own `eval` command for trace components, then flags eval swings, loss-context moves, equal trades, queen trades, opponent recaptures, and bad trade sequences. When `--engine-depth` is set, it also uses UCI `searchmoves` to record constrained scores and principal variations for the played move and, when available, the reference move, plus the engine's `see` score for each candidate. `positions.epd` records the gauntlet move as `am` when there is no reference engine, or when the reference engine's best move is clearly better by `--reference-min-delta-cp` and remains better at the optional confirmation depth. If the reference engine agrees with the gauntlet move, that move is recorded as `bm`; otherwise the reference move is kept as a comment so the regression suite tests blunder avoidance rather than exact Stockfish imitation.
+
+Extract a focused diagnostic suite from a postmortem category:
+
+```bash
+python3 tools/extract_postmortem_suite.py \
+  --events runs/postmortems/current-eval-vs-stockfish-1500/events.csv \
+  --positions runs/postmortems/current-eval-vs-stockfish-1500/positions.epd \
+  --output /tmp/negative_see_avoid.epd \
+  --category played-negative-see \
+  --reference-avoid-only \
+  --sort severity-desc
+./build-release/chess_bench --suite epd --epd /tmp/negative_see_avoid.epd --progress
+```
+
+This is the preferred way to turn repeated gauntlet failure classes into cheap local experiments. Keep generated focus suites outside the repo unless they are deliberately promoted to stable test data.
 
 Watch a gauntlet live in the browser:
 
@@ -209,8 +224,9 @@ Open `http://127.0.0.1:8765`, then run `tools/gauntlet.py` with the same `--outp
 - `chess_referee`: machine-readable game adjudicator used by the gauntlet.
 - `tools/gauntlet.py`: UCI engine-vs-engine gauntlet with PGN/CSV output and rough Elo reporting.
 - `tools/gauntlet_postmortem.py`: offline gauntlet analyzer for eval-trace swings, losses, equal trades, queen trades, recaptures, and EPD extraction.
+- `tools/extract_postmortem_suite.py`: focused EPD extractor for postmortem categories such as negative-SEE captures or avoid-confirmed blunders.
 - `tools/gauntlet_live_server.py`: local browser viewer for following the gauntlet live from `live-state.json`.
 
 ## Next Engine Work
 
-The next quality step is benchmark infrastructure: move the tactical suite to a standard EPD-style data file, support larger 200+ position suites without bloating C++ source, and add deeper tactical/stress sets before the next long gauntlet.
+The next quality step is evidence-driven evaluation work: use the postmortem category extractor to isolate repeated failure classes, test candidate heuristics against focused suites first, and keep the 250-position tactical suite as a hard guardrail before any long gauntlet.
