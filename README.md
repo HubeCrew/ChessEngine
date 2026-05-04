@@ -223,9 +223,29 @@ python3 tools/check_nnue_parity.py \
   --engine ./build-release/chess_uci \
   --dataset runs/nnue/kaggle/holdout.csv \
   --limit 256
+
+python3 tools/evaluate_nnue_checkpoint.py \
+  --checkpoint runs/nnue/kaggle/current-v2.pt \
+  --dataset runs/nnue/kaggle/holdout.csv \
+  --batch-size 4096
+
+python3 tools/train_nnue.py \
+  --train-cache runs/nnue/kaggle/train_cache.pt \
+  --validation-cache runs/nnue/kaggle/validation_cache.pt \
+  --output runs/nnue/kaggle/current-v3-shaped.pt \
+  --epochs 12 \
+  --batch-size 4096 \
+  --hidden-size 256 \
+  --loss-mode shaped \
+  --target-scale 600
+
+python3 tools/evaluate_nnue_checkpoint.py \
+  --checkpoint runs/nnue/kaggle/current-v3-shaped.pt \
+  --dataset runs/nnue/kaggle/holdout.csv \
+  --batch-size 4096
 ```
 
-`train.csv` from Kaggle is labeled and split deterministically into train, validation, and holdout files. Kaggle `test.csv` has empty labels, so the importer preserves it as `unlabeled_test.csv` for later inference experiments but does not use it for supervised training. The exported NNUE format includes a side-to-move weight; the C++ loader remains backward-compatible with older v1 `.nnue` files.
+`train.csv` from Kaggle is labeled and split deterministically into train, validation, and holdout files. Kaggle `test.csv` has empty labels, so the importer preserves it as `unlabeled_test.csv` for later inference experiments but does not use it for supervised training. The exported NNUE format includes a side-to-move weight; the C++ loader remains backward-compatible with older v1 `.nnue` files. Shaped-loss training is an opt-in experiment; raw centipawn loss remains the default baseline.
 
 Generate an imported Lichess tactical suite from the official CC0 puzzle database:
 

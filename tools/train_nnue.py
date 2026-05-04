@@ -78,6 +78,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--learning-rate", type=float, default=0.001)
+    parser.add_argument(
+        "--loss-mode",
+        choices=("raw", "shaped", "combined"),
+        default="raw",
+        help="Training objective. raw uses centipawn SmoothL1. shaped uses tanh-compressed centipawns. combined adds both.",
+    )
+    parser.add_argument("--target-scale", type=float, default=600.0, help="Centipawn scale for tanh target shaping.")
+    parser.add_argument("--shaped-weight", type=float, default=1.0, help="Multiplier for shaped loss in combined mode.")
     parser.add_argument("--validation-split", type=float, default=0.05)
     parser.add_argument("--clip-cp", type=int, default=1500)
     parser.add_argument("--seed", type=int, default=1)
@@ -86,6 +94,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--progress-every", type=int, default=5000, help="Feature-encoding progress interval.")
     parser.add_argument("--batch-progress-every", type=int, default=25, help="Training-batch progress interval.")
     return parser.parse_args()
+
+
+def shaped_cp(values: torch.Tensor, target_scale: float) -> torch.Tensor:
+    return torch.tanh(values / target_scale) * target_scale
+
+
+def objective_loss(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    raw_loss_fn: nn.SmoothL1Loss,
+    loss_mode: str,
+    target_scale: float,
+    shaped_weight: float,
+) -> torch.Tensor:
+    raw_loss = raw_loss_fn(prediction, target)
+    if loss_mode == "raw":
+        return raw_loss
+    shaped_loss = raw_loss_fn(shaped_cp(prediction, target_scale), shaped_cp(target, target_scale))
+    if loss_mode == "shaped":
+        return shaped_loss
+    return raw_loss + shaped_weight * shaped_loss
 
 
 def load_rows(path: Path, clip_cp: int) -> list[tuple[str, float]]:
@@ -127,9 +156,17 @@ def collate_cache(items: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, to
     )
 
 
-def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> dict[str, float]:
+def evaluate(
+    model: NnueModel,
+    loader: DataLoader,
+    device: torch.device,
+    loss_mode: str,
+    target_scale: float,
+    shaped_weight: float,
+) -> dict[str, float]:
     loss_fn = nn.SmoothL1Loss()
-    total_loss = 0.0
+    total_objective = 0.0
+    total_raw_loss = 0.0
     total_abs = 0.0
     total_squared = 0.0
     sum_prediction = 0.0
@@ -142,9 +179,11 @@ def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> dict
     with torch.no_grad():
         for batch in loader:
             prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask, batch.side_to_move)
-            loss = loss_fn(prediction, batch.target)
+            objective = objective_loss(prediction, batch.target, loss_fn, loss_mode, target_scale, shaped_weight)
+            raw_loss = loss_fn(prediction, batch.target)
             batch_size = int(batch.target.numel())
-            total_loss += float(loss) * batch_size
+            total_objective += float(objective) * batch_size
+            total_raw_loss += float(raw_loss) * batch_size
             diff = prediction - batch.target
             total_abs += float(diff.abs().sum())
             total_squared += float((diff * diff).sum())
@@ -164,7 +203,8 @@ def evaluate(model: NnueModel, loader: DataLoader, device: torch.device) -> dict
     else:
         correlation = covariance / ((prediction_variance * target_variance) ** 0.5)
     return {
-        "loss": total_loss / total,
+        "objective": total_objective / total,
+        "raw_loss": total_raw_loss / total,
         "mae": total_abs / total,
         "rmse": (total_squared / total) ** 0.5,
         "correlation": correlation,
@@ -186,6 +226,12 @@ def main() -> int:
         return 2
     if args.max_train_rows < 0 or args.max_validation_rows < 0:
         print("row caps must not be negative", file=sys.stderr)
+        return 2
+    if args.target_scale <= 0.0:
+        print("--target-scale must be positive", file=sys.stderr)
+        return 2
+    if args.shaped_weight < 0.0:
+        print("--shaped-weight must not be negative", file=sys.stderr)
         return 2
 
     random.seed(args.seed)
@@ -251,7 +297,8 @@ def main() -> int:
 
     print(
         f"[train] device={device} train={len(train_dataset)} validation={len(validation_dataset)} "
-        f"hidden={args.hidden_size} batch={args.batch_size} epochs={args.epochs}",
+        f"hidden={args.hidden_size} batch={args.batch_size} epochs={args.epochs} "
+        f"loss_mode={args.loss_mode} target_scale={args.target_scale:g} shaped_weight={args.shaped_weight:g}",
         flush=True,
     )
     if device.type == "cuda":
@@ -270,7 +317,14 @@ def main() -> int:
         for batch_index, batch in enumerate(train_loader, start=1):
             optimizer.zero_grad(set_to_none=True)
             prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask, batch.side_to_move)
-            loss = loss_fn(prediction, batch.target)
+            loss = objective_loss(
+                prediction,
+                batch.target,
+                loss_fn,
+                args.loss_mode,
+                args.target_scale,
+                args.shaped_weight,
+            )
             loss.backward()
             optimizer.step()
             batch_size = int(batch.target.numel())
@@ -284,10 +338,18 @@ def main() -> int:
                     flush=True,
                 )
         train_loss = total_loss / max(1, total)
-        validation = evaluate(model, validation_loader, device)
+        validation = evaluate(
+            model,
+            validation_loader,
+            device,
+            args.loss_mode,
+            args.target_scale,
+            args.shaped_weight,
+        )
         elapsed = time.monotonic() - epoch_start
         print(
-            f"epoch={epoch} train_loss={train_loss:.3f} validation_loss={validation['loss']:.3f} "
+            f"epoch={epoch} train_loss={train_loss:.3f} validation_objective={validation['objective']:.3f} "
+            f"validation_raw_loss={validation['raw_loss']:.3f} "
             f"validation_mae={validation['mae']:.1f} validation_rmse={validation['rmse']:.1f} "
             f"validation_corr={validation['correlation']:.3f} elapsed_s={elapsed:.1f}",
             flush=True,
@@ -300,6 +362,9 @@ def main() -> int:
             **dataset_metadata,
             "clip_cp": args.clip_cp,
             "device": str(device),
+            "loss_mode": args.loss_mode,
+            "target_scale": args.target_scale,
+            "shaped_weight": args.shaped_weight,
         },
     )
     print(f"wrote checkpoint {args.output}")

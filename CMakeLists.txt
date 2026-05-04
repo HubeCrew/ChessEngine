@@ -124,6 +124,12 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/train_nnue.py
         )
         add_test(
+            NAME evaluate_nnue_checkpoint_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/evaluate_nnue_checkpoint_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/evaluate_nnue_checkpoint.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools
+        )
+        add_test(
             NAME gauntlet_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gauntlet_smoke_test.py
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/gauntlet.py
