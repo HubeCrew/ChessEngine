@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <new>
 #include <utility>
@@ -43,6 +44,13 @@ constexpr std::size_t kMaxHistoryQuiets = 256;
 constexpr std::size_t kNoMoveIndex = static_cast<std::size_t>(-1);
 
 using HistoryTable = std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, 2>;
+using ProfileClock = std::chrono::steady_clock;
+
+std::uint64_t elapsed_ns_since(ProfileClock::time_point start) {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(ProfileClock::now() - start).count()
+    );
+}
 
 int color_index(Color color) {
     return static_cast<int>(color);
@@ -708,6 +716,14 @@ bool Searcher::search_extensions() const {
     return search_extensions_;
 }
 
+void Searcher::set_profiling(bool enabled) {
+    profiling_ = enabled;
+}
+
+bool Searcher::profiling() const {
+    return profiling_;
+}
+
 void Searcher::set_eval_type(EvalType type) {
     eval_type_ = type;
 }
@@ -1022,18 +1038,45 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
 
 int Searcher::evaluate_with_diagnostics(const Board& board, int ply) {
     ++diagnostics_.evaluations;
+    const auto evaluation_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
+    const auto finish = [&](int score) {
+        if (profiling_) {
+            diagnostics_.evaluation_ns += elapsed_ns_since(evaluation_start);
+        }
+        return score;
+    };
     if (eval_type_ == EvalType::Nnue && nnue_.supports_quantized_accumulator_stack() && ply >= 0 && ply < kMaxPly) {
-        return board.side_to_move() == Color::White
-            ? nnue_.evaluate_white_perspective(board, nnue_accumulator_stack_[ply])
-            : -nnue_.evaluate_white_perspective(board, nnue_accumulator_stack_[ply]);
+        const auto nnue_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
+        const int white_perspective = nnue_.evaluate_white_perspective(board, nnue_accumulator_stack_[ply]);
+        if (profiling_) {
+            ++diagnostics_.nnue_stack_evaluations;
+            diagnostics_.nnue_stack_evaluation_ns += elapsed_ns_since(nnue_start);
+        }
+        return finish(board.side_to_move() == Color::White ? white_perspective : -white_perspective);
     }
     if (eval_type_ == EvalType::Hybrid && nnue_.supports_quantized_accumulator_stack() && ply >= 0 && ply < kMaxPly) {
+        const auto classical_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
         const int classical = chess::engine::evaluate_white_perspective(board);
+        if (profiling_) {
+            ++diagnostics_.classical_evaluations;
+            diagnostics_.classical_evaluation_ns += elapsed_ns_since(classical_start);
+        }
+        const auto nnue_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
         const int nnue = nnue_.evaluate_white_perspective(board, nnue_accumulator_stack_[ply]);
+        if (profiling_) {
+            ++diagnostics_.nnue_stack_evaluations;
+            diagnostics_.nnue_stack_evaluation_ns += elapsed_ns_since(nnue_start);
+        }
         const int blended = (classical + nnue) / 2;
-        return board.side_to_move() == Color::White ? blended : -blended;
+        return finish(board.side_to_move() == Color::White ? blended : -blended);
     }
-    return evaluate_side_to_move(board);
+    const auto fallback_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
+    const int score = evaluate_side_to_move(board);
+    if (profiling_ && eval_type_ == EvalType::Classical) {
+        ++diagnostics_.classical_evaluations;
+        diagnostics_.classical_evaluation_ns += elapsed_ns_since(fallback_start);
+    }
+    return finish(score);
 }
 
 void Searcher::refresh_nnue_accumulator(Board& board, int ply) {
@@ -1042,7 +1085,12 @@ void Searcher::refresh_nnue_accumulator(Board& board, int ply) {
     }
     nnue_accumulator_stack_[ply].valid = false;
     if (nnue_.supports_quantized_accumulator_stack()) {
+        const auto start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
         nnue_.refresh_quantized_accumulator_pair(board, nnue_accumulator_stack_[ply]);
+        if (profiling_) {
+            ++diagnostics_.nnue_accumulator_refreshes;
+            diagnostics_.nnue_accumulator_refresh_ns += elapsed_ns_since(start);
+        }
     }
 }
 
@@ -1055,13 +1103,29 @@ void Searcher::update_nnue_accumulator_after_move(
     if (!nnue_.supports_quantized_accumulator_stack() || parent_ply < 0 || parent_ply >= kMaxPly || child_ply < 0 || child_ply >= kMaxPly) {
         return;
     }
-    if (!nnue_.update_quantized_accumulator_pair_after_move(
+    const auto start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
+    const bool updated = nnue_.update_quantized_accumulator_pair_after_move(
             board,
             undo,
             nnue_accumulator_stack_[parent_ply],
             nnue_accumulator_stack_[child_ply]
-        )) {
+        );
+    if (profiling_) {
+        ++diagnostics_.nnue_accumulator_update_attempts;
+        diagnostics_.nnue_accumulator_update_ns += elapsed_ns_since(start);
+    }
+    if (!updated) {
+        if (profiling_) {
+            ++diagnostics_.nnue_accumulator_update_fallbacks;
+        }
+        const auto refresh_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
         nnue_.refresh_quantized_accumulator_pair(board, nnue_accumulator_stack_[child_ply]);
+        if (profiling_) {
+            ++diagnostics_.nnue_accumulator_refreshes;
+            diagnostics_.nnue_accumulator_refresh_ns += elapsed_ns_since(refresh_start);
+        }
+    } else if (profiling_) {
+        ++diagnostics_.nnue_accumulator_update_successes;
     }
 }
 
@@ -1070,6 +1134,9 @@ void Searcher::update_nnue_accumulator_after_null_move(int parent_ply, int child
         return;
     }
     nnue_accumulator_stack_[child_ply] = nnue_accumulator_stack_[parent_ply];
+    if (profiling_) {
+        ++diagnostics_.nnue_accumulator_null_copies;
+    }
 }
 
 int Searcher::static_exchange_with_diagnostics(const Board& board, const Move& move) {

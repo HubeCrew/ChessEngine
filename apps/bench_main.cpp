@@ -1,6 +1,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iomanip>
@@ -31,6 +32,7 @@ struct Options {
     bool csv = false;
     bool progress = false;
     bool diagnostics = false;
+    bool profile = false;
     bool null_move_pruning = true;
     bool search_extensions = true;
     chess::engine::EvalType eval_type = chess::engine::EvalType::Classical;
@@ -65,7 +67,7 @@ struct ProgressState {
 };
 
 void print_usage(std::ostream& out) {
-    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--eval-type classical|nnue|hybrid] [--nnue PATH] [--disable-null-move] [--disable-extensions] [--progress] [--diagnostics] [--csv]\n";
+    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--eval-type classical|nnue|hybrid] [--nnue PATH] [--disable-null-move] [--disable-extensions] [--progress] [--diagnostics] [--profile] [--csv]\n";
 }
 
 SuiteSelection parse_suite(std::string_view value) {
@@ -111,6 +113,8 @@ Options parse_options(int argc, char** argv) {
             options.progress = true;
         } else if (arg == "--diagnostics") {
             options.diagnostics = true;
+        } else if (arg == "--profile") {
+            options.profile = true;
         } else if (arg == "--disable-null-move") {
             options.null_move_pruning = false;
         } else if (arg == "--disable-extensions") {
@@ -326,6 +330,18 @@ chess::engine::SearchDiagnostics add_diagnostics(
     const chess::engine::SearchDiagnostics& rhs
 ) {
     lhs.evaluations += rhs.evaluations;
+    lhs.evaluation_ns += rhs.evaluation_ns;
+    lhs.nnue_stack_evaluations += rhs.nnue_stack_evaluations;
+    lhs.nnue_stack_evaluation_ns += rhs.nnue_stack_evaluation_ns;
+    lhs.classical_evaluations += rhs.classical_evaluations;
+    lhs.classical_evaluation_ns += rhs.classical_evaluation_ns;
+    lhs.nnue_accumulator_refreshes += rhs.nnue_accumulator_refreshes;
+    lhs.nnue_accumulator_refresh_ns += rhs.nnue_accumulator_refresh_ns;
+    lhs.nnue_accumulator_update_attempts += rhs.nnue_accumulator_update_attempts;
+    lhs.nnue_accumulator_update_successes += rhs.nnue_accumulator_update_successes;
+    lhs.nnue_accumulator_update_fallbacks += rhs.nnue_accumulator_update_fallbacks;
+    lhs.nnue_accumulator_update_ns += rhs.nnue_accumulator_update_ns;
+    lhs.nnue_accumulator_null_copies += rhs.nnue_accumulator_null_copies;
     lhs.move_picker_pv_picks += rhs.move_picker_pv_picks;
     lhs.move_picker_tt_picks += rhs.move_picker_tt_picks;
     lhs.move_picker_scored_moves += rhs.move_picker_scored_moves;
@@ -374,6 +390,45 @@ void print_diagnostics_summary(const chess::engine::SearchDiagnostics& diagnosti
         << "  move_gives_check_calls " << diagnostics.move_gives_check_calls << '\n';
 }
 
+double ns_to_ms(std::uint64_t ns) {
+    return static_cast<double>(ns) / 1'000'000.0;
+}
+
+double average_ns(std::uint64_t ns, std::uint64_t count) {
+    return count == 0 ? 0.0 : static_cast<double>(ns) / static_cast<double>(count);
+}
+
+double percent_of(std::uint64_t part, std::uint64_t whole) {
+    return whole == 0 ? 0.0 : (100.0 * static_cast<double>(part)) / static_cast<double>(whole);
+}
+
+void print_profile_summary(const chess::engine::SearchDiagnostics& diagnostics, std::ostream& out) {
+    out << "profile\n"
+        << std::fixed << std::setprecision(3)
+        << "  evaluation_calls " << diagnostics.evaluations
+        << " total_ms " << ns_to_ms(diagnostics.evaluation_ns)
+        << " avg_ns " << average_ns(diagnostics.evaluation_ns, diagnostics.evaluations) << '\n'
+        << "  nnue_stack_eval_calls " << diagnostics.nnue_stack_evaluations
+        << " total_ms " << ns_to_ms(diagnostics.nnue_stack_evaluation_ns)
+        << " avg_ns " << average_ns(diagnostics.nnue_stack_evaluation_ns, diagnostics.nnue_stack_evaluations)
+        << " eval_pct " << percent_of(diagnostics.nnue_stack_evaluation_ns, diagnostics.evaluation_ns) << '\n'
+        << "  classical_eval_calls " << diagnostics.classical_evaluations
+        << " total_ms " << ns_to_ms(diagnostics.classical_evaluation_ns)
+        << " avg_ns " << average_ns(diagnostics.classical_evaluation_ns, diagnostics.classical_evaluations)
+        << " eval_pct " << percent_of(diagnostics.classical_evaluation_ns, diagnostics.evaluation_ns) << '\n'
+        << "  accumulator_refreshes " << diagnostics.nnue_accumulator_refreshes
+        << " total_ms " << ns_to_ms(diagnostics.nnue_accumulator_refresh_ns)
+        << " avg_ns " << average_ns(diagnostics.nnue_accumulator_refresh_ns, diagnostics.nnue_accumulator_refreshes) << '\n'
+        << "  accumulator_update_attempts " << diagnostics.nnue_accumulator_update_attempts
+        << " successes " << diagnostics.nnue_accumulator_update_successes
+        << " fallbacks " << diagnostics.nnue_accumulator_update_fallbacks
+        << " fallback_pct " << percent_of(diagnostics.nnue_accumulator_update_fallbacks, diagnostics.nnue_accumulator_update_attempts)
+        << " total_ms " << ns_to_ms(diagnostics.nnue_accumulator_update_ns)
+        << " avg_ns " << average_ns(diagnostics.nnue_accumulator_update_ns, diagnostics.nnue_accumulator_update_attempts) << '\n'
+        << "  accumulator_null_copies " << diagnostics.nnue_accumulator_null_copies << '\n'
+        << std::defaultfloat;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -386,6 +441,7 @@ int main(int argc, char** argv) {
         searcher.set_hash_size_mb(options.hash_mb);
         searcher.set_null_move_pruning(options.null_move_pruning);
         searcher.set_search_extensions(options.search_extensions);
+        searcher.set_profiling(options.profile);
         searcher.set_eval_type(options.eval_type);
         if (!options.nnue_path.empty()) {
             std::string error;
@@ -508,10 +564,17 @@ int main(int argc, char** argv) {
                 std::cout << '\n';
                 print_diagnostics_summary(total_diagnostics, std::cout);
             }
+            if (options.profile) {
+                std::cout << '\n';
+                print_profile_summary(total_diagnostics, std::cout);
+            }
         }
 
         if (options.csv && options.diagnostics) {
             print_diagnostics_summary(total_diagnostics, std::cerr);
+        }
+        if (options.csv && options.profile) {
+            print_profile_summary(total_diagnostics, std::cerr);
         }
 
         return all_matched ? 0 : 1;

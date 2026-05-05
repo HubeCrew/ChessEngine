@@ -27,6 +27,18 @@ struct SearchLimits {
 
 struct SearchDiagnostics {
     std::uint64_t evaluations = 0;
+    std::uint64_t evaluation_ns = 0;
+    std::uint64_t nnue_stack_evaluations = 0;
+    std::uint64_t nnue_stack_evaluation_ns = 0;
+    std::uint64_t classical_evaluations = 0;
+    std::uint64_t classical_evaluation_ns = 0;
+    std::uint64_t nnue_accumulator_refreshes = 0;
+    std::uint64_t nnue_accumulator_refresh_ns = 0;
+    std::uint64_t nnue_accumulator_update_attempts = 0;
+    std::uint64_t nnue_accumulator_update_successes = 0;
+    std::uint64_t nnue_accumulator_update_fallbacks = 0;
+    std::uint64_t nnue_accumulator_update_ns = 0;
+    std::uint64_t nnue_accumulator_null_copies = 0;
     std::uint64_t move_picker_pv_picks = 0;
     std::uint64_t move_picker_tt_picks = 0;
     std::uint64_t move_picker_scored_moves = 0;
@@ -73,6 +85,8 @@ public:
     [[nodiscard]] bool null_move_pruning() const;
     void set_search_extensions(bool enabled);
     [[nodiscard]] bool search_extensions() const;
+    void set_profiling(bool enabled);
+    [[nodiscard]] bool profiling() const;
     void set_eval_type(EvalType type);
     [[nodiscard]] EvalType eval_type() const;
     [[nodiscard]] bool load_nnue(const std::filesystem::path& path, std::string* error = nullptr);
@@ -95,6 +109,7 @@ private:
     bool use_deadline_ = false;
     bool null_move_pruning_ = true;
     bool search_extensions_ = true;
+    bool profiling_ = false;
     EvalType eval_type_ = EvalType::Classical;
     nnue::Network nnue_;
     SearchDiagnostics diagnostics_{};
