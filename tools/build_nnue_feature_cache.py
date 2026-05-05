@@ -9,7 +9,7 @@ from pathlib import Path
 import chess
 import torch
 
-from nnue_model import FEATURE_SET_HALFKA_V2_HM_THREAT_LITE, SUPPORTED_FEATURE_SETS, active_features, feature_count_for
+from nnue_model import FEATURE_SET_HALFKA_V2_HM_FULL_THREATS, SUPPORTED_FEATURE_SETS, active_features, feature_count_for
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,7 +42,7 @@ def main() -> int:
         print("--max-features must be non-negative", file=sys.stderr)
         return 2
     if args.max_features == 0:
-        args.max_features = 160 if args.feature_set == FEATURE_SET_HALFKA_V2_HM_THREAT_LITE else 30
+        args.max_features = 160 if args.feature_set == FEATURE_SET_HALFKA_V2_HM_FULL_THREATS else 30
     if args.progress_every <= 0:
         print("--progress-every must be positive", file=sys.stderr)
         return 2

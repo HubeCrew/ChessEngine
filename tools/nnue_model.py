@@ -17,21 +17,20 @@ FORMAT_VERSION = FORMAT_VERSION_SF_LITE
 SUPPORTED_FORMAT_VERSIONS = (1, 2, 3, 4, 5)
 FEATURE_SET_HALFKP = "halfkp-v1"
 FEATURE_SET_HALFKA_V2_HM_LITE = "halfka-v2-hm-lite"
-FEATURE_SET_HALFKA_V2_HM_THREAT_LITE = "halfka-v2-hm-threat-lite"
-SUPPORTED_FEATURE_SETS = (FEATURE_SET_HALFKP, FEATURE_SET_HALFKA_V2_HM_LITE, FEATURE_SET_HALFKA_V2_HM_THREAT_LITE)
+FEATURE_SET_HALFKA_V2_HM_FULL_THREATS = "halfka-v2-hm-full-threats"
+SUPPORTED_FEATURE_SETS = (FEATURE_SET_HALFKP, FEATURE_SET_HALFKA_V2_HM_LITE, FEATURE_SET_HALFKA_V2_HM_FULL_THREATS)
 FEATURE_SET_IDS = {
     FEATURE_SET_HALFKP: 1,
     FEATURE_SET_HALFKA_V2_HM_LITE: 2,
-    FEATURE_SET_HALFKA_V2_HM_THREAT_LITE: 3,
+    FEATURE_SET_HALFKA_V2_HM_FULL_THREATS: 3,
 }
 FEATURE_SET_BY_ID = {value: key for key, value in FEATURE_SET_IDS.items()}
 HALFKP_FEATURE_COUNT = 64 * 10 * 64
 HALFKA_V2_HM_LITE_KING_BUCKETS = 32
 HALFKA_V2_HM_LITE_FEATURE_COUNT = HALFKA_V2_HM_LITE_KING_BUCKETS * 10 * 64
-HALFKA_V2_HM_THREAT_LITE_THREAT_FEATURE_COUNT = HALFKA_V2_HM_LITE_KING_BUCKETS * 5 * 5 * 64
-HALFKA_V2_HM_THREAT_LITE_FEATURE_COUNT = (
-    HALFKA_V2_HM_LITE_FEATURE_COUNT + HALFKA_V2_HM_THREAT_LITE_THREAT_FEATURE_COUNT
-)
+FULL_THREATS_FEATURE_COUNT = 79856
+HALFKA_V2_HM_FULL_THREATS_FEATURE_COUNT = HALFKA_V2_HM_LITE_FEATURE_COUNT + FULL_THREATS_FEATURE_COUNT
+FULL_THREATS_MAX_ACTIVE = 128
 FEATURE_COUNT = HALFKP_FEATURE_COUNT
 DEFAULT_HIDDEN_SIZE = 256
 DEFAULT_L2_SIZE = 64
@@ -48,6 +47,24 @@ PIECE_SLOT = {
     chess.BISHOP: 2,
     chess.ROOK: 3,
     chess.QUEEN: 4,
+}
+
+FULL_THREATS_PIECE_TYPES = (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING)
+FULL_THREATS_TARGET_MAP = {
+    chess.PAWN: {chess.PAWN: 0, chess.KNIGHT: 1, chess.ROOK: 2},
+    chess.KNIGHT: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.QUEEN: 4, chess.KING: 5},
+    chess.BISHOP: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.KING: 4},
+    chess.ROOK: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.KING: 4},
+    chess.QUEEN: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.QUEEN: 4, chess.KING: 5},
+    chess.KING: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3},
+}
+FULL_THREATS_VALID_TARGETS = {
+    chess.PAWN: 6,
+    chess.KNIGHT: 12,
+    chess.BISHOP: 10,
+    chess.ROOK: 10,
+    chess.QUEEN: 12,
+    chess.KING: 8,
 }
 
 
@@ -81,13 +98,72 @@ def halfka_v2_hm_oriented_square(square: chess.Square, perspective: chess.Color,
     return horizontal_mirror_square(oriented) if mirror else oriented
 
 
+def full_threats_attacks(attacker_slot: int, square: chess.Square) -> chess.SquareSet:
+    relative_color = chess.WHITE if attacker_slot < 6 else chess.BLACK
+    piece_type = FULL_THREATS_PIECE_TYPES[attacker_slot % 6]
+    board = chess.Board.empty()
+    board.set_piece_at(square, chess.Piece(piece_type, relative_color))
+    return board.attacks(square)
+
+
+def build_full_threats_tables() -> tuple[list[list[int]], list[int], list[int], list[list[list[int]]], list[list[list[int]]]]:
+    offsets = [[0 for _ in chess.SQUARES] for _ in range(12)]
+    attack_counts = [0 for _ in range(12)]
+    piece_offsets = [0 for _ in range(12)]
+    attack_ordinals = [[[0 for _ in chess.SQUARES] for _ in chess.SQUARES] for _ in range(12)]
+    pair_offsets = [[[FULL_THREATS_FEATURE_COUNT for _ in range(2)] for _ in range(12)] for _ in range(12)]
+
+    cumulative_offset = 0
+    for attacker_slot in range(12):
+        piece_type = FULL_THREATS_PIECE_TYPES[attacker_slot % 6]
+        cumulative_piece_offset = 0
+        for square in chess.SQUARES:
+            offsets[attacker_slot][square] = cumulative_piece_offset
+            attacks = full_threats_attacks(attacker_slot, square)
+            for target_square in chess.SQUARES:
+                lower_targets = chess.SquareSet(attacks).intersection(chess.SquareSet((1 << target_square) - 1))
+                attack_ordinals[attacker_slot][square][target_square] = len(lower_targets)
+            if piece_type != chess.PAWN or 1 <= chess.square_rank(square) <= 6:
+                cumulative_piece_offset += len(attacks)
+        attack_counts[attacker_slot] = cumulative_piece_offset
+        piece_offsets[attacker_slot] = cumulative_offset
+        cumulative_offset += FULL_THREATS_VALID_TARGETS[piece_type] * cumulative_piece_offset
+
+    if cumulative_offset != FULL_THREATS_FEATURE_COUNT:
+        raise RuntimeError(f"FullThreats dimensions mismatch: {cumulative_offset} != {FULL_THREATS_FEATURE_COUNT}")
+
+    for attacker_slot in range(12):
+        attacker_color = 0 if attacker_slot < 6 else 1
+        attacker_type = FULL_THREATS_PIECE_TYPES[attacker_slot % 6]
+        for victim_slot in range(12):
+            victim_color = 0 if victim_slot < 6 else 1
+            victim_type = FULL_THREATS_PIECE_TYPES[victim_slot % 6]
+            mapped = FULL_THREATS_TARGET_MAP[attacker_type].get(victim_type)
+            if mapped is None:
+                continue
+            enemy = attacker_color != victim_color
+            semi_excluded = attacker_type == victim_type and (enemy or attacker_type != chess.PAWN)
+            target_bucket = victim_color * (FULL_THREATS_VALID_TARGETS[attacker_type] // 2) + mapped
+            feature = piece_offsets[attacker_slot] + target_bucket * attack_counts[attacker_slot]
+            pair_offsets[attacker_slot][victim_slot][0] = feature
+            if not semi_excluded:
+                pair_offsets[attacker_slot][victim_slot][1] = feature
+
+    return offsets, attack_counts, piece_offsets, attack_ordinals, pair_offsets
+
+
+FULL_THREATS_OFFSETS, FULL_THREATS_ATTACK_COUNTS, FULL_THREATS_PIECE_OFFSETS, FULL_THREATS_ATTACK_ORDINALS, FULL_THREATS_PAIR_OFFSETS = (
+    build_full_threats_tables()
+)
+
+
 def feature_count_for(feature_set: str) -> int:
     if feature_set == FEATURE_SET_HALFKP:
         return HALFKP_FEATURE_COUNT
     if feature_set == FEATURE_SET_HALFKA_V2_HM_LITE:
         return HALFKA_V2_HM_LITE_FEATURE_COUNT
-    if feature_set == FEATURE_SET_HALFKA_V2_HM_THREAT_LITE:
-        return HALFKA_V2_HM_THREAT_LITE_FEATURE_COUNT
+    if feature_set == FEATURE_SET_HALFKA_V2_HM_FULL_THREATS:
+        return HALFKA_V2_HM_FULL_THREATS_FEATURE_COUNT
     raise ValueError(f"unsupported NNUE feature set: {feature_set}")
 
 
@@ -141,44 +217,63 @@ def feature_index(
     piece_square = perspective_square(square, perspective)
     if feature_set == FEATURE_SET_HALFKP:
         return ((king_square * 10 + piece_slot) * 64) + piece_square
-    if feature_set in (FEATURE_SET_HALFKA_V2_HM_LITE, FEATURE_SET_HALFKA_V2_HM_THREAT_LITE):
+    if feature_set in (FEATURE_SET_HALFKA_V2_HM_LITE, FEATURE_SET_HALFKA_V2_HM_FULL_THREATS):
         king_bucket, mirror = halfka_v2_hm_orientation(perspective_king, perspective)
         piece_square = halfka_v2_hm_oriented_square(square, perspective, mirror)
         return ((king_bucket * 10 + piece_slot) * 64) + piece_square
     raise ValueError(f"unsupported NNUE feature set: {feature_set}")
 
 
-def threat_feature_index(
+def full_threat_feature_index(
     perspective: chess.Color,
     perspective_king: chess.Square,
-    attacker_type: chess.PieceType,
-    victim_type: chess.PieceType,
+    attacker: chess.Piece,
+    attacker_square: chess.Square,
+    victim: chess.Piece,
     target_square: chess.Square,
 ) -> int | None:
-    attacker_slot = PIECE_SLOT.get(attacker_type)
-    victim_slot = PIECE_SLOT.get(victim_type)
-    if attacker_slot is None or victim_slot is None:
+    if attacker.piece_type not in FULL_THREATS_PIECE_TYPES or victim.piece_type not in FULL_THREATS_PIECE_TYPES:
         return None
+    attacker_relative_color = 0 if attacker.color == perspective else 1
+    victim_relative_color = 0 if victim.color == perspective else 1
+    attacker_slot = attacker_relative_color * 6 + (attacker.piece_type - 1)
+    victim_slot = victim_relative_color * 6 + (victim.piece_type - 1)
     king_bucket, mirror = halfka_v2_hm_orientation(perspective_king, perspective)
-    oriented_target = halfka_v2_hm_oriented_square(target_square, perspective, mirror)
-    return HALFKA_V2_HM_LITE_FEATURE_COUNT + (((king_bucket * 5 + attacker_slot) * 5 + victim_slot) * 64 + oriented_target)
+    del king_bucket
+    oriented_attacker_square = halfka_v2_hm_oriented_square(attacker_square, perspective, mirror)
+    oriented_target_square = halfka_v2_hm_oriented_square(target_square, perspective, mirror)
+    if attacker.piece_type == chess.PAWN and not (1 <= chess.square_rank(oriented_attacker_square) <= 6):
+        return None
+    if oriented_target_square not in full_threats_attacks(attacker_slot, oriented_attacker_square):
+        return None
+    direction_slot = 1 if oriented_attacker_square < oriented_target_square else 0
+    base = FULL_THREATS_PAIR_OFFSETS[attacker_slot][victim_slot][direction_slot]
+    if base >= FULL_THREATS_FEATURE_COUNT:
+        return None
+    index = base + FULL_THREATS_OFFSETS[attacker_slot][oriented_attacker_square]
+    index += FULL_THREATS_ATTACK_ORDINALS[attacker_slot][oriented_attacker_square][oriented_target_square]
+    return HALFKA_V2_HM_LITE_FEATURE_COUNT + index
 
 
-def active_threat_features(board: chess.Board, perspective: chess.Color, perspective_king: chess.Square) -> list[int]:
-    features: set[int] = set()
-    for target_square, victim in board.piece_map().items():
-        if victim.color == perspective or victim.piece_type == chess.KING:
-            continue
-        attacker_types: set[chess.PieceType] = set()
-        for attacker_square in board.attackers(perspective, target_square):
-            attacker = board.piece_at(attacker_square)
-            if attacker is None or attacker.piece_type == chess.KING:
+def active_full_threat_features(board: chess.Board, perspective: chess.Color, perspective_king: chess.Square) -> list[int]:
+    occupied = chess.SquareSet(board.occupied)
+    features: list[int] = []
+    for attacker_square, attacker in board.piece_map().items():
+        attacks = board.attacks(attacker_square) & occupied
+        for target_square in attacks:
+            victim = board.piece_at(target_square)
+            if victim is None:
                 continue
-            attacker_types.add(attacker.piece_type)
-        for attacker_type in attacker_types:
-            index = threat_feature_index(perspective, perspective_king, attacker_type, victim.piece_type, target_square)
+            index = full_threat_feature_index(
+                perspective,
+                perspective_king,
+                attacker,
+                attacker_square,
+                victim,
+                target_square,
+            )
             if index is not None:
-                features.add(index)
+                features.append(index)
     return sorted(features)
 
 
@@ -191,8 +286,8 @@ def active_features(board: chess.Board, perspective: chess.Color, feature_set: s
         index = feature_index(perspective, king, piece, square, feature_set)
         if index is not None:
             features.append(index)
-    if feature_set == FEATURE_SET_HALFKA_V2_HM_THREAT_LITE:
-        features.extend(active_threat_features(board, perspective, king))
+    if feature_set == FEATURE_SET_HALFKA_V2_HM_FULL_THREATS:
+        features.extend(active_full_threat_features(board, perspective, king))
     features.sort()
     return features
 

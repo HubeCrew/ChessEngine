@@ -57,8 +57,8 @@ bool feature_set_from_id(std::uint32_t identifier, FeatureSet& feature_set) {
         case static_cast<std::uint32_t>(FeatureSet::HalfKaV2HmLite):
             feature_set = FeatureSet::HalfKaV2HmLite;
             return true;
-        case static_cast<std::uint32_t>(FeatureSet::HalfKaV2HmThreatLite):
-            feature_set = FeatureSet::HalfKaV2HmThreatLite;
+        case static_cast<std::uint32_t>(FeatureSet::HalfKaV2HmFullThreats):
+            feature_set = FeatureSet::HalfKaV2HmFullThreats;
             return true;
         default:
             return false;
@@ -86,11 +86,112 @@ Square halfka_v2_hm_oriented_square(Square square, Color perspective, bool mirro
     return mirror ? horizontal_mirror_square(oriented) : oriented;
 }
 
-int threat_piece_slot(PieceType type) {
-    if (type == PieceType::King || type == PieceType::None) {
+constexpr std::array<int, 6> kFullThreatsValidTargets{{6, 12, 10, 10, 12, 8}};
+
+constexpr std::array<std::array<int, 6>, 6> kFullThreatsTargetMap{{
+    {{0, 1, -1, 2, -1, -1}},
+    {{0, 1, 2, 3, 4, 5}},
+    {{0, 1, 2, 3, -1, 4}},
+    {{0, 1, 2, 3, -1, 4}},
+    {{0, 1, 2, 3, 4, 5}},
+    {{0, 1, 2, 3, -1, -1}},
+}};
+
+int full_threat_piece_type_slot(PieceType type) {
+    if (type == PieceType::None) {
         return -1;
     }
     return static_cast<int>(type);
+}
+
+int full_threat_piece_slot(Piece piece, Color perspective) {
+    if (piece == Piece::None || type_of(piece) == PieceType::None) {
+        return -1;
+    }
+    const int relative_color = color_of(piece) == perspective ? 0 : 1;
+    return relative_color * 6 + full_threat_piece_type_slot(type_of(piece));
+}
+
+Bitboard full_threat_attacks(int attacker_slot, Square square, Bitboard occupancy) {
+    const Color relative_color = attacker_slot < 6 ? Color::White : Color::Black;
+    const PieceType type = static_cast<PieceType>(attacker_slot % 6);
+    return attacks::piece_attacks(type, relative_color, square, occupancy);
+}
+
+struct FullThreatTables {
+    std::array<std::array<std::uint32_t, kBoardSquareCount>, 12> offsets{};
+    std::array<std::uint32_t, 12> attack_counts{};
+    std::array<std::uint32_t, 12> piece_offsets{};
+    std::array<std::array<std::array<std::uint16_t, kBoardSquareCount>, kBoardSquareCount>, 12> attack_ordinals{};
+    std::array<std::array<std::array<std::uint32_t, 2>, 12>, 12> pair_offsets{};
+};
+
+FullThreatTables build_full_threat_tables() {
+    FullThreatTables tables{};
+    for (auto& attacker : tables.pair_offsets) {
+        for (auto& victim : attacker) {
+            victim.fill(kFullThreatsFeatureCount);
+        }
+    }
+
+    std::uint32_t cumulative_offset = 0;
+    for (int attacker_slot = 0; attacker_slot < 12; ++attacker_slot) {
+        const PieceType attacker_type = static_cast<PieceType>(attacker_slot % 6);
+        std::uint32_t cumulative_piece_offset = 0;
+        for (Square square = 0; square < kBoardSquareCount; ++square) {
+            tables.offsets[static_cast<std::size_t>(attacker_slot)][static_cast<std::size_t>(square)] = cumulative_piece_offset;
+            const Bitboard attacks = full_threat_attacks(attacker_slot, square, 0);
+            for (Square target = 0; target < kBoardSquareCount; ++target) {
+                const Bitboard lower_targets = target == 0 ? 0 : ((Bitboard{1} << target) - 1);
+                tables.attack_ordinals[static_cast<std::size_t>(attacker_slot)][static_cast<std::size_t>(square)]
+                                      [static_cast<std::size_t>(target)] = static_cast<std::uint16_t>(
+                                          __builtin_popcountll(attacks & lower_targets)
+                                      );
+            }
+            if (attacker_type != PieceType::Pawn || (rank_of(square) >= 1 && rank_of(square) <= 6)) {
+                cumulative_piece_offset += static_cast<std::uint32_t>(__builtin_popcountll(attacks));
+            }
+        }
+        tables.attack_counts[static_cast<std::size_t>(attacker_slot)] = cumulative_piece_offset;
+        tables.piece_offsets[static_cast<std::size_t>(attacker_slot)] = cumulative_offset;
+        cumulative_offset += static_cast<std::uint32_t>(kFullThreatsValidTargets[static_cast<std::size_t>(attacker_type)])
+                           * cumulative_piece_offset;
+    }
+
+    for (int attacker_slot = 0; attacker_slot < 12; ++attacker_slot) {
+        const int attacker_color = attacker_slot < 6 ? 0 : 1;
+        const PieceType attacker_type = static_cast<PieceType>(attacker_slot % 6);
+        for (int victim_slot = 0; victim_slot < 12; ++victim_slot) {
+            const int victim_color = victim_slot < 6 ? 0 : 1;
+            const PieceType victim_type = static_cast<PieceType>(victim_slot % 6);
+            const int mapped = kFullThreatsTargetMap[static_cast<std::size_t>(attacker_type)]
+                                                    [static_cast<std::size_t>(victim_type)];
+            if (mapped < 0) {
+                continue;
+            }
+            const bool enemy = attacker_color != victim_color;
+            const bool semi_excluded = attacker_type == victim_type && (enemy || attacker_type != PieceType::Pawn);
+            const int target_bucket =
+                victim_color * (kFullThreatsValidTargets[static_cast<std::size_t>(attacker_type)] / 2) + mapped;
+            const std::uint32_t feature =
+                tables.piece_offsets[static_cast<std::size_t>(attacker_slot)]
+                + static_cast<std::uint32_t>(target_bucket)
+                    * tables.attack_counts[static_cast<std::size_t>(attacker_slot)];
+            tables.pair_offsets[static_cast<std::size_t>(attacker_slot)][static_cast<std::size_t>(victim_slot)][0] =
+                feature;
+            if (!semi_excluded) {
+                tables.pair_offsets[static_cast<std::size_t>(attacker_slot)][static_cast<std::size_t>(victim_slot)][1] =
+                    feature;
+            }
+        }
+    }
+
+    return tables;
+}
+
+const FullThreatTables& full_threat_tables() {
+    static const FullThreatTables tables = build_full_threat_tables();
+    return tables;
 }
 
 }  // namespace
@@ -115,8 +216,8 @@ std::uint32_t feature_count(FeatureSet feature_set) {
             return kHalfKpFeatureCount;
         case FeatureSet::HalfKaV2HmLite:
             return kHalfKaV2HmLiteFeatureCount;
-        case FeatureSet::HalfKaV2HmThreatLite:
-            return kHalfKaV2HmThreatLiteFeatureCount;
+        case FeatureSet::HalfKaV2HmFullThreats:
+            return kHalfKaV2HmFullThreatsFeatureCount;
     }
     return 0;
 }
@@ -143,27 +244,46 @@ std::uint32_t feature_index(Color perspective, Square perspective_king, Piece pi
     return static_cast<std::uint32_t>(((orientation.king_bucket * 10 + piece_slot) * 64) + piece_square);
 }
 
-std::uint32_t threat_feature_index(
+std::uint32_t full_threat_feature_index(
     Color perspective,
     Square perspective_king,
-    PieceType attacker_type,
-    PieceType victim_type,
+    Piece attacker,
+    Square attacker_square,
+    Piece victim,
     Square target_square
 ) {
-    const int attacker_slot = threat_piece_slot(attacker_type);
-    const int victim_slot = threat_piece_slot(victim_type);
-    if (attacker_slot < 0 || victim_slot < 0 || !is_valid_square(perspective_king) || !is_valid_square(target_square)) {
-        return kHalfKaV2HmThreatLiteFeatureCount;
+    const int attacker_slot = full_threat_piece_slot(attacker, perspective);
+    const int victim_slot = full_threat_piece_slot(victim, perspective);
+    if (attacker_slot < 0 || victim_slot < 0 || !is_valid_square(perspective_king)
+        || !is_valid_square(attacker_square) || !is_valid_square(target_square)) {
+        return kHalfKaV2HmFullThreatsFeatureCount;
     }
     const HalfKaV2HmOrientation orientation = halfka_v2_hm_orientation(perspective_king, perspective);
+    const Square from = halfka_v2_hm_oriented_square(attacker_square, perspective, orientation.mirror);
     const Square target = halfka_v2_hm_oriented_square(target_square, perspective, orientation.mirror);
-    return kHalfKaV2HmLiteFeatureCount
-        + static_cast<std::uint32_t>(((orientation.king_bucket * 5 + attacker_slot) * 5 + victim_slot) * 64 + target);
+    if (type_of(attacker) == PieceType::Pawn && (rank_of(from) < 1 || rank_of(from) > 6)) {
+        return kHalfKaV2HmFullThreatsFeatureCount;
+    }
+    if ((full_threat_attacks(attacker_slot, from, 0) & square_bb(target)) == 0) {
+        return kHalfKaV2HmFullThreatsFeatureCount;
+    }
+    const auto& tables = full_threat_tables();
+    const int direction_slot = from < target ? 1 : 0;
+    const std::uint32_t base = tables.pair_offsets[static_cast<std::size_t>(attacker_slot)]
+                                                   [static_cast<std::size_t>(victim_slot)]
+                                                   [static_cast<std::size_t>(direction_slot)];
+    if (base >= kFullThreatsFeatureCount) {
+        return kHalfKaV2HmFullThreatsFeatureCount;
+    }
+    return kHalfKaV2HmLiteFeatureCount + base
+         + tables.offsets[static_cast<std::size_t>(attacker_slot)][static_cast<std::size_t>(from)]
+         + tables.attack_ordinals[static_cast<std::size_t>(attacker_slot)][static_cast<std::size_t>(from)]
+                                 [static_cast<std::size_t>(target)];
 }
 
 std::vector<std::uint32_t> active_feature_indices(const Board& board, Color perspective, FeatureSet feature_set) {
     std::vector<std::uint32_t> features;
-    features.reserve(feature_set == FeatureSet::HalfKaV2HmThreatLite ? 160 : 30);
+    features.reserve(feature_set == FeatureSet::HalfKaV2HmFullThreats ? 160 : 30);
     const std::uint32_t maximum_feature = feature_count(feature_set);
 
     const Square king = board.king_square(perspective);
@@ -181,37 +301,30 @@ std::vector<std::uint32_t> active_feature_indices(const Board& board, Color pers
             features.push_back(index);
         }
     }
-    if (feature_set == FeatureSet::HalfKaV2HmThreatLite) {
-        const Color enemy = opposite(perspective);
-        for (Square target = 0; target < kBoardSquareCount; ++target) {
-            const Piece victim = board.piece_at(target);
-            if (victim == Piece::None || color_of(victim) != enemy || type_of(victim) == PieceType::King) {
-                continue;
-            }
-            std::array<bool, 5> attacker_types{};
-            Bitboard attackers = attacks::attackers_to(board, target, perspective);
-            while (attackers != 0) {
-                const Square attacker_square = __builtin_ctzll(attackers);
-                attackers &= attackers - 1;
-                const Piece attacker = board.piece_at(attacker_square);
-                const int attacker_slot = threat_piece_slot(type_of(attacker));
-                if (attacker != Piece::None && attacker_slot >= 0) {
-                    attacker_types[static_cast<std::size_t>(attacker_slot)] = true;
-                }
-            }
-            for (int attacker_slot = 0; attacker_slot < 5; ++attacker_slot) {
-                if (!attacker_types[static_cast<std::size_t>(attacker_slot)]) {
-                    continue;
-                }
-                const std::uint32_t index = threat_feature_index(
-                    perspective,
-                    king,
-                    static_cast<PieceType>(attacker_slot),
-                    type_of(victim),
-                    target
-                );
-                if (index < maximum_feature) {
-                    features.push_back(index);
+    if (feature_set == FeatureSet::HalfKaV2HmFullThreats) {
+        const Bitboard occupied = board.occupancy();
+        for (Color color : {Color::White, Color::Black}) {
+            for (PieceType type : {PieceType::Pawn, PieceType::Knight, PieceType::Bishop, PieceType::Rook, PieceType::Queen, PieceType::King}) {
+                Bitboard attackers = board.pieces(color, type);
+                while (attackers != 0) {
+                    const Square from = __builtin_ctzll(attackers);
+                    attackers &= attackers - 1;
+                    Bitboard targets = attacks::piece_attacks(type, color, from, occupied) & occupied;
+                    while (targets != 0) {
+                        const Square target = __builtin_ctzll(targets);
+                        targets &= targets - 1;
+                        const std::uint32_t index = full_threat_feature_index(
+                            perspective,
+                            king,
+                            make_piece(color, type),
+                            from,
+                            board.piece_at(target),
+                            target
+                        );
+                        if (index < maximum_feature) {
+                            features.push_back(index);
+                        }
+                    }
                 }
             }
         }
