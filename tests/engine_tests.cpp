@@ -156,13 +156,17 @@ std::filesystem::path write_constant_halfka_sf_lite_nnue_model(
     std::ofstream output(path, std::ios::binary);
     const char magic[8] = {'C', 'E', 'N', 'N', 'U', 'E', '1', '\0'};
     output.write(magic, sizeof(magic));
-    write_binary_value(output, chess::engine::nnue::kFormatVersionV5);
+    write_binary_value(output, full_threats ? chess::engine::nnue::kFormatVersionV6 : chess::engine::nnue::kFormatVersionV5);
     write_binary_value(output, feature_count);
     write_binary_value(output, hidden_size);
     write_binary_value(output, chess::engine::nnue::kDefaultAccumulatorScale);
     write_binary_value(output, chess::engine::nnue::kDefaultOutputScale);
     const auto feature_set_id = static_cast<std::uint32_t>(feature_set);
     write_binary_value(output, feature_set_id);
+    if (full_threats) {
+        write_binary_value(output, chess::engine::nnue::kHalfKaV2HmLiteFeatureCount);
+        write_binary_value(output, chess::engine::nnue::kFullThreatsFeatureCount);
+    }
 
     const std::uint32_t l2_size = 1;
     const std::uint32_t l3_size = 1;
@@ -172,11 +176,30 @@ std::filesystem::path write_constant_halfka_sf_lite_nnue_model(
     const std::vector<float> hidden_bias(hidden_size, 0.0F);
     output.write(reinterpret_cast<const char*>(hidden_bias.data()), static_cast<std::streamsize>(hidden_bias.size() * sizeof(float)));
 
-    const std::vector<float> feature_weights(
-        static_cast<std::size_t>(feature_count) * hidden_size,
-        0.0F
-    );
-    output.write(reinterpret_cast<const char*>(feature_weights.data()), static_cast<std::streamsize>(feature_weights.size() * sizeof(float)));
+    if (full_threats) {
+        const std::vector<float> placement_feature_weights(
+            static_cast<std::size_t>(chess::engine::nnue::kHalfKaV2HmLiteFeatureCount) * hidden_size,
+            0.0F
+        );
+        const std::vector<float> threat_feature_weights(
+            static_cast<std::size_t>(chess::engine::nnue::kFullThreatsFeatureCount) * hidden_size,
+            0.0F
+        );
+        output.write(
+            reinterpret_cast<const char*>(placement_feature_weights.data()),
+            static_cast<std::streamsize>(placement_feature_weights.size() * sizeof(float))
+        );
+        output.write(
+            reinterpret_cast<const char*>(threat_feature_weights.data()),
+            static_cast<std::streamsize>(threat_feature_weights.size() * sizeof(float))
+        );
+    } else {
+        const std::vector<float> feature_weights(
+            static_cast<std::size_t>(feature_count) * hidden_size,
+            0.0F
+        );
+        output.write(reinterpret_cast<const char*>(feature_weights.data()), static_cast<std::streamsize>(feature_weights.size() * sizeof(float)));
+    }
 
     const std::vector<float> direct_weights(static_cast<std::size_t>(hidden_size) * 2, 0.0F);
     output.write(reinterpret_cast<const char*>(direct_weights.data()), static_cast<std::streamsize>(direct_weights.size() * sizeof(float)));
@@ -586,7 +609,7 @@ TEST_CASE("NNUE loader supports legacy models and v4/v5 SF-lite side-to-move per
     );
     REQUIRE(network.load(threat_v5_path, &error));
     REQUIRE(network.loaded());
-    REQUIRE(network.info().format_version == chess::engine::nnue::kFormatVersionV5);
+    REQUIRE(network.info().format_version == chess::engine::nnue::kFormatVersionV6);
     REQUIRE(network.info().feature_set == chess::engine::nnue::FeatureSet::HalfKaV2HmFullThreats);
     REQUIRE(network.info().feature_count == chess::engine::nnue::kHalfKaV2HmFullThreatsFeatureCount);
     REQUIRE(network.info().side_to_move_perspective);
@@ -624,7 +647,7 @@ TEST_CASE("NNUE loader rejects invalid model files without keeping partial state
         std::ofstream output(invalid_shape_path, std::ios::binary);
         const char magic[8] = {'C', 'E', 'N', 'N', 'U', 'E', '1', '\0'};
         output.write(magic, sizeof(magic));
-        write_binary_value(output, chess::engine::nnue::kFormatVersionV5);
+        write_binary_value(output, chess::engine::nnue::kFormatVersionV6);
         write_binary_value(output, chess::engine::nnue::kHalfKaV2HmFullThreatsFeatureCount);
         const std::uint32_t hidden_size = 2;
         write_binary_value(output, hidden_size);
@@ -632,6 +655,8 @@ TEST_CASE("NNUE loader rejects invalid model files without keeping partial state
         write_binary_value(output, chess::engine::nnue::kDefaultOutputScale);
         const auto feature_set_id = static_cast<std::uint32_t>(chess::engine::nnue::FeatureSet::HalfKaV2HmLite);
         write_binary_value(output, feature_set_id);
+        write_binary_value(output, chess::engine::nnue::kHalfKaV2HmLiteFeatureCount);
+        write_binary_value(output, chess::engine::nnue::kFullThreatsFeatureCount);
     }
     REQUIRE_FALSE(network.load(invalid_shape_path, &error));
     REQUIRE(network.loaded());

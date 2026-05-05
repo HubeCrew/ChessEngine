@@ -104,7 +104,17 @@ def evaluate_batch(
 ) -> list[float]:
     batch = make_batch(items, device)
     with torch.no_grad():
-        prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask, batch.side_to_move)
+        prediction = model(
+            batch.white,
+            batch.white_mask,
+            batch.black,
+            batch.black_mask,
+            batch.side_to_move,
+            batch.white_threat,
+            batch.white_threat_mask,
+            batch.black_threat,
+            batch.black_threat_mask,
+        )
     return [float(value) for value in prediction.detach().cpu()]
 
 

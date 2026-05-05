@@ -129,6 +129,9 @@ def main() -> int:
         if loaded_threat.feature_set != FEATURE_SET_HALFKA_V2_HM_FULL_THREATS or threat_metadata.get("test") != "threat":
             print("threat checkpoint feature-set metadata was not preserved", file=sys.stderr)
             return 1
+        if loaded_threat.format_version != 6:
+            print(f"expected v6 split-feature checkpoint, got v{loaded_threat.format_version}", file=sys.stderr)
+            return 1
         export_binary(threat_binary_path, loaded_threat)
         threat_binary = load_binary(threat_binary_path)
         if threat_binary.feature_set != FEATURE_SET_HALFKA_V2_HM_FULL_THREATS:

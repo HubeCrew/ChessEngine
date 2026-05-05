@@ -371,7 +371,8 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         && version != kFormatVersionV2
         && version != kFormatVersionV3
         && version != kFormatVersionV4
-        && version != kFormatVersionV5) {
+        && version != kFormatVersionV5
+        && version != kFormatVersionV6) {
         if (error != nullptr) {
             *error = "unsupported NNUE version";
         }
@@ -414,6 +415,25 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         return false;
     }
 
+    std::uint32_t placement_feature_count = feature_count;
+    std::uint32_t threat_feature_count = 0;
+    if (version >= kFormatVersionV6) {
+        if (!read_value(input, placement_feature_count) || !read_value(input, threat_feature_count)) {
+            if (error != nullptr) {
+                *error = "truncated NNUE feature-block header";
+            }
+            return false;
+        }
+        if (loaded_feature_set != FeatureSet::HalfKaV2HmFullThreats
+            || placement_feature_count != kHalfKaV2HmLiteFeatureCount
+            || threat_feature_count != kFullThreatsFeatureCount) {
+            if (error != nullptr) {
+                *error = "unsupported NNUE feature block shape";
+            }
+            return false;
+        }
+    }
+
     if (version >= kFormatVersionV4) {
         std::uint32_t l2_size = 0;
         std::uint32_t l3_size = 0;
@@ -432,6 +452,8 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
 
         std::vector<float> hidden_bias;
         std::vector<float> feature_weights;
+        std::vector<float> placement_feature_weights;
+        std::vector<float> threat_feature_weights;
         std::vector<float> direct_weights;
         float direct_bias = 0.0F;
         std::vector<float> fc0_weights;
@@ -441,8 +463,14 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         std::vector<float> fc2_weights;
         float fc2_bias = 0.0F;
         float side_to_move_weight = 0.0F;
-        if (!read_vector(input, hidden_bias, hidden_size)
-            || !read_vector(input, feature_weights, feature_weight_count)
+        bool ok = read_vector(input, hidden_bias, hidden_size);
+        if (ok && version >= kFormatVersionV6) {
+            ok = read_vector(input, placement_feature_weights, static_cast<std::size_t>(placement_feature_count) * hidden_size)
+              && read_vector(input, threat_feature_weights, static_cast<std::size_t>(threat_feature_count) * hidden_size);
+        } else if (ok) {
+            ok = read_vector(input, feature_weights, feature_weight_count);
+        }
+        if (!ok
             || !read_vector(input, direct_weights, static_cast<std::size_t>(hidden_size) * 2)
             || !read_value(input, direct_bias)
             || !read_vector(input, fc0_weights, static_cast<std::size_t>(l2_size) * hidden_size * 2)
@@ -468,6 +496,8 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
             true,
             l2_size,
             l3_size,
+            placement_feature_count,
+            threat_feature_count,
             loaded_feature_set,
             path,
         };
@@ -478,6 +508,8 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         side_to_move_weight_ = 0;
         hidden_bias_float_ = std::move(hidden_bias);
         feature_weights_float_ = std::move(feature_weights);
+        placement_feature_weights_float_ = std::move(placement_feature_weights);
+        threat_feature_weights_float_ = std::move(threat_feature_weights);
         direct_weights_ = std::move(direct_weights);
         direct_bias_ = direct_bias;
         fc0_weights_ = std::move(fc0_weights);
@@ -521,6 +553,8 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         false,
         0,
         0,
+        placement_feature_count,
+        threat_feature_count,
         loaded_feature_set,
         path,
     };
@@ -531,6 +565,8 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
     side_to_move_weight_ = side_to_move_weight;
     hidden_bias_float_.clear();
     feature_weights_float_.clear();
+    placement_feature_weights_float_.clear();
+    threat_feature_weights_float_.clear();
     direct_weights_.clear();
     direct_bias_ = 0.0F;
     fc0_weights_.clear();
@@ -552,6 +588,8 @@ void Network::clear() {
     side_to_move_weight_ = 0;
     hidden_bias_float_.clear();
     feature_weights_float_.clear();
+    placement_feature_weights_float_.clear();
+    threat_feature_weights_float_.clear();
     direct_weights_.clear();
     direct_bias_ = 0.0F;
     fc0_weights_.clear();
@@ -590,9 +628,19 @@ std::vector<int> Network::accumulator(const Board& board, Color perspective) con
 std::vector<float> Network::accumulator_float(const Board& board, Color perspective) const {
     std::vector<float> values = hidden_bias_float_;
     for (const std::uint32_t feature : active_feature_indices(board, perspective, info_.feature_set)) {
-        const std::size_t offset = static_cast<std::size_t>(feature) * info_.hidden_size;
+        const std::vector<float>* weights = &feature_weights_float_;
+        std::uint32_t weight_feature = feature;
+        if (info_.feature_set == FeatureSet::HalfKaV2HmFullThreats) {
+            if (feature < info_.placement_feature_count) {
+                weights = &placement_feature_weights_float_;
+            } else {
+                weights = &threat_feature_weights_float_;
+                weight_feature = feature - info_.placement_feature_count;
+            }
+        }
+        const std::size_t offset = static_cast<std::size_t>(weight_feature) * info_.hidden_size;
         for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
-            values[index] += feature_weights_float_[offset + index];
+            values[index] += (*weights)[offset + index];
         }
     }
     return values;

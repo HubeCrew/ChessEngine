@@ -15,6 +15,7 @@ constexpr std::uint32_t kFormatVersionV2 = 2;
 constexpr std::uint32_t kFormatVersionV3 = 3;
 constexpr std::uint32_t kFormatVersionV4 = 4;
 constexpr std::uint32_t kFormatVersionV5 = 5;
+constexpr std::uint32_t kFormatVersionV6 = 6;
 constexpr std::uint32_t kFormatVersion = kFormatVersionV4;
 constexpr std::uint32_t kHalfKpFeatureCount = 64 * 10 * 64;
 constexpr std::uint32_t kHalfKaV2HmLiteKingBuckets = 32;
@@ -45,6 +46,8 @@ struct ModelInfo {
     bool sf_lite = false;
     std::uint32_t l2_size = 0;
     std::uint32_t l3_size = 0;
+    std::uint32_t placement_feature_count = 0;
+    std::uint32_t threat_feature_count = 0;
     FeatureSet feature_set = FeatureSet::HalfKp;
     std::filesystem::path path;
 };
@@ -91,6 +94,8 @@ private:
     std::int32_t side_to_move_weight_ = 0;
     std::vector<float> hidden_bias_float_;
     std::vector<float> feature_weights_float_;
+    std::vector<float> placement_feature_weights_float_;
+    std::vector<float> threat_feature_weights_float_;
     std::vector<float> direct_weights_;
     float direct_bias_ = 0.0F;
     std::vector<float> fc0_weights_;

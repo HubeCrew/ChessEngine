@@ -13,8 +13,9 @@ FORMAT_VERSION_FIXED_PERSPECTIVE = 2
 FORMAT_VERSION_SIDE_TO_MOVE_PERSPECTIVE = 3
 FORMAT_VERSION_SF_LITE = 4
 FORMAT_VERSION_FEATURE_SET = 5
+FORMAT_VERSION_SPLIT_FEATURES = 6
 FORMAT_VERSION = FORMAT_VERSION_SF_LITE
-SUPPORTED_FORMAT_VERSIONS = (1, 2, 3, 4, 5)
+SUPPORTED_FORMAT_VERSIONS = (1, 2, 3, 4, 5, 6)
 FEATURE_SET_HALFKP = "halfkp-v1"
 FEATURE_SET_HALFKA_V2_HM_LITE = "halfka-v2-hm-lite"
 FEATURE_SET_HALFKA_V2_HM_FULL_THREATS = "halfka-v2-hm-full-threats"
@@ -199,6 +200,10 @@ def normalize_feature_set(feature_set: str | None) -> str:
     return feature_set
 
 
+def uses_split_feature_blocks(feature_set: str) -> bool:
+    return feature_set == FEATURE_SET_HALFKA_V2_HM_FULL_THREATS
+
+
 def feature_index(
     perspective: chess.Color,
     perspective_king: chess.Square,
@@ -273,23 +278,34 @@ def active_full_threat_features(board: chess.Board, perspective: chess.Color, pe
                 target_square,
             )
             if index is not None:
-                features.append(index)
+                features.append(index - HALFKA_V2_HM_LITE_FEATURE_COUNT)
     return sorted(features)
 
 
-def active_features(board: chess.Board, perspective: chess.Color, feature_set: str = FEATURE_SET_HALFKP) -> list[int]:
+def active_feature_blocks(
+    board: chess.Board,
+    perspective: chess.Color,
+    feature_set: str = FEATURE_SET_HALFKP,
+) -> tuple[list[int], list[int]]:
     king = board.king(perspective)
     if king is None:
-        return []
-    features: list[int] = []
+        return [], []
+    placement: list[int] = []
     for square, piece in board.piece_map().items():
         index = feature_index(perspective, king, piece, square, feature_set)
         if index is not None:
-            features.append(index)
+            placement.append(index)
+    placement.sort()
     if feature_set == FEATURE_SET_HALFKA_V2_HM_FULL_THREATS:
-        features.extend(active_full_threat_features(board, perspective, king))
-    features.sort()
-    return features
+        return placement, active_full_threat_features(board, perspective, king)
+    return placement, []
+
+
+def active_features(board: chess.Board, perspective: chess.Color, feature_set: str = FEATURE_SET_HALFKP) -> list[int]:
+    placement, threats = active_feature_blocks(board, perspective, feature_set)
+    if feature_set == FEATURE_SET_HALFKA_V2_HM_FULL_THREATS:
+        return placement + [HALFKA_V2_HM_LITE_FEATURE_COUNT + index for index in threats]
+    return placement
 
 
 @dataclass(frozen=True)
@@ -310,6 +326,8 @@ class BinaryNnue:
     l3_size: int = 0
     hidden_bias_float: torch.Tensor | None = None
     feature_weights_float: torch.Tensor | None = None
+    placement_feature_weights_float: torch.Tensor | None = None
+    threat_feature_weights_float: torch.Tensor | None = None
     direct_weights: torch.Tensor | None = None
     direct_bias: float = 0.0
     fc0_weight: torch.Tensor | None = None
@@ -323,6 +341,21 @@ class BinaryNnue:
     def accumulator(self, features: list[int]) -> torch.Tensor:
         if self.architecture == ARCHITECTURE_SF_LITE:
             assert self.hidden_bias_float is not None
+            if self.feature_set == FEATURE_SET_HALFKA_V2_HM_FULL_THREATS:
+                assert self.placement_feature_weights_float is not None
+                assert self.threat_feature_weights_float is not None
+                values = self.hidden_bias_float.clone()
+                placement = [feature for feature in features if feature < HALFKA_V2_HM_LITE_FEATURE_COUNT]
+                threats = [
+                    feature - HALFKA_V2_HM_LITE_FEATURE_COUNT
+                    for feature in features
+                    if HALFKA_V2_HM_LITE_FEATURE_COUNT <= feature < HALFKA_V2_HM_FULL_THREATS_FEATURE_COUNT
+                ]
+                if placement:
+                    values += self.placement_feature_weights_float[torch.tensor(placement, dtype=torch.long)].sum(dim=0)
+                if threats:
+                    values += self.threat_feature_weights_float[torch.tensor(threats, dtype=torch.long)].sum(dim=0)
+                return values
             assert self.feature_weights_float is not None
             if features:
                 indices = torch.tensor(features, dtype=torch.long)
@@ -382,6 +415,10 @@ class Batch:
     black_mask: torch.Tensor
     side_to_move: torch.Tensor
     target: torch.Tensor
+    white_threat: torch.Tensor | None = None
+    white_threat_mask: torch.Tensor | None = None
+    black_threat: torch.Tensor | None = None
+    black_threat_mask: torch.Tensor | None = None
 
 
 class NnueModel(nn.Module):
@@ -413,8 +450,14 @@ class NnueModel(nn.Module):
         self.l3_size = l3_size
         self.feature_set = feature_set
         self.feature_count = feature_count_for(feature_set)
+        self.split_feature_blocks = uses_split_feature_blocks(feature_set)
+        self.placement_feature_count = HALFKA_V2_HM_LITE_FEATURE_COUNT if self.split_feature_blocks else self.feature_count
+        self.threat_feature_count = FULL_THREATS_FEATURE_COUNT if self.split_feature_blocks else 0
         if architecture == ARCHITECTURE_SF_LITE:
-            self.format_version = FORMAT_VERSION_FEATURE_SET if feature_set != FEATURE_SET_HALFKP else FORMAT_VERSION_SF_LITE
+            if self.split_feature_blocks:
+                self.format_version = FORMAT_VERSION_SPLIT_FEATURES
+            else:
+                self.format_version = FORMAT_VERSION_FEATURE_SET if feature_set != FEATURE_SET_HALFKP else FORMAT_VERSION_SF_LITE
         else:
             self.format_version = (
                 FORMAT_VERSION_SIDE_TO_MOVE_PERSPECTIVE
@@ -423,7 +466,11 @@ class NnueModel(nn.Module):
             )
             if feature_set != FEATURE_SET_HALFKP:
                 self.format_version = FORMAT_VERSION_FEATURE_SET
-        self.feature = nn.Embedding(self.feature_count, hidden_size)
+        if self.split_feature_blocks:
+            self.placement_feature = nn.Embedding(self.placement_feature_count, hidden_size)
+            self.threat_feature = nn.Embedding(self.threat_feature_count, hidden_size)
+        else:
+            self.feature = nn.Embedding(self.feature_count, hidden_size)
         self.hidden_bias = nn.Parameter(torch.zeros(hidden_size))
         if architecture == ARCHITECTURE_SF_LITE:
             self.direct = nn.Linear(hidden_size * 2, 1)
@@ -433,7 +480,11 @@ class NnueModel(nn.Module):
         else:
             self.output = nn.Linear(hidden_size * 2, 1)
         self.side_to_move_weight = nn.Parameter(torch.zeros(1))
-        nn.init.normal_(self.feature.weight, mean=0.0, std=0.01)
+        if self.split_feature_blocks:
+            nn.init.normal_(self.placement_feature.weight, mean=0.0, std=0.01)
+            nn.init.normal_(self.threat_feature.weight, mean=0.0, std=0.01)
+        else:
+            nn.init.normal_(self.feature.weight, mean=0.0, std=0.01)
         if architecture == ARCHITECTURE_SF_LITE:
             nn.init.normal_(self.direct.weight, mean=0.0, std=0.005)
             nn.init.zeros_(self.direct.bias)
@@ -447,7 +498,23 @@ class NnueModel(nn.Module):
             nn.init.normal_(self.output.weight, mean=0.0, std=0.01)
             nn.init.zeros_(self.output.bias)
 
-    def accumulator(self, indices: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    def accumulator(
+        self,
+        indices: torch.Tensor,
+        mask: torch.Tensor,
+        threat_indices: torch.Tensor | None = None,
+        threat_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if self.split_feature_blocks:
+            if threat_indices is None or threat_mask is None:
+                placement_mask = mask * (indices < self.placement_feature_count).to(mask.dtype)
+                threat_indices = torch.clamp(indices - self.placement_feature_count, min=0)
+                threat_mask = mask * (indices >= self.placement_feature_count).to(mask.dtype)
+            else:
+                placement_mask = mask
+            placement = (self.placement_feature(indices.clamp(max=self.placement_feature_count - 1)) * placement_mask.unsqueeze(-1)).sum(dim=1)
+            threats = (self.threat_feature(threat_indices.clamp(max=self.threat_feature_count - 1)) * threat_mask.unsqueeze(-1)).sum(dim=1)
+            return placement + threats + self.hidden_bias
         embedded = self.feature(indices)
         masked = embedded * mask.unsqueeze(-1)
         return masked.sum(dim=1) + self.hidden_bias
@@ -459,9 +526,13 @@ class NnueModel(nn.Module):
         black: torch.Tensor,
         black_mask: torch.Tensor,
         side_to_move: torch.Tensor,
+        white_threat: torch.Tensor | None = None,
+        white_threat_mask: torch.Tensor | None = None,
+        black_threat: torch.Tensor | None = None,
+        black_threat_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        white_acc = torch.clamp(self.accumulator(white, white_mask), 0.0, 1.0)
-        black_acc = torch.clamp(self.accumulator(black, black_mask), 0.0, 1.0)
+        white_acc = torch.clamp(self.accumulator(white, white_mask, white_threat, white_threat_mask), 0.0, 1.0)
+        black_acc = torch.clamp(self.accumulator(black, black_mask, black_threat, black_threat_mask), 0.0, 1.0)
         if self.perspective_mode == "side-to-move":
             white_to_move = (side_to_move >= 0).unsqueeze(1)
             stm_acc = torch.where(white_to_move, white_acc, black_acc)
@@ -524,6 +595,8 @@ def save_checkpoint(path: Path, model: NnueModel, metadata: dict[str, object]) -
             "format_version": model.format_version,
             "feature_set": model.feature_set,
             "feature_count": model.feature_count,
+            "placement_feature_count": model.placement_feature_count,
+            "threat_feature_count": model.threat_feature_count,
             "perspective_mode": model.perspective_mode,
             "architecture": model.architecture,
             "l2_size": model.l2_size,
@@ -563,6 +636,13 @@ def load_checkpoint(path: Path, device: torch.device) -> tuple[NnueModel, dict[s
             f"checkpoint feature count {stored_feature_count} does not match "
             f"{feature_set} feature count {model.feature_count}"
         )
+    stored_placement_feature_count = int(checkpoint.get("placement_feature_count", model.placement_feature_count))
+    stored_threat_feature_count = int(checkpoint.get("threat_feature_count", model.threat_feature_count))
+    if stored_placement_feature_count != model.placement_feature_count or stored_threat_feature_count != model.threat_feature_count:
+        raise ValueError(
+            f"checkpoint feature block counts placement={stored_placement_feature_count} threat={stored_threat_feature_count} "
+            f"do not match expected placement={model.placement_feature_count} threat={model.threat_feature_count}"
+        )
     state_dict = checkpoint["state_dict"]
     if "side_to_move_weight" not in state_dict:
         state_dict = dict(state_dict)
@@ -596,6 +676,19 @@ def load_binary(path: Path) -> BinaryNnue:
             raise ValueError(
                 f"unsupported feature count {feature_count} for {feature_set}; expected {expected_feature_count}"
             )
+        placement_feature_count = feature_count
+        threat_feature_count = 0
+        if version >= FORMAT_VERSION_SPLIT_FEATURES:
+            block_header = handle.read(8)
+            if len(block_header) != 8:
+                raise ValueError(f"truncated NNUE feature-block header in {path}")
+            placement_feature_count, threat_feature_count = struct.unpack("<II", block_header)
+            if feature_set != FEATURE_SET_HALFKA_V2_HM_FULL_THREATS:
+                raise ValueError(f"split feature blocks are unsupported for {feature_set}")
+            if placement_feature_count != HALFKA_V2_HM_LITE_FEATURE_COUNT or threat_feature_count != FULL_THREATS_FEATURE_COUNT:
+                raise ValueError(
+                    f"unsupported feature block counts placement={placement_feature_count} threat={threat_feature_count}"
+                )
         if version >= FORMAT_VERSION_SF_LITE:
             dense_header = handle.read(8)
             if len(dense_header) != 8:
@@ -609,7 +702,20 @@ def load_binary(path: Path) -> BinaryNnue:
                 return torch.frombuffer(bytearray(data), dtype=torch.float32).clone().reshape(shape)
 
             hidden_bias_float = read_float_tensor(hidden_size, (hidden_size,))
-            feature_weights_float = read_float_tensor(feature_count * hidden_size, (feature_count, hidden_size))
+            placement_feature_weights_float = None
+            threat_feature_weights_float = None
+            if version >= FORMAT_VERSION_SPLIT_FEATURES:
+                placement_feature_weights_float = read_float_tensor(
+                    placement_feature_count * hidden_size,
+                    (placement_feature_count, hidden_size),
+                )
+                threat_feature_weights_float = read_float_tensor(
+                    threat_feature_count * hidden_size,
+                    (threat_feature_count, hidden_size),
+                )
+                feature_weights_float = torch.empty((0, 0), dtype=torch.float32)
+            else:
+                feature_weights_float = read_float_tensor(feature_count * hidden_size, (feature_count, hidden_size))
             direct_weights = read_float_tensor(hidden_size * 2, (hidden_size * 2,))
             direct_bias_data = handle.read(4)
             if len(direct_bias_data) != 4:
@@ -642,6 +748,8 @@ def load_binary(path: Path) -> BinaryNnue:
                 l3_size=l3_size,
                 hidden_bias_float=hidden_bias_float,
                 feature_weights_float=feature_weights_float,
+                placement_feature_weights_float=placement_feature_weights_float,
+                threat_feature_weights_float=threat_feature_weights_float,
                 direct_weights=direct_weights,
                 direct_bias=direct_bias,
                 fc0_weight=fc0_weight,
@@ -700,7 +808,17 @@ def evaluate_checkpoint_white_perspective(model: NnueModel, board: chess.Board, 
     batch = make_batch([item], device)
     with torch.no_grad():
         return float(
-            model(batch.white, batch.white_mask, batch.black, batch.black_mask, batch.side_to_move)[0].detach().cpu()
+            model(
+                batch.white,
+                batch.white_mask,
+                batch.black,
+                batch.black_mask,
+                batch.side_to_move,
+                batch.white_threat,
+                batch.white_threat_mask,
+                batch.black_threat,
+                batch.black_threat_mask,
+            )[0].detach().cpu()
         )
 
 
@@ -714,7 +832,11 @@ def export_binary(
     if model.architecture == ARCHITECTURE_SF_LITE:
         with torch.no_grad():
             hidden_bias = model.hidden_bias.detach().cpu().to(torch.float32).contiguous()
-            feature_weights = model.feature.weight.detach().cpu().to(torch.float32).contiguous()
+            if model.split_feature_blocks:
+                placement_feature_weights = model.placement_feature.weight.detach().cpu().to(torch.float32).contiguous()
+                threat_feature_weights = model.threat_feature.weight.detach().cpu().to(torch.float32).contiguous()
+            else:
+                feature_weights = model.feature.weight.detach().cpu().to(torch.float32).contiguous()
             direct_weights = model.direct.weight.detach().cpu().squeeze(0).to(torch.float32).contiguous()
             direct_bias = float(model.direct.bias.detach().cpu()[0])
             fc0_weight = model.fc0.weight.detach().cpu().to(torch.float32).contiguous()
@@ -738,9 +860,15 @@ def export_binary(
             )
             if model.format_version >= FORMAT_VERSION_FEATURE_SET:
                 handle.write(struct.pack("<I", feature_set_id(model.feature_set)))
+            if model.format_version >= FORMAT_VERSION_SPLIT_FEATURES:
+                handle.write(struct.pack("<II", model.placement_feature_count, model.threat_feature_count))
             handle.write(struct.pack("<II", model.l2_size, model.l3_size))
             handle.write(hidden_bias.numpy().tobytes())
-            handle.write(feature_weights.numpy().tobytes())
+            if model.split_feature_blocks:
+                handle.write(placement_feature_weights.numpy().tobytes())
+                handle.write(threat_feature_weights.numpy().tobytes())
+            else:
+                handle.write(feature_weights.numpy().tobytes())
             handle.write(direct_weights.numpy().tobytes())
             handle.write(struct.pack("<f", direct_bias))
             handle.write(fc0_weight.numpy().tobytes())

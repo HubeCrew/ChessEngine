@@ -9,7 +9,14 @@ from pathlib import Path
 import chess
 import torch
 
-from nnue_model import FEATURE_SET_HALFKA_V2_HM_FULL_THREATS, SUPPORTED_FEATURE_SETS, active_features, feature_count_for
+from nnue_model import (
+    FEATURE_SET_HALFKA_V2_HM_FULL_THREATS,
+    FULL_THREATS_MAX_ACTIVE,
+    SUPPORTED_FEATURE_SETS,
+    active_feature_blocks,
+    active_features,
+    feature_count_for,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,16 +55,23 @@ def main() -> int:
         return 2
 
     total_input = count_rows(args.dataset)
+    split_blocks = args.feature_set == FEATURE_SET_HALFKA_V2_HM_FULL_THREATS
+    max_placement_features = 32 if split_blocks else args.max_features
+    max_threat_features = FULL_THREATS_MAX_ACTIVE if split_blocks else 0
     print(
         f"[cache] allocating rows={total_input} max_features={args.max_features} "
         f"feature_set={args.feature_set} feature_count={feature_count_for(args.feature_set)} dataset={args.dataset}",
         file=sys.stderr,
         flush=True,
     )
-    white_indices = torch.zeros((total_input, args.max_features), dtype=torch.int32)
-    black_indices = torch.zeros((total_input, args.max_features), dtype=torch.int32)
+    white_indices = torch.zeros((total_input, max_placement_features), dtype=torch.int32)
+    black_indices = torch.zeros((total_input, max_placement_features), dtype=torch.int32)
     white_lengths = torch.zeros(total_input, dtype=torch.int16)
     black_lengths = torch.zeros(total_input, dtype=torch.int16)
+    white_threat_indices = torch.zeros((total_input, max_threat_features), dtype=torch.int32) if split_blocks else None
+    black_threat_indices = torch.zeros((total_input, max_threat_features), dtype=torch.int32) if split_blocks else None
+    white_threat_lengths = torch.zeros(total_input, dtype=torch.int16) if split_blocks else None
+    black_threat_lengths = torch.zeros(total_input, dtype=torch.int16) if split_blocks else None
     side_to_move = torch.empty(total_input, dtype=torch.int8)
     target = torch.empty(total_input, dtype=torch.float32)
 
@@ -70,12 +84,23 @@ def main() -> int:
             try:
                 board = chess.Board(row["fen"])
                 score = max(-args.clip_cp, min(args.clip_cp, float(row["score_cp"])))
-                white = active_features(board, chess.WHITE, args.feature_set)
-                black = active_features(board, chess.BLACK, args.feature_set)
+                if split_blocks:
+                    white, white_threat = active_feature_blocks(board, chess.WHITE, args.feature_set)
+                    black, black_threat = active_feature_blocks(board, chess.BLACK, args.feature_set)
+                else:
+                    white = active_features(board, chess.WHITE, args.feature_set)
+                    black = active_features(board, chess.BLACK, args.feature_set)
+                    white_threat = []
+                    black_threat = []
             except (KeyError, ValueError):
                 invalid += 1
                 continue
-            if len(white) > args.max_features or len(black) > args.max_features:
+            if (
+                len(white) > max_placement_features
+                or len(black) > max_placement_features
+                or len(white_threat) > max_threat_features
+                or len(black_threat) > max_threat_features
+            ):
                 too_wide += 1
                 continue
             if white:
@@ -84,6 +109,17 @@ def main() -> int:
                 black_indices[written, : len(black)] = torch.tensor(black, dtype=torch.int32)
             white_lengths[written] = len(white)
             black_lengths[written] = len(black)
+            if split_blocks:
+                assert white_threat_indices is not None
+                assert black_threat_indices is not None
+                assert white_threat_lengths is not None
+                assert black_threat_lengths is not None
+                if white_threat:
+                    white_threat_indices[written, : len(white_threat)] = torch.tensor(white_threat, dtype=torch.int32)
+                if black_threat:
+                    black_threat_indices[written, : len(black_threat)] = torch.tensor(black_threat, dtype=torch.int32)
+                white_threat_lengths[written] = len(white_threat)
+                black_threat_lengths[written] = len(black_threat)
             side_to_move[written] = 1 if board.turn == chess.WHITE else -1
             target[written] = score
             written += 1
@@ -100,12 +136,14 @@ def main() -> int:
         return 1
 
     cache = {
-        "format_version": 3,
+        "format_version": 4 if split_blocks else 3,
         "feature_set": args.feature_set,
         "feature_count": feature_count_for(args.feature_set),
         "dataset": str(args.dataset),
         "rows": written,
         "max_features": args.max_features,
+        "max_placement_features": max_placement_features,
+        "max_threat_features": max_threat_features,
         "clip_cp": args.clip_cp,
         "white_indices": white_indices[:written].contiguous(),
         "white_lengths": white_lengths[:written].contiguous(),
@@ -114,6 +152,19 @@ def main() -> int:
         "side_to_move": side_to_move[:written].contiguous(),
         "target": target[:written].contiguous(),
     }
+    if split_blocks:
+        assert white_threat_indices is not None
+        assert black_threat_indices is not None
+        assert white_threat_lengths is not None
+        assert black_threat_lengths is not None
+        cache.update(
+            {
+                "white_threat_indices": white_threat_indices[:written].contiguous(),
+                "white_threat_lengths": white_threat_lengths[:written].contiguous(),
+                "black_threat_indices": black_threat_indices[:written].contiguous(),
+                "black_threat_lengths": black_threat_lengths[:written].contiguous(),
+            }
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     print(f"[cache] saving output={args.output} rows={written}", file=sys.stderr, flush=True)
     torch.save(cache, args.output)

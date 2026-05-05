@@ -27,6 +27,7 @@ from nnue_model import (
     SUPPORTED_FEATURE_SETS,
     Batch,
     NnueModel,
+    active_feature_blocks,
     active_features,
     export_binary,
     feature_count_for,
@@ -67,7 +68,7 @@ class CachedNnueDataset(Dataset):
         self.path = path
         self.cache = torch.load(path, map_location="cpu", weights_only=True)
         format_version = int(self.cache.get("format_version", 0))
-        if format_version not in (2, 3):
+        if format_version not in (2, 3, 4):
             raise ValueError(f"unsupported feature cache format in {path}")
         self.feature_set = str(self.cache.get("feature_set", FEATURE_SET_HALFKP))
         if self.feature_set not in SUPPORTED_FEATURE_SETS:
@@ -79,7 +80,10 @@ class CachedNnueDataset(Dataset):
                 f"feature cache {path} feature_count={self.feature_count} does not match "
                 f"{self.feature_set} expected={expected_feature_count}"
             )
-        required = ("white_indices", "white_lengths", "black_indices", "black_lengths", "side_to_move", "target")
+        self.split_feature_blocks = format_version >= 4
+        required = ["white_indices", "white_lengths", "black_indices", "black_lengths", "side_to_move", "target"]
+        if self.split_feature_blocks:
+            required.extend(["white_threat_indices", "white_threat_lengths", "black_threat_indices", "black_threat_lengths"])
         for key in required:
             if key not in self.cache:
                 raise ValueError(f"feature cache {path} is missing {key}")
@@ -88,7 +92,7 @@ class CachedNnueDataset(Dataset):
             raise ValueError(f"feature cache {path} is empty")
         if row_limit > 0:
             rows = min(rows, row_limit)
-            for key in ("white_indices", "white_lengths", "black_indices", "black_lengths", "side_to_move", "target"):
+            for key in required:
                 self.cache[key] = self.cache[key][:rows].contiguous()
         print(
             f"[train] loaded feature_cache={path} rows={rows} "
@@ -100,7 +104,20 @@ class CachedNnueDataset(Dataset):
     def __len__(self) -> int:
         return int(self.cache["target"].numel())
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, ...]:
+        if self.split_feature_blocks:
+            return (
+                self.cache["white_indices"][index],
+                self.cache["white_lengths"][index],
+                self.cache["white_threat_indices"][index],
+                self.cache["white_threat_lengths"][index],
+                self.cache["black_indices"][index],
+                self.cache["black_lengths"][index],
+                self.cache["black_threat_indices"][index],
+                self.cache["black_threat_lengths"][index],
+                self.cache["side_to_move"][index],
+                self.cache["target"][index],
+            )
         return (
             self.cache["white_indices"][index],
             self.cache["white_lengths"][index],
@@ -292,6 +309,8 @@ def training_checkpoint(
         "format_version": model.format_version,
         "feature_set": model.feature_set,
         "feature_count": model.feature_count,
+        "placement_feature_count": model.placement_feature_count,
+        "threat_feature_count": model.threat_feature_count,
         "perspective_mode": model.perspective_mode,
         "architecture": model.architecture,
         "l2_size": model.l2_size,
@@ -435,18 +454,36 @@ def collate_csv(items: list[tuple[list[int], list[int], int, float]], device: to
     return make_batch(items, device)
 
 
-def collate_cache(items: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]], device: torch.device) -> Batch:
+def collate_cache(items: list[tuple[torch.Tensor, ...]], device: torch.device) -> Batch:
     white_indices = torch.stack([item[0] for item in items]).to(device=device, dtype=torch.long)
     white_lengths = torch.stack([item[1] for item in items]).to(device=device, dtype=torch.long)
-    black_indices = torch.stack([item[2] for item in items]).to(device=device, dtype=torch.long)
-    black_lengths = torch.stack([item[3] for item in items]).to(device=device, dtype=torch.long)
-    side_to_move = torch.stack([item[4] for item in items]).to(device=device, dtype=torch.float32)
-    target = torch.stack([item[5] for item in items]).to(device=device, dtype=torch.float32)
+    split_blocks = len(items[0]) == 10
+    if split_blocks:
+        white_threat_indices = torch.stack([item[2] for item in items]).to(device=device, dtype=torch.long)
+        white_threat_lengths = torch.stack([item[3] for item in items]).to(device=device, dtype=torch.long)
+        black_indices = torch.stack([item[4] for item in items]).to(device=device, dtype=torch.long)
+        black_lengths = torch.stack([item[5] for item in items]).to(device=device, dtype=torch.long)
+        black_threat_indices = torch.stack([item[6] for item in items]).to(device=device, dtype=torch.long)
+        black_threat_lengths = torch.stack([item[7] for item in items]).to(device=device, dtype=torch.long)
+        side_to_move = torch.stack([item[8] for item in items]).to(device=device, dtype=torch.float32)
+        target = torch.stack([item[9] for item in items]).to(device=device, dtype=torch.float32)
+    else:
+        black_indices = torch.stack([item[2] for item in items]).to(device=device, dtype=torch.long)
+        black_lengths = torch.stack([item[3] for item in items]).to(device=device, dtype=torch.long)
+        side_to_move = torch.stack([item[4] for item in items]).to(device=device, dtype=torch.float32)
+        target = torch.stack([item[5] for item in items]).to(device=device, dtype=torch.float32)
 
     white_range = torch.arange(white_indices.shape[1], device=device).unsqueeze(0)
     black_range = torch.arange(black_indices.shape[1], device=device).unsqueeze(0)
     white_mask = (white_range < white_lengths.unsqueeze(1)).to(torch.float32)
     black_mask = (black_range < black_lengths.unsqueeze(1)).to(torch.float32)
+    white_threat_mask = None
+    black_threat_mask = None
+    if split_blocks:
+        white_threat_range = torch.arange(white_threat_indices.shape[1], device=device).unsqueeze(0)
+        black_threat_range = torch.arange(black_threat_indices.shape[1], device=device).unsqueeze(0)
+        white_threat_mask = (white_threat_range < white_threat_lengths.unsqueeze(1)).to(torch.float32)
+        black_threat_mask = (black_threat_range < black_threat_lengths.unsqueeze(1)).to(torch.float32)
     return Batch(
         white=white_indices,
         white_mask=white_mask,
@@ -454,6 +491,10 @@ def collate_cache(items: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, to
         black_mask=black_mask,
         side_to_move=side_to_move,
         target=target,
+        white_threat=white_threat_indices if split_blocks else None,
+        white_threat_mask=white_threat_mask,
+        black_threat=black_threat_indices if split_blocks else None,
+        black_threat_mask=black_threat_mask,
     )
 
 
@@ -479,7 +520,17 @@ def evaluate(
     model.eval()
     with torch.no_grad():
         for batch in loader:
-            prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask, batch.side_to_move)
+            prediction = model(
+                batch.white,
+                batch.white_mask,
+                batch.black,
+                batch.black_mask,
+                batch.side_to_move,
+                batch.white_threat,
+                batch.white_threat_mask,
+                batch.black_threat,
+                batch.black_threat_mask,
+            )
             objective = objective_loss(prediction, batch.target, loss_fn, loss_mode, target_scale, shaped_weight)
             raw_loss = loss_fn(prediction, batch.target)
             batch_size = int(batch.target.numel())
@@ -765,7 +816,17 @@ def main() -> int:
         batch_count = len(train_loader)
         for batch_index, batch in enumerate(train_loader, start=1):
             optimizer.zero_grad(set_to_none=True)
-            prediction = model(batch.white, batch.white_mask, batch.black, batch.black_mask, batch.side_to_move)
+            prediction = model(
+                batch.white,
+                batch.white_mask,
+                batch.black,
+                batch.black_mask,
+                batch.side_to_move,
+                batch.white_threat,
+                batch.white_threat_mask,
+                batch.black_threat,
+                batch.black_threat_mask,
+            )
             loss = objective_loss(
                 prediction,
                 batch.target,
