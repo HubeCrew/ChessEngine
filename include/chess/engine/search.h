@@ -101,14 +101,18 @@ private:
     TranspositionTable tt_;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
     std::array<std::array<std::array<int, 64>, 64>, 2> history_{};
+    std::array<nnue::QuantizedAccumulatorPair, kMaxPly> nnue_accumulator_stack_{};
     std::vector<Move> previous_iteration_pv_;
     MoveList root_search_moves_;
     bool root_search_moves_constrained_ = false;
 
     int negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move, int extensions_used);
     int quiescence(Board& board, int ply, int alpha, int beta, int qply);
-    int evaluate_with_diagnostics(const Board& board);
+    int evaluate_with_diagnostics(const Board& board, int ply);
     int static_exchange_with_diagnostics(const Board& board, const Move& move);
+    void refresh_nnue_accumulator(Board& board, int ply);
+    void update_nnue_accumulator_after_move(const Board& board, const UndoState& undo, int parent_ply, int child_ply);
+    void update_nnue_accumulator_after_null_move(int parent_ply, int child_ply);
     void age_history();
     void record_cutoff(
         const Move& move,

@@ -646,6 +646,72 @@ TEST_CASE("NNUE loader supports legacy models and v4/v5 SF-lite side-to-move per
     REQUIRE(std::filesystem::remove(threat_v5_path));
 }
 
+TEST_CASE("NNUE quantized accumulator stack updates placement features incrementally") {
+    const std::filesystem::path path = write_constant_halfka_sf_lite_nnue_model(
+        0,
+        2,
+        chess::engine::nnue::FeatureSet::HalfKaV2HmFullThreats
+    );
+    chess::engine::nnue::Network network;
+    std::string error;
+    REQUIRE(network.load(path, &error));
+    REQUIRE(network.supports_quantized_accumulator_stack());
+
+    chess::Board board = chess::Board::start_position();
+    chess::engine::nnue::QuantizedAccumulatorPair root;
+    network.refresh_quantized_accumulator_pair(board, root);
+    REQUIRE(root.valid);
+
+    const chess::Move e2e4{
+        chess::make_square(4, 1),
+        chess::make_square(4, 3),
+        chess::PieceType::None,
+        chess::DoublePawnPush,
+    };
+    const chess::UndoState e2e4_undo = board.make_move(e2e4);
+    chess::engine::nnue::QuantizedAccumulatorPair updated;
+    REQUIRE(network.update_quantized_accumulator_pair_after_move(board, e2e4_undo, root, updated));
+    chess::engine::nnue::QuantizedAccumulatorPair refreshed;
+    network.refresh_quantized_accumulator_pair(board, refreshed);
+    REQUIRE(updated.valid);
+    REQUIRE(updated.white == refreshed.white);
+    REQUIRE(updated.black == refreshed.black);
+
+    const chess::Move e7e5{
+        chess::make_square(4, 6),
+        chess::make_square(4, 4),
+        chess::PieceType::None,
+        chess::DoublePawnPush,
+    };
+    const chess::UndoState e7e5_undo = board.make_move(e7e5);
+    chess::engine::nnue::QuantizedAccumulatorPair updated_second;
+    REQUIRE(network.update_quantized_accumulator_pair_after_move(board, e7e5_undo, updated, updated_second));
+    network.refresh_quantized_accumulator_pair(board, refreshed);
+    REQUIRE(updated_second.valid);
+    REQUIRE(updated_second.white == refreshed.white);
+    REQUIRE(updated_second.black == refreshed.black);
+
+    chess::Board king_move = chess::board_from_fen("4k3/8/8/8/8/8/4K3/8 w - - 0 1");
+    chess::engine::nnue::QuantizedAccumulatorPair before_king_move;
+    network.refresh_quantized_accumulator_pair(king_move, before_king_move);
+    const chess::Move e2e3{
+        chess::make_square(4, 1),
+        chess::make_square(4, 2),
+        chess::PieceType::None,
+        chess::Quiet,
+    };
+    const chess::UndoState e2e3_undo = king_move.make_move(e2e3);
+    chess::engine::nnue::QuantizedAccumulatorPair king_move_updated;
+    REQUIRE_FALSE(network.update_quantized_accumulator_pair_after_move(
+        king_move,
+        e2e3_undo,
+        before_king_move,
+        king_move_updated
+    ));
+
+    REQUIRE(std::filesystem::remove(path));
+}
+
 TEST_CASE("NNUE loader rejects invalid model files without keeping partial state") {
     const std::filesystem::path path = std::filesystem::temp_directory_path() / "chess_engine_invalid_test.nnue";
     {

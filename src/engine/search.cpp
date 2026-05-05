@@ -588,6 +588,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     tt_.new_search();
     age_history();
     previous_iteration_pv_.clear();
+    refresh_nnue_accumulator(board, 0);
 
     SearchResult result;
     const MoveList legal_moves = generate_legal_moves(board);
@@ -761,7 +762,7 @@ void Searcher::clear() {
 
 int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move, int extensions_used) {
     if (should_stop()) {
-        return evaluate_with_diagnostics(board);
+        return evaluate_with_diagnostics(board, ply);
     }
     ++nodes_;
 
@@ -802,14 +803,15 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
 
     if (null_move_pruning_
         && can_try_null_move(board, depth, ply, alpha, beta, in_check, allow_null_move)
-        && evaluate_with_diagnostics(board) >= beta) {
+        && evaluate_with_diagnostics(board, ply) >= beta) {
         ++diagnostics_.null_move_attempts;
         const UndoState undo = board.make_null_move();
+        update_nnue_accumulator_after_null_move(ply, ply + 1);
         const int null_depth = std::max(0, depth - 1 - kNullMoveReduction);
         const int score = -negamax(board, null_depth, ply + 1, -beta, -beta + 1, false, extensions_used);
         board.unmake_null_move(undo);
         if (should_stop()) {
-            return evaluate_with_diagnostics(board);
+            return evaluate_with_diagnostics(board, ply);
         }
         if (score >= beta) {
             ++diagnostics_.null_move_cutoffs;
@@ -848,6 +850,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
             board.unmake_move(undo);
             continue;
         }
+        update_nnue_accumulator_after_move(board, undo, ply, ply + 1);
         const bool gives_check = board.in_check(board.side_to_move());
         const int extension = search_extensions_
             ? extension_for_move(board, move, in_check, gives_check, moving_side, depth, extensions_used)
@@ -919,7 +922,7 @@ int Searcher::negamax(Board& board, int depth, int ply, int alpha, int beta, boo
 
 int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
     if (should_stop()) {
-        return evaluate_with_diagnostics(board);
+        return evaluate_with_diagnostics(board, ply);
     }
     ++nodes_;
     ++qnodes_;
@@ -931,7 +934,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
     int stand_pat = -kInfinity;
     if (!in_check) {
         ++diagnostics_.qsearch_stand_pat_nodes;
-        stand_pat = evaluate_with_diagnostics(board);
+        stand_pat = evaluate_with_diagnostics(board, ply);
         if (stand_pat >= beta) {
             return beta;
         }
@@ -1002,6 +1005,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
             board.unmake_move(undo);
             continue;
         }
+        update_nnue_accumulator_after_move(board, undo, ply, ply + 1);
         ++legal_moves_searched;
         const int score = -quiescence(board, ply + 1, -beta, -alpha, qply + 1);
         board.unmake_move(undo);
@@ -1016,9 +1020,56 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
     return alpha;
 }
 
-int Searcher::evaluate_with_diagnostics(const Board& board) {
+int Searcher::evaluate_with_diagnostics(const Board& board, int ply) {
     ++diagnostics_.evaluations;
+    if (eval_type_ == EvalType::Nnue && nnue_.supports_quantized_accumulator_stack() && ply >= 0 && ply < kMaxPly) {
+        return board.side_to_move() == Color::White
+            ? nnue_.evaluate_white_perspective(board, nnue_accumulator_stack_[ply])
+            : -nnue_.evaluate_white_perspective(board, nnue_accumulator_stack_[ply]);
+    }
+    if (eval_type_ == EvalType::Hybrid && nnue_.supports_quantized_accumulator_stack() && ply >= 0 && ply < kMaxPly) {
+        const int classical = chess::engine::evaluate_white_perspective(board);
+        const int nnue = nnue_.evaluate_white_perspective(board, nnue_accumulator_stack_[ply]);
+        const int blended = (classical + nnue) / 2;
+        return board.side_to_move() == Color::White ? blended : -blended;
+    }
     return evaluate_side_to_move(board);
+}
+
+void Searcher::refresh_nnue_accumulator(Board& board, int ply) {
+    if (ply < 0 || ply >= kMaxPly) {
+        return;
+    }
+    nnue_accumulator_stack_[ply].valid = false;
+    if (nnue_.supports_quantized_accumulator_stack()) {
+        nnue_.refresh_quantized_accumulator_pair(board, nnue_accumulator_stack_[ply]);
+    }
+}
+
+void Searcher::update_nnue_accumulator_after_move(
+    const Board& board,
+    const UndoState& undo,
+    int parent_ply,
+    int child_ply
+) {
+    if (!nnue_.supports_quantized_accumulator_stack() || parent_ply < 0 || parent_ply >= kMaxPly || child_ply < 0 || child_ply >= kMaxPly) {
+        return;
+    }
+    if (!nnue_.update_quantized_accumulator_pair_after_move(
+            board,
+            undo,
+            nnue_accumulator_stack_[parent_ply],
+            nnue_accumulator_stack_[child_ply]
+        )) {
+        nnue_.refresh_quantized_accumulator_pair(board, nnue_accumulator_stack_[child_ply]);
+    }
+}
+
+void Searcher::update_nnue_accumulator_after_null_move(int parent_ply, int child_ply) {
+    if (!nnue_.supports_quantized_accumulator_stack() || parent_ply < 0 || parent_ply >= kMaxPly || child_ply < 0 || child_ply >= kMaxPly) {
+        return;
+    }
+    nnue_accumulator_stack_[child_ply] = nnue_accumulator_stack_[parent_ply];
 }
 
 int Searcher::static_exchange_with_diagnostics(const Board& board, const Move& move) {

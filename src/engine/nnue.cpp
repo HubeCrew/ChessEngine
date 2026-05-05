@@ -39,6 +39,19 @@ std::uint32_t checked_weight_count(std::uint32_t feature_count, std::uint32_t hi
     return static_cast<std::uint32_t>(count);
 }
 
+void add_quantized_feature(
+    std::vector<int>& accumulator,
+    const std::vector<std::int16_t>& weights,
+    std::uint32_t feature,
+    std::uint32_t hidden_size,
+    int sign
+) {
+    const std::size_t offset = static_cast<std::size_t>(feature) * hidden_size;
+    for (std::uint32_t index = 0; index < hidden_size; ++index) {
+        accumulator[index] += sign * static_cast<int>(weights[offset + index]);
+    }
+}
+
 int rounded_divide(std::int64_t value, std::int64_t scale) {
     if (scale <= 0) {
         return 0;
@@ -656,6 +669,130 @@ const ModelInfo& Network::info() const {
     return info_;
 }
 
+bool Network::supports_quantized_accumulator_stack() const {
+    return loaded()
+        && info_.sf_lite
+        && info_.feature_set == FeatureSet::HalfKaV2HmFullThreats
+        && !feature_bias_.empty()
+        && !placement_feature_weights_quantized_.empty()
+        && !threat_feature_weights_quantized_.empty();
+}
+
+void Network::refresh_quantized_accumulator_pair(const Board& board, QuantizedAccumulatorPair& pair) const {
+    pair.white.assign(feature_bias_.begin(), feature_bias_.end());
+    pair.black.assign(feature_bias_.begin(), feature_bias_.end());
+    const Square white_king = board.king_square(Color::White);
+    const Square black_king = board.king_square(Color::Black);
+    if (!is_valid_square(white_king) || !is_valid_square(black_king) || !supports_quantized_accumulator_stack()) {
+        pair.valid = false;
+        return;
+    }
+
+    for (Square square = 0; square < kBoardSquareCount; ++square) {
+        const Piece piece = board.piece_at(square);
+        if (piece == Piece::None || type_of(piece) == PieceType::King) {
+            continue;
+        }
+        const std::uint32_t white_feature = feature_index(
+            Color::White,
+            white_king,
+            piece,
+            square,
+            FeatureSet::HalfKaV2HmFullThreats
+        );
+        const std::uint32_t black_feature = feature_index(
+            Color::Black,
+            black_king,
+            piece,
+            square,
+            FeatureSet::HalfKaV2HmFullThreats
+        );
+        if (white_feature < info_.placement_feature_count) {
+            add_quantized_feature(pair.white, placement_feature_weights_quantized_, white_feature, info_.hidden_size, 1);
+        }
+        if (black_feature < info_.placement_feature_count) {
+            add_quantized_feature(pair.black, placement_feature_weights_quantized_, black_feature, info_.hidden_size, 1);
+        }
+    }
+    pair.valid = true;
+}
+
+bool Network::update_quantized_accumulator_pair_after_move(
+    const Board& board_after_move,
+    const UndoState& undo,
+    const QuantizedAccumulatorPair& parent,
+    QuantizedAccumulatorPair& child
+) const {
+    if (!parent.valid || !supports_quantized_accumulator_stack()) {
+        return false;
+    }
+    if (!is_valid_square(undo.move.from) || !is_valid_square(undo.move.to)) {
+        child = parent;
+        child.valid = true;
+        return true;
+    }
+
+    child = parent;
+    const Move& move = undo.move;
+    const Color moving_color = undo.side_to_move;
+    const Piece moved_before = make_piece(moving_color, (move.flags & Promotion) != 0 ? PieceType::Pawn : type_of(board_after_move.piece_at(move.to)));
+    const Piece moved_after = (move.flags & Promotion) != 0
+        ? make_piece(moving_color, move.promotion)
+        : moved_before;
+    const Square captured_square = (move.flags & EnPassant) != 0
+        ? (moving_color == Color::White ? move.to - 8 : move.to + 8)
+        : move.to;
+
+    auto apply_piece_delta = [&](Color perspective, std::vector<int>& accumulator, Piece piece, Square square, int sign) -> bool {
+        if (piece == Piece::None || type_of(piece) == PieceType::King) {
+            return true;
+        }
+        const Square king = board_after_move.king_square(perspective);
+        if (!is_valid_square(king)) {
+            return false;
+        }
+        const std::uint32_t feature = feature_index(perspective, king, piece, square, FeatureSet::HalfKaV2HmFullThreats);
+        if (feature >= info_.placement_feature_count) {
+            return false;
+        }
+        add_quantized_feature(accumulator, placement_feature_weights_quantized_, feature, info_.hidden_size, sign);
+        return true;
+    };
+
+    auto update_for_perspective = [&](Color perspective, std::vector<int>& accumulator) -> bool {
+        if (type_of(moved_before) == PieceType::King && perspective == moving_color) {
+            return false;
+        }
+        if (!apply_piece_delta(perspective, accumulator, moved_before, move.from, -1)) {
+            return false;
+        }
+        if (!apply_piece_delta(perspective, accumulator, undo.captured, captured_square, -1)) {
+            return false;
+        }
+        if (!apply_piece_delta(perspective, accumulator, moved_after, move.to, 1)) {
+            return false;
+        }
+
+        if ((move.flags & KingCastle) != 0 || (move.flags & QueenCastle) != 0) {
+            const int rank = moving_color == Color::White ? 0 : 7;
+            const Square rook_from = (move.flags & KingCastle) != 0 ? make_square(7, rank) : make_square(0, rank);
+            const Square rook_to = (move.flags & KingCastle) != 0 ? make_square(5, rank) : make_square(3, rank);
+            const Piece rook = make_piece(moving_color, PieceType::Rook);
+            if (!apply_piece_delta(perspective, accumulator, rook, rook_from, -1)) {
+                return false;
+            }
+            if (!apply_piece_delta(perspective, accumulator, rook, rook_to, 1)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    child.valid = update_for_perspective(Color::White, child.white)
+               && update_for_perspective(Color::Black, child.black);
+    return child.valid;
+}
+
 std::vector<int> Network::accumulator(const Board& board, Color perspective) const {
     std::vector<int> values;
     values.reserve(info_.hidden_size);
@@ -724,9 +861,39 @@ std::vector<float> Network::accumulator_float(const Board& board, Color perspect
     return values;
 }
 
-int Network::evaluate_sf_lite_white_perspective(const Board& board) const {
-    std::vector<float> white = accumulator_float(board, Color::White);
-    std::vector<float> black = accumulator_float(board, Color::Black);
+std::vector<float> Network::accumulator_float_from_quantized_placement(
+    const Board& board,
+    Color perspective,
+    const std::vector<int>& placement_accumulator
+) const {
+    std::vector<int> quantized = placement_accumulator;
+    for (const std::uint32_t feature : active_feature_indices(board, perspective, info_.feature_set)) {
+        if (feature < info_.placement_feature_count) {
+            continue;
+        }
+        const std::uint32_t threat_feature = feature - info_.placement_feature_count;
+        const std::size_t offset = static_cast<std::size_t>(threat_feature) * info_.hidden_size;
+        for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
+            quantized[index] += threat_feature_weights_quantized_[offset + index];
+        }
+    }
+
+    std::vector<float> values;
+    values.reserve(info_.hidden_size);
+    const float scale = static_cast<float>(info_.accumulator_scale);
+    for (const int value : quantized) {
+        values.push_back(static_cast<float>(value) / scale);
+    }
+    return values;
+}
+
+int Network::evaluate_sf_lite_white_perspective(
+    const Board& board,
+    const std::vector<float>& white_input,
+    const std::vector<float>& black_input
+) const {
+    std::vector<float> white = white_input;
+    std::vector<float> black = black_input;
     for (float& value : white) {
         value = std::clamp(value, 0.0F, 1.0F);
     }
@@ -774,6 +941,14 @@ int Network::evaluate_sf_lite_white_perspective(const Board& board) const {
     return white_to_move ? rounded : -rounded;
 }
 
+int Network::evaluate_sf_lite_white_perspective(const Board& board) const {
+    return evaluate_sf_lite_white_perspective(
+        board,
+        accumulator_float(board, Color::White),
+        accumulator_float(board, Color::Black)
+    );
+}
+
 int Network::evaluate_white_perspective(const Board& board) const {
     if (!loaded()) {
         return 0;
@@ -810,6 +985,17 @@ int Network::evaluate_white_perspective(const Board& board) const {
     }
 
     return rounded_divide(sum, info_.output_scale);
+}
+
+int Network::evaluate_white_perspective(const Board& board, const QuantizedAccumulatorPair& accumulator_pair) const {
+    if (!supports_quantized_accumulator_stack() || !accumulator_pair.valid) {
+        return evaluate_white_perspective(board);
+    }
+    return evaluate_sf_lite_white_perspective(
+        board,
+        accumulator_float_from_quantized_placement(board, Color::White, accumulator_pair.white),
+        accumulator_float_from_quantized_placement(board, Color::Black, accumulator_pair.black)
+    );
 }
 
 }  // namespace chess::engine::nnue

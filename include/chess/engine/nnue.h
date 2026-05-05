@@ -52,6 +52,12 @@ struct ModelInfo {
     std::filesystem::path path;
 };
 
+struct QuantizedAccumulatorPair {
+    std::vector<int> white;
+    std::vector<int> black;
+    bool valid = false;
+};
+
 [[nodiscard]] Square perspective_square(Square square, Color perspective);
 [[nodiscard]] Square horizontal_mirror_square(Square square);
 [[nodiscard]] std::uint32_t feature_count(FeatureSet feature_set);
@@ -84,6 +90,18 @@ public:
     [[nodiscard]] bool loaded() const;
     [[nodiscard]] const ModelInfo& info() const;
     [[nodiscard]] int evaluate_white_perspective(const Board& board) const;
+    [[nodiscard]] bool supports_quantized_accumulator_stack() const;
+    void refresh_quantized_accumulator_pair(const Board& board, QuantizedAccumulatorPair& pair) const;
+    [[nodiscard]] bool update_quantized_accumulator_pair_after_move(
+        const Board& board_after_move,
+        const UndoState& undo,
+        const QuantizedAccumulatorPair& parent,
+        QuantizedAccumulatorPair& child
+    ) const;
+    [[nodiscard]] int evaluate_white_perspective(
+        const Board& board,
+        const QuantizedAccumulatorPair& accumulator_pair
+    ) const;
 
 private:
     ModelInfo info_{};
@@ -110,7 +128,17 @@ private:
 
     [[nodiscard]] std::vector<int> accumulator(const Board& board, Color perspective) const;
     [[nodiscard]] std::vector<float> accumulator_float(const Board& board, Color perspective) const;
+    [[nodiscard]] std::vector<float> accumulator_float_from_quantized_placement(
+        const Board& board,
+        Color perspective,
+        const std::vector<int>& placement_accumulator
+    ) const;
     [[nodiscard]] int evaluate_sf_lite_white_perspective(const Board& board) const;
+    [[nodiscard]] int evaluate_sf_lite_white_perspective(
+        const Board& board,
+        const std::vector<float>& white,
+        const std::vector<float>& black
+    ) const;
 };
 
 }  // namespace chess::engine::nnue
