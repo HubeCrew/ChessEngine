@@ -7,6 +7,10 @@
 #include <limits>
 #include <utility>
 
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+#include <immintrin.h>
+#endif
+
 #include "chess/core/attacks.h"
 
 namespace chess::engine::nnue {
@@ -39,7 +43,7 @@ std::uint32_t checked_weight_count(std::uint32_t feature_count, std::uint32_t hi
     return static_cast<std::uint32_t>(count);
 }
 
-void add_quantized_feature(
+void add_quantized_feature_scalar(
     std::vector<int>& accumulator,
     const std::vector<std::int16_t>& weights,
     std::uint32_t feature,
@@ -52,6 +56,150 @@ void add_quantized_feature(
     }
 }
 
+void add_quantized_threat_feature_scalar(
+    std::vector<int>& accumulator,
+    const std::vector<std::int8_t>& weights,
+    std::uint32_t feature,
+    std::uint32_t hidden_size,
+    int sign
+) {
+    const std::size_t offset = static_cast<std::size_t>(feature) * hidden_size;
+    for (std::uint32_t index = 0; index < hidden_size; ++index) {
+        accumulator[index] += sign * static_cast<int>(weights[offset + index]);
+    }
+}
+
+float dot_product_float_scalar(const float* lhs, const float* rhs, std::uint32_t count) {
+    float total = 0.0F;
+    for (std::uint32_t index = 0; index < count; ++index) {
+        total += lhs[index] * rhs[index];
+    }
+    return total;
+}
+
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+[[gnu::target("avx2")]]
+void add_quantized_feature_avx2(
+    std::vector<int>& accumulator,
+    const std::vector<std::int16_t>& weights,
+    std::uint32_t feature,
+    std::uint32_t hidden_size,
+    int sign
+) {
+    const std::size_t offset = static_cast<std::size_t>(feature) * hidden_size;
+    std::uint32_t index = 0;
+    const __m256i sign_vector = _mm256_set1_epi32(sign);
+    for (; index + 16 <= hidden_size; index += 16) {
+        const __m256i current_lo = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(accumulator.data() + index));
+        const __m256i current_hi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(accumulator.data() + index + 8));
+        const __m128i packed = _mm_loadu_si128(reinterpret_cast<const __m128i*>(weights.data() + offset + index));
+        const __m256i weights_lo = _mm256_mullo_epi32(_mm256_cvtepi16_epi32(packed), sign_vector);
+        const __m256i weights_hi = _mm256_mullo_epi32(_mm256_cvtepi16_epi32(_mm_srli_si128(packed, 8)), sign_vector);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(accumulator.data() + index), _mm256_add_epi32(current_lo, weights_lo));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(accumulator.data() + index + 8), _mm256_add_epi32(current_hi, weights_hi));
+    }
+    for (; index < hidden_size; ++index) {
+        accumulator[index] += sign * static_cast<int>(weights[offset + index]);
+    }
+}
+
+[[gnu::target("avx2")]]
+void add_quantized_threat_feature_avx2(
+    std::vector<int>& accumulator,
+    const std::vector<std::int8_t>& weights,
+    std::uint32_t feature,
+    std::uint32_t hidden_size,
+    int sign
+) {
+    const std::size_t offset = static_cast<std::size_t>(feature) * hidden_size;
+    std::uint32_t index = 0;
+    const __m256i sign_vector = _mm256_set1_epi32(sign);
+    for (; index + 16 <= hidden_size; index += 16) {
+        const __m256i current_lo = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(accumulator.data() + index));
+        const __m256i current_hi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(accumulator.data() + index + 8));
+        const __m128i packed = _mm_loadu_si128(reinterpret_cast<const __m128i*>(weights.data() + offset + index));
+        const __m256i weights_lo = _mm256_mullo_epi32(_mm256_cvtepi8_epi32(packed), sign_vector);
+        const __m256i weights_hi = _mm256_mullo_epi32(_mm256_cvtepi8_epi32(_mm_srli_si128(packed, 8)), sign_vector);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(accumulator.data() + index), _mm256_add_epi32(current_lo, weights_lo));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(accumulator.data() + index + 8), _mm256_add_epi32(current_hi, weights_hi));
+    }
+    for (; index < hidden_size; ++index) {
+        accumulator[index] += sign * static_cast<int>(weights[offset + index]);
+    }
+}
+
+[[gnu::target("avx2")]]
+float dot_product_float_avx2(const float* lhs, const float* rhs, std::uint32_t count) {
+    __m256 sum = _mm256_setzero_ps();
+    std::uint32_t index = 0;
+    for (; index + 8 <= count; index += 8) {
+        const __m256 left = _mm256_loadu_ps(lhs + index);
+        const __m256 right = _mm256_loadu_ps(rhs + index);
+        sum = _mm256_add_ps(sum, _mm256_mul_ps(left, right));
+    }
+    alignas(32) float lanes[8];
+    _mm256_store_ps(lanes, sum);
+    float total = lanes[0] + lanes[1] + lanes[2] + lanes[3] + lanes[4] + lanes[5] + lanes[6] + lanes[7];
+    for (; index < count; ++index) {
+        total += lhs[index] * rhs[index];
+    }
+    return total;
+}
+#endif
+
+bool cpu_supports_avx2() {
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+    static const bool supported = [] {
+        __builtin_cpu_init();
+        return __builtin_cpu_supports("avx2");
+    }();
+    return supported;
+#else
+    return false;
+#endif
+}
+
+void add_quantized_feature(
+    std::vector<int>& accumulator,
+    const std::vector<std::int16_t>& weights,
+    std::uint32_t feature,
+    std::uint32_t hidden_size,
+    int sign
+) {
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+    if (cpu_supports_avx2()) {
+        add_quantized_feature_avx2(accumulator, weights, feature, hidden_size, sign);
+        return;
+    }
+#endif
+    add_quantized_feature_scalar(accumulator, weights, feature, hidden_size, sign);
+}
+
+void add_quantized_threat_feature(
+    std::vector<int>& accumulator,
+    const std::vector<std::int8_t>& weights,
+    std::uint32_t feature,
+    std::uint32_t hidden_size,
+    int sign
+) {
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+    if (cpu_supports_avx2()) {
+        add_quantized_threat_feature_avx2(accumulator, weights, feature, hidden_size, sign);
+        return;
+    }
+#endif
+    add_quantized_threat_feature_scalar(accumulator, weights, feature, hidden_size, sign);
+}
+
+float dot_product_float(const float* lhs, const float* rhs, std::uint32_t count) {
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+    if (cpu_supports_avx2()) {
+        return dot_product_float_avx2(lhs, rhs, count);
+    }
+#endif
+    return dot_product_float_scalar(lhs, rhs, count);
+}
+
 int rounded_divide(std::int64_t value, std::int64_t scale) {
     if (scale <= 0) {
         return 0;
@@ -60,6 +208,16 @@ int rounded_divide(std::int64_t value, std::int64_t scale) {
         return static_cast<int>((value + scale / 2) / scale);
     }
     return static_cast<int>((value - scale / 2) / scale);
+}
+
+bool is_slider_for_direction(PieceType type, int df, int dr) {
+    if (type == PieceType::Queen) {
+        return true;
+    }
+    if (df != 0 && dr != 0) {
+        return type == PieceType::Bishop;
+    }
+    return type == PieceType::Rook;
 }
 
 bool feature_set_from_id(std::uint32_t identifier, FeatureSet& feature_set) {
@@ -214,6 +372,151 @@ FullThreatTables build_full_threat_tables() {
 const FullThreatTables& full_threat_tables() {
     static const FullThreatTables tables = build_full_threat_tables();
     return tables;
+}
+
+void push_unique_square(std::vector<Square>& squares, Square square) {
+    if (!is_valid_square(square)) {
+        return;
+    }
+    if (std::find(squares.begin(), squares.end(), square) == squares.end()) {
+        squares.push_back(square);
+    }
+}
+
+std::vector<Square> dirty_squares_for_move(const UndoState& undo) {
+    std::vector<Square> squares;
+    const Move& move = undo.move;
+    push_unique_square(squares, move.from);
+    push_unique_square(squares, move.to);
+    if ((move.flags & EnPassant) != 0) {
+        const Square captured_square = undo.side_to_move == Color::White ? move.to - 8 : move.to + 8;
+        push_unique_square(squares, captured_square);
+    }
+    if ((move.flags & KingCastle) != 0 || (move.flags & QueenCastle) != 0) {
+        const int rank = undo.side_to_move == Color::White ? 0 : 7;
+        push_unique_square(squares, (move.flags & KingCastle) != 0 ? make_square(7, rank) : make_square(0, rank));
+        push_unique_square(squares, (move.flags & KingCastle) != 0 ? make_square(5, rank) : make_square(3, rank));
+    }
+    return squares;
+}
+
+void collect_slider_attackers_through_dirty_square(const Board& board, Square dirty, std::vector<Square>& attackers) {
+    constexpr std::array<std::pair<int, int>, 8> directions{{
+        {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+        {1, 1}, {1, -1}, {-1, 1}, {-1, -1},
+    }};
+    for (const auto& [df, dr] : directions) {
+        int file = file_of(dirty) + df;
+        int rank = rank_of(dirty) + dr;
+        while (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
+            const Square square = make_square(file, rank);
+            const Piece piece = board.piece_at(square);
+            if (piece != Piece::None) {
+                if (is_slider_for_direction(type_of(piece), df, dr)) {
+                    push_unique_square(attackers, square);
+                }
+                break;
+            }
+            file += df;
+            rank += dr;
+        }
+    }
+}
+
+void collect_pawn_pushers_to_dirty_square(const Board& board, Square dirty, std::vector<Square>& attackers) {
+    const Square white_from = dirty - 8;
+    if (is_valid_square(white_from) && board.piece_at(white_from) == Piece::WhitePawn) {
+        push_unique_square(attackers, white_from);
+    }
+    const Square black_from = dirty + 8;
+    if (is_valid_square(black_from) && board.piece_at(black_from) == Piece::BlackPawn) {
+        push_unique_square(attackers, black_from);
+    }
+}
+
+std::vector<Square> dirty_threat_attackers(const Board& board, const std::vector<Square>& dirty_squares) {
+    std::vector<Square> attackers;
+    for (const Square dirty : dirty_squares) {
+        const Piece dirty_piece = board.piece_at(dirty);
+        if (dirty_piece != Piece::None) {
+            push_unique_square(attackers, dirty);
+        }
+        for (Color color : {Color::White, Color::Black}) {
+            Bitboard direct_attackers = attacks::attackers_to(board, dirty, color);
+            while (direct_attackers != 0) {
+                const Square square = __builtin_ctzll(direct_attackers);
+                direct_attackers &= direct_attackers - 1;
+                push_unique_square(attackers, square);
+            }
+        }
+        collect_pawn_pushers_to_dirty_square(board, dirty, attackers);
+        collect_slider_attackers_through_dirty_square(board, dirty, attackers);
+    }
+    return attackers;
+}
+
+void append_threat_features_for_attacker(
+    const Board& board,
+    Color perspective,
+    Square perspective_king,
+    Square attacker_square,
+    std::vector<std::uint32_t>& features
+) {
+    const Piece attacker = board.piece_at(attacker_square);
+    if (attacker == Piece::None) {
+        return;
+    }
+    const PieceType type = type_of(attacker);
+    if (type == PieceType::King || type == PieceType::None) {
+        return;
+    }
+
+    Bitboard targets = 0;
+    const Color color = color_of(attacker);
+    if (type == PieceType::Pawn) {
+        targets = attacks::pawn_attacks(color, attacker_square) & board.occupancy();
+        const Square push = attacker_square + (color == Color::White ? 8 : -8);
+        if (is_valid_square(push)) {
+            const Piece pushed = board.piece_at(push);
+            if (pushed == Piece::WhitePawn || pushed == Piece::BlackPawn) {
+                targets |= square_bb(push);
+            }
+        }
+    } else {
+        targets = attacks::piece_attacks(type, color, attacker_square, board.occupancy()) & board.occupancy();
+    }
+
+    while (targets != 0) {
+        const Square target = __builtin_ctzll(targets);
+        targets &= targets - 1;
+        const std::uint32_t feature = full_threat_feature_index(
+            perspective,
+            perspective_king,
+            attacker,
+            attacker_square,
+            board.piece_at(target),
+            target
+        );
+        if (feature >= kHalfKaV2HmLiteFeatureCount && feature < kHalfKaV2HmFullThreatsFeatureCount) {
+            features.push_back(feature - kHalfKaV2HmLiteFeatureCount);
+        }
+    }
+}
+
+std::vector<std::uint32_t> dirty_threat_features(
+    const Board& board,
+    Color perspective,
+    const std::vector<Square>& dirty_squares
+) {
+    std::vector<std::uint32_t> features;
+    const Square king = board.king_square(perspective);
+    if (!is_valid_square(king)) {
+        return features;
+    }
+    for (const Square attacker : dirty_threat_attackers(board, dirty_squares)) {
+        append_threat_features_for_attacker(board, perspective, king, attacker, features);
+    }
+    return features;
 }
 
 }  // namespace
@@ -714,6 +1017,28 @@ void Network::refresh_quantized_accumulator_pair(const Board& board, QuantizedAc
             add_quantized_feature(pair.black, placement_feature_weights_quantized_, black_feature, info_.hidden_size, 1);
         }
     }
+    for (const std::uint32_t feature : active_feature_indices(board, Color::White, FeatureSet::HalfKaV2HmFullThreats)) {
+        if (feature >= info_.placement_feature_count && feature < info_.feature_count) {
+            add_quantized_threat_feature(
+                pair.white,
+                threat_feature_weights_quantized_,
+                feature - info_.placement_feature_count,
+                info_.hidden_size,
+                1
+            );
+        }
+    }
+    for (const std::uint32_t feature : active_feature_indices(board, Color::Black, FeatureSet::HalfKaV2HmFullThreats)) {
+        if (feature >= info_.placement_feature_count && feature < info_.feature_count) {
+            add_quantized_threat_feature(
+                pair.black,
+                threat_feature_weights_quantized_,
+                feature - info_.placement_feature_count,
+                info_.hidden_size,
+                1
+            );
+        }
+    }
     pair.valid = true;
 }
 
@@ -790,6 +1115,24 @@ bool Network::update_quantized_accumulator_pair_after_move(
 
     child.valid = update_for_perspective(Color::White, child.white)
                && update_for_perspective(Color::Black, child.black);
+    if (!child.valid) {
+        return false;
+    }
+
+    Board board_before_move = board_after_move;
+    board_before_move.unmake_move(undo);
+    const std::vector<Square> dirty_squares = dirty_squares_for_move(undo);
+
+    auto update_threats_for_perspective = [&](Color perspective, std::vector<int>& accumulator) {
+        for (const std::uint32_t feature : dirty_threat_features(board_before_move, perspective, dirty_squares)) {
+            add_quantized_threat_feature(accumulator, threat_feature_weights_quantized_, feature, info_.hidden_size, -1);
+        }
+        for (const std::uint32_t feature : dirty_threat_features(board_after_move, perspective, dirty_squares)) {
+            add_quantized_threat_feature(accumulator, threat_feature_weights_quantized_, feature, info_.hidden_size, 1);
+        }
+    };
+    update_threats_for_perspective(Color::White, child.white);
+    update_threats_for_perspective(Color::Black, child.black);
     return child.valid;
 }
 
@@ -861,27 +1204,17 @@ std::vector<float> Network::accumulator_float(const Board& board, Color perspect
     return values;
 }
 
-std::vector<float> Network::accumulator_float_from_quantized_placement(
+std::vector<float> Network::accumulator_float_from_quantized(
     const Board& board,
     Color perspective,
-    const std::vector<int>& placement_accumulator
+    const std::vector<int>& quantized_accumulator
 ) const {
-    std::vector<int> quantized = placement_accumulator;
-    for (const std::uint32_t feature : active_feature_indices(board, perspective, info_.feature_set)) {
-        if (feature < info_.placement_feature_count) {
-            continue;
-        }
-        const std::uint32_t threat_feature = feature - info_.placement_feature_count;
-        const std::size_t offset = static_cast<std::size_t>(threat_feature) * info_.hidden_size;
-        for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
-            quantized[index] += threat_feature_weights_quantized_[offset + index];
-        }
-    }
-
+    (void) board;
+    (void) perspective;
     std::vector<float> values;
     values.reserve(info_.hidden_size);
     const float scale = static_cast<float>(info_.accumulator_scale);
-    for (const int value : quantized) {
+    for (const int value : quantized_accumulator) {
         values.push_back(static_cast<float>(value) / scale);
     }
     return values;
@@ -905,20 +1238,16 @@ int Network::evaluate_sf_lite_white_perspective(
     const std::vector<float>& stm = white_to_move ? white : black;
     const std::vector<float>& nstm = white_to_move ? black : white;
 
-    float direct = direct_bias_;
-    for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
-        direct += stm[index] * direct_weights_[index];
-        direct += nstm[index] * direct_weights_[info_.hidden_size + index];
-    }
+    float direct = direct_bias_
+        + dot_product_float(stm.data(), direct_weights_.data(), info_.hidden_size)
+        + dot_product_float(nstm.data(), direct_weights_.data() + info_.hidden_size, info_.hidden_size);
 
     std::vector<float> fc0(info_.l2_size, 0.0F);
     for (std::uint32_t row = 0; row < info_.l2_size; ++row) {
-        float value = fc0_bias_[row];
         const std::size_t row_offset = static_cast<std::size_t>(row) * info_.hidden_size * 2;
-        for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
-            value += stm[index] * fc0_weights_[row_offset + index];
-            value += nstm[index] * fc0_weights_[row_offset + info_.hidden_size + index];
-        }
+        const float value = fc0_bias_[row]
+            + dot_product_float(stm.data(), fc0_weights_.data() + row_offset, info_.hidden_size)
+            + dot_product_float(nstm.data(), fc0_weights_.data() + row_offset + info_.hidden_size, info_.hidden_size);
         fc0[row] = std::clamp(value, 0.0F, 1.0F);
     }
 
@@ -928,15 +1257,13 @@ int Network::evaluate_sf_lite_white_perspective(
         const std::size_t row_offset = static_cast<std::size_t>(row) * info_.l2_size * 2;
         for (std::uint32_t index = 0; index < info_.l2_size; ++index) {
             value += fc0[index] * fc0[index] * fc1_weights_[row_offset + index];
-            value += fc0[index] * fc1_weights_[row_offset + info_.l2_size + index];
         }
+        value += dot_product_float(fc0.data(), fc1_weights_.data() + row_offset + info_.l2_size, info_.l2_size);
         fc1[row] = std::clamp(value, 0.0F, 1.0F);
     }
 
-    float side_to_move_score = direct + fc2_bias_ + side_to_move_weight_float_;
-    for (std::uint32_t index = 0; index < info_.l3_size; ++index) {
-        side_to_move_score += fc1[index] * fc2_weights_[index];
-    }
+    const float side_to_move_score = direct + fc2_bias_ + side_to_move_weight_float_
+        + dot_product_float(fc1.data(), fc2_weights_.data(), info_.l3_size);
     const int rounded = static_cast<int>(std::lround(side_to_move_score));
     return white_to_move ? rounded : -rounded;
 }
@@ -993,8 +1320,8 @@ int Network::evaluate_white_perspective(const Board& board, const QuantizedAccum
     }
     return evaluate_sf_lite_white_perspective(
         board,
-        accumulator_float_from_quantized_placement(board, Color::White, accumulator_pair.white),
-        accumulator_float_from_quantized_placement(board, Color::Black, accumulator_pair.black)
+        accumulator_float_from_quantized(board, Color::White, accumulator_pair.white),
+        accumulator_float_from_quantized(board, Color::Black, accumulator_pair.black)
     );
 }
 

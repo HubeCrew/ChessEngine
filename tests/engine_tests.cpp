@@ -6,6 +6,7 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <utility>
 
 #include "chess/core/fen.h"
 #include "chess/core/movegen.h"
@@ -219,6 +220,77 @@ std::filesystem::path write_constant_halfka_sf_lite_nnue_model(
     output.write(reinterpret_cast<const char*>(fc2_weights.data()), static_cast<std::streamsize>(fc2_weights.size() * sizeof(float)));
     const float fc2_bias = 0.0F;
     const float side_to_move_weight = 0.0F;
+    write_binary_value(output, fc2_bias);
+    write_binary_value(output, side_to_move_weight);
+    return path;
+}
+
+std::filesystem::path write_patterned_full_threats_sf_lite_nnue_model(std::uint32_t hidden_size = 4) {
+    const std::filesystem::path path = std::filesystem::temp_directory_path()
+        / "chess_engine_patterned_full_threats_sf_lite_test.nnue";
+    std::ofstream output(path, std::ios::binary);
+    const char magic[8] = {'C', 'E', 'N', 'N', 'U', 'E', '1', '\0'};
+    output.write(magic, sizeof(magic));
+    write_binary_value(output, chess::engine::nnue::kFormatVersionV6);
+    write_binary_value(output, chess::engine::nnue::kHalfKaV2HmFullThreatsFeatureCount);
+    write_binary_value(output, hidden_size);
+    write_binary_value(output, chess::engine::nnue::kDefaultAccumulatorScale);
+    write_binary_value(output, chess::engine::nnue::kDefaultOutputScale);
+    const auto feature_set_id = static_cast<std::uint32_t>(chess::engine::nnue::FeatureSet::HalfKaV2HmFullThreats);
+    write_binary_value(output, feature_set_id);
+    write_binary_value(output, chess::engine::nnue::kHalfKaV2HmLiteFeatureCount);
+    write_binary_value(output, chess::engine::nnue::kFullThreatsFeatureCount);
+
+    const std::uint32_t l2_size = 1;
+    const std::uint32_t l3_size = 1;
+    write_binary_value(output, l2_size);
+    write_binary_value(output, l3_size);
+
+    std::vector<std::int16_t> hidden_bias(hidden_size, 0);
+    std::vector<std::int16_t> placement_feature_weights(
+        static_cast<std::size_t>(chess::engine::nnue::kHalfKaV2HmLiteFeatureCount) * hidden_size
+    );
+    std::vector<std::int8_t> threat_feature_weights(
+        static_cast<std::size_t>(chess::engine::nnue::kFullThreatsFeatureCount) * hidden_size
+    );
+    for (std::uint32_t feature = 0; feature < chess::engine::nnue::kHalfKaV2HmLiteFeatureCount; ++feature) {
+        for (std::uint32_t lane = 0; lane < hidden_size; ++lane) {
+            placement_feature_weights[static_cast<std::size_t>(feature) * hidden_size + lane] =
+                static_cast<std::int16_t>((static_cast<int>(feature * 17 + lane * 31) % 251) - 125);
+        }
+    }
+    for (std::uint32_t feature = 0; feature < chess::engine::nnue::kFullThreatsFeatureCount; ++feature) {
+        for (std::uint32_t lane = 0; lane < hidden_size; ++lane) {
+            threat_feature_weights[static_cast<std::size_t>(feature) * hidden_size + lane] =
+                static_cast<std::int8_t>((static_cast<int>(feature * 13 + lane * 19) % 127) - 63);
+        }
+    }
+    output.write(reinterpret_cast<const char*>(hidden_bias.data()), static_cast<std::streamsize>(hidden_bias.size() * sizeof(std::int16_t)));
+    output.write(
+        reinterpret_cast<const char*>(placement_feature_weights.data()),
+        static_cast<std::streamsize>(placement_feature_weights.size() * sizeof(std::int16_t))
+    );
+    output.write(
+        reinterpret_cast<const char*>(threat_feature_weights.data()),
+        static_cast<std::streamsize>(threat_feature_weights.size() * sizeof(std::int8_t))
+    );
+
+    const std::vector<float> direct_weights(static_cast<std::size_t>(hidden_size) * 2, 0.0F);
+    const float direct_bias = 0.0F;
+    const std::vector<float> fc0_weights(static_cast<std::size_t>(l2_size) * hidden_size * 2, 0.0F);
+    const std::vector<float> fc0_bias(l2_size, 0.0F);
+    const std::vector<float> fc1_weights(static_cast<std::size_t>(l3_size) * l2_size * 2, 0.0F);
+    const std::vector<float> fc1_bias(l3_size, 0.0F);
+    const std::vector<float> fc2_weights(l3_size, 0.0F);
+    const float fc2_bias = 0.0F;
+    const float side_to_move_weight = 0.0F;
+    output.write(reinterpret_cast<const char*>(direct_weights.data()), static_cast<std::streamsize>(direct_weights.size() * sizeof(float)));
+    write_binary_value(output, direct_bias);
+    output.write(reinterpret_cast<const char*>(fc0_weights.data()), static_cast<std::streamsize>(fc0_weights.size() * sizeof(float)));
+    output.write(reinterpret_cast<const char*>(fc0_bias.data()), static_cast<std::streamsize>(fc0_bias.size() * sizeof(float)));
+    output.write(reinterpret_cast<const char*>(fc1_weights.data()), static_cast<std::streamsize>(fc1_weights.size() * sizeof(float)));
+    output.write(reinterpret_cast<const char*>(fc1_bias.data()), static_cast<std::streamsize>(fc1_bias.size() * sizeof(float)));
+    output.write(reinterpret_cast<const char*>(fc2_weights.data()), static_cast<std::streamsize>(fc2_weights.size() * sizeof(float)));
     write_binary_value(output, fc2_bias);
     write_binary_value(output, side_to_move_weight);
     return path;
@@ -646,12 +718,8 @@ TEST_CASE("NNUE loader supports legacy models and v4/v5 SF-lite side-to-move per
     REQUIRE(std::filesystem::remove(threat_v5_path));
 }
 
-TEST_CASE("NNUE quantized accumulator stack updates placement features incrementally") {
-    const std::filesystem::path path = write_constant_halfka_sf_lite_nnue_model(
-        0,
-        2,
-        chess::engine::nnue::FeatureSet::HalfKaV2HmFullThreats
-    );
+TEST_CASE("NNUE quantized accumulator stack updates placement and threat features incrementally") {
+    const std::filesystem::path path = write_patterned_full_threats_sf_lite_nnue_model();
     chess::engine::nnue::Network network;
     std::string error;
     REQUIRE(network.load(path, &error));
@@ -690,6 +758,22 @@ TEST_CASE("NNUE quantized accumulator stack updates placement features increment
     REQUIRE(updated_second.valid);
     REQUIRE(updated_second.white == refreshed.white);
     REQUIRE(updated_second.black == refreshed.black);
+
+    chess::Board sequence = chess::Board::start_position();
+    chess::engine::nnue::QuantizedAccumulatorPair current;
+    network.refresh_quantized_accumulator_pair(sequence, current);
+    for (const std::string& uci : {"e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5c6", "d7c6"}) {
+        const chess::Move move = legal_move_by_uci(sequence, uci);
+        const chess::UndoState undo = sequence.make_move(move);
+        chess::engine::nnue::QuantizedAccumulatorPair next;
+        REQUIRE(network.update_quantized_accumulator_pair_after_move(sequence, undo, current, next));
+        network.refresh_quantized_accumulator_pair(sequence, refreshed);
+        INFO(uci);
+        REQUIRE(next.valid);
+        REQUIRE(next.white == refreshed.white);
+        REQUIRE(next.black == refreshed.black);
+        current = std::move(next);
+    }
 
     chess::Board king_move = chess::board_from_fen("4k3/8/8/8/8/8/4K3/8 w - - 0 1");
     chess::engine::nnue::QuantizedAccumulatorPair before_king_move;

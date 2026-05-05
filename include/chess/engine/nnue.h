@@ -128,10 +128,10 @@ private:
 
     [[nodiscard]] std::vector<int> accumulator(const Board& board, Color perspective) const;
     [[nodiscard]] std::vector<float> accumulator_float(const Board& board, Color perspective) const;
-    [[nodiscard]] std::vector<float> accumulator_float_from_quantized_placement(
+    [[nodiscard]] std::vector<float> accumulator_float_from_quantized(
         const Board& board,
         Color perspective,
-        const std::vector<int>& placement_accumulator
+        const std::vector<int>& quantized_accumulator
     ) const;
     [[nodiscard]] int evaluate_sf_lite_white_perspective(const Board& board) const;
     [[nodiscard]] int evaluate_sf_lite_white_perspective(
