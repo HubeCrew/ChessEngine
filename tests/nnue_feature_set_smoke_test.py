@@ -63,7 +63,7 @@ def main() -> int:
         print("bad start-position HalfKAv2_hm-lite features", file=sys.stderr)
         return 1
 
-    if FULL_THREATS_FEATURE_COUNT != 79856 or feature_count_for(FEATURE_SET_HALFKA_V2_HM_FULL_THREATS) != 100336:
+    if FULL_THREATS_FEATURE_COUNT != 60720 or feature_count_for(FEATURE_SET_HALFKA_V2_HM_FULL_THREATS) != 81200:
         print("bad HalfKAv2_hm-full-threats feature count", file=sys.stderr)
         return 1
 
@@ -87,6 +87,31 @@ def main() -> int:
         return 1
     if threat_index is None or threat_index < HALFKA_V2_HM_LITE_FEATURE_COUNT or threat_index >= HALFKA_V2_HM_FULL_THREATS_FEATURE_COUNT:
         print(f"threat index out of range: {threat_index}", file=sys.stderr)
+        return 1
+
+    blocked_pawn = chess.Board("4k3/8/8/4p3/4P3/8/8/4K3 w - - 0 1")
+    pawn_push_index = full_threat_feature_index(
+        chess.WHITE,
+        chess.E1,
+        chess.Piece(chess.PAWN, chess.BLACK),
+        chess.E5,
+        chess.Piece(chess.PAWN, chess.WHITE),
+        chess.E4,
+    )
+    if pawn_push_index not in active_features(blocked_pawn, chess.WHITE, FEATURE_SET_HALFKA_V2_HM_FULL_THREATS):
+        print("missing pawn push/blocker threat feature", file=sys.stderr)
+        return 1
+
+    king_target = full_threat_feature_index(
+        chess.WHITE,
+        chess.E1,
+        chess.Piece(chess.QUEEN, chess.WHITE),
+        chess.E2,
+        chess.Piece(chess.KING, chess.BLACK),
+        chess.E8,
+    )
+    if king_target is not None:
+        print("FullThreats should not encode king targets in the current Stockfish map", file=sys.stderr)
         return 1
 
     mirrored = chess.Board("3k4/8/8/8/q7/2N5/8/3K4 w - - 0 1")
@@ -124,6 +149,10 @@ def main() -> int:
         threat_checkpoint = root / "threat_model.pt"
         threat_binary_path = root / "threat_model.nnue"
         threat_model = NnueModel(hidden_size=8, feature_set=FEATURE_SET_HALFKA_V2_HM_FULL_THREATS)
+        with torch.no_grad():
+            threat_model.hidden_bias.zero_()
+            threat_model.placement_feature.weight.zero_()
+            threat_model.threat_feature.weight.zero_()
         save_checkpoint(threat_checkpoint, threat_model, {"test": "threat"})
         loaded_threat, threat_metadata = load_checkpoint(threat_checkpoint, torch.device("cpu"))
         if loaded_threat.feature_set != FEATURE_SET_HALFKA_V2_HM_FULL_THREATS or threat_metadata.get("test") != "threat":

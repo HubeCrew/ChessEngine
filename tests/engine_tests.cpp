@@ -173,27 +173,28 @@ std::filesystem::path write_constant_halfka_sf_lite_nnue_model(
     write_binary_value(output, l2_size);
     write_binary_value(output, l3_size);
 
-    const std::vector<float> hidden_bias(hidden_size, 0.0F);
-    output.write(reinterpret_cast<const char*>(hidden_bias.data()), static_cast<std::streamsize>(hidden_bias.size() * sizeof(float)));
-
     if (full_threats) {
-        const std::vector<float> placement_feature_weights(
+        const std::vector<std::int16_t> hidden_bias(hidden_size, 0);
+        output.write(reinterpret_cast<const char*>(hidden_bias.data()), static_cast<std::streamsize>(hidden_bias.size() * sizeof(std::int16_t)));
+        const std::vector<std::int16_t> placement_feature_weights(
             static_cast<std::size_t>(chess::engine::nnue::kHalfKaV2HmLiteFeatureCount) * hidden_size,
-            0.0F
+            0
         );
-        const std::vector<float> threat_feature_weights(
+        const std::vector<std::int8_t> threat_feature_weights(
             static_cast<std::size_t>(chess::engine::nnue::kFullThreatsFeatureCount) * hidden_size,
-            0.0F
+            0
         );
         output.write(
             reinterpret_cast<const char*>(placement_feature_weights.data()),
-            static_cast<std::streamsize>(placement_feature_weights.size() * sizeof(float))
+            static_cast<std::streamsize>(placement_feature_weights.size() * sizeof(std::int16_t))
         );
         output.write(
             reinterpret_cast<const char*>(threat_feature_weights.data()),
-            static_cast<std::streamsize>(threat_feature_weights.size() * sizeof(float))
+            static_cast<std::streamsize>(threat_feature_weights.size() * sizeof(std::int8_t))
         );
     } else {
+        const std::vector<float> hidden_bias(hidden_size, 0.0F);
+        output.write(reinterpret_cast<const char*>(hidden_bias.data()), static_cast<std::streamsize>(hidden_bias.size() * sizeof(float)));
         const std::vector<float> feature_weights(
             static_cast<std::size_t>(feature_count) * hidden_size,
             0.0F
@@ -453,8 +454,8 @@ TEST_CASE("HalfKAv2_hm-full-threats NNUE features encode Stockfish-style attack 
         chess::engine::nnue::feature_count(chess::engine::nnue::FeatureSet::HalfKaV2HmFullThreats)
         == chess::engine::nnue::kHalfKaV2HmFullThreatsFeatureCount
     );
-    REQUIRE(chess::engine::nnue::kFullThreatsFeatureCount == 79856);
-    REQUIRE(chess::engine::nnue::kHalfKaV2HmFullThreatsFeatureCount == 100336);
+    REQUIRE(chess::engine::nnue::kFullThreatsFeatureCount == 60720);
+    REQUIRE(chess::engine::nnue::kHalfKaV2HmFullThreatsFeatureCount == 81200);
 
     const std::uint32_t threat = chess::engine::nnue::full_threat_feature_index(
         chess::Color::White,
@@ -488,6 +489,32 @@ TEST_CASE("HalfKAv2_hm-full-threats NNUE features encode Stockfish-style attack 
         chess::engine::nnue::FeatureSet::HalfKaV2HmFullThreats
     );
     REQUIRE(std::find(quiet_features.begin(), quiet_features.end(), threat) == quiet_features.end());
+
+    const std::uint32_t pawn_push_threat = chess::engine::nnue::full_threat_feature_index(
+        chess::Color::White,
+        chess::make_square(4, 0),
+        chess::Piece::BlackPawn,
+        chess::make_square(4, 4),
+        chess::Piece::WhitePawn,
+        chess::make_square(4, 3)
+    );
+    const chess::Board blocked_pawn = chess::board_from_fen("4k3/8/8/4p3/4P3/8/8/4K3 w - - 0 1");
+    const std::vector<std::uint32_t> blocked_pawn_features = chess::engine::nnue::active_feature_indices(
+        blocked_pawn,
+        chess::Color::White,
+        chess::engine::nnue::FeatureSet::HalfKaV2HmFullThreats
+    );
+    REQUIRE(std::find(blocked_pawn_features.begin(), blocked_pawn_features.end(), pawn_push_threat) != blocked_pawn_features.end());
+
+    const std::uint32_t king_target = chess::engine::nnue::full_threat_feature_index(
+        chess::Color::White,
+        chess::make_square(4, 0),
+        chess::Piece::WhiteQueen,
+        chess::make_square(4, 1),
+        chess::Piece::BlackKing,
+        chess::make_square(4, 7)
+    );
+    REQUIRE(king_target == chess::engine::nnue::kHalfKaV2HmFullThreatsFeatureCount);
 
     const chess::Board mirrored = chess::board_from_fen("3k4/8/8/8/q7/2N5/8/3K4 w - - 0 1");
     REQUIRE(

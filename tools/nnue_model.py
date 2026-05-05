@@ -29,7 +29,7 @@ FEATURE_SET_BY_ID = {value: key for key, value in FEATURE_SET_IDS.items()}
 HALFKP_FEATURE_COUNT = 64 * 10 * 64
 HALFKA_V2_HM_LITE_KING_BUCKETS = 32
 HALFKA_V2_HM_LITE_FEATURE_COUNT = HALFKA_V2_HM_LITE_KING_BUCKETS * 10 * 64
-FULL_THREATS_FEATURE_COUNT = 79856
+FULL_THREATS_FEATURE_COUNT = 60720
 HALFKA_V2_HM_FULL_THREATS_FEATURE_COUNT = HALFKA_V2_HM_LITE_FEATURE_COUNT + FULL_THREATS_FEATURE_COUNT
 FULL_THREATS_MAX_ACTIVE = 128
 FEATURE_COUNT = HALFKP_FEATURE_COUNT
@@ -53,19 +53,19 @@ PIECE_SLOT = {
 FULL_THREATS_PIECE_TYPES = (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING)
 FULL_THREATS_TARGET_MAP = {
     chess.PAWN: {chess.PAWN: 0, chess.KNIGHT: 1, chess.ROOK: 2},
-    chess.KNIGHT: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.QUEEN: 4, chess.KING: 5},
-    chess.BISHOP: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.KING: 4},
-    chess.ROOK: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.KING: 4},
-    chess.QUEEN: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.QUEEN: 4, chess.KING: 5},
-    chess.KING: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3},
+    chess.KNIGHT: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.QUEEN: 4},
+    chess.BISHOP: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3},
+    chess.ROOK: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3},
+    chess.QUEEN: {chess.PAWN: 0, chess.KNIGHT: 1, chess.BISHOP: 2, chess.ROOK: 3, chess.QUEEN: 4},
+    chess.KING: {},
 }
 FULL_THREATS_VALID_TARGETS = {
     chess.PAWN: 6,
-    chess.KNIGHT: 12,
-    chess.BISHOP: 10,
-    chess.ROOK: 10,
-    chess.QUEEN: 12,
-    chess.KING: 8,
+    chess.KNIGHT: 10,
+    chess.BISHOP: 8,
+    chess.ROOK: 8,
+    chess.QUEEN: 10,
+    chess.KING: 0,
 }
 
 
@@ -102,6 +102,19 @@ def halfka_v2_hm_oriented_square(square: chess.Square, perspective: chess.Color,
 def full_threats_attacks(attacker_slot: int, square: chess.Square) -> chess.SquareSet:
     relative_color = chess.WHITE if attacker_slot < 6 else chess.BLACK
     piece_type = FULL_THREATS_PIECE_TYPES[attacker_slot % 6]
+    if piece_type == chess.PAWN:
+        attacks = chess.SquareSet()
+        file = chess.square_file(square)
+        rank = chess.square_rank(square)
+        direction = 1 if relative_color == chess.WHITE else -1
+        next_rank = rank + direction
+        if 0 <= next_rank < 8:
+            attacks.add(chess.square(file, next_rank))
+            if file > 0:
+                attacks.add(chess.square(file - 1, next_rank))
+            if file < 7:
+                attacks.add(chess.square(file + 1, next_rank))
+        return attacks
     board = chess.Board.empty()
     board.set_piece_at(square, chess.Piece(piece_type, relative_color))
     return board.attacks(square)
@@ -262,23 +275,59 @@ def full_threat_feature_index(
 
 def active_full_threat_features(board: chess.Board, perspective: chess.Color, perspective_king: chess.Square) -> list[int]:
     occupied = chess.SquareSet(board.occupied)
+    pawns = board.pieces(chess.PAWN, chess.WHITE) | board.pieces(chess.PAWN, chess.BLACK)
     features: list[int] = []
-    for attacker_square, attacker in board.piece_map().items():
-        attacks = board.attacks(attacker_square) & occupied
-        for target_square in attacks:
-            victim = board.piece_at(target_square)
-            if victim is None:
+    for color in (chess.WHITE, chess.BLACK):
+        attacker = chess.Piece(chess.PAWN, color)
+        for attacker_square in board.pieces(chess.PAWN, color):
+            file = chess.square_file(attacker_square)
+            rank = chess.square_rank(attacker_square)
+            direction = 1 if color == chess.WHITE else -1
+            next_rank = rank + direction
+            if not (0 <= next_rank < 8):
                 continue
-            index = full_threat_feature_index(
-                perspective,
-                perspective_king,
-                attacker,
-                attacker_square,
-                victim,
-                target_square,
-            )
-            if index is not None:
-                features.append(index - HALFKA_V2_HM_LITE_FEATURE_COUNT)
+            target_squares = []
+            for target_file in (file - 1, file + 1):
+                if 0 <= target_file < 8:
+                    target = chess.square(target_file, next_rank)
+                    if target in occupied:
+                        target_squares.append(target)
+            push_target = chess.square(file, next_rank)
+            if push_target in pawns:
+                target_squares.append(push_target)
+            for target_square in target_squares:
+                victim = board.piece_at(target_square)
+                if victim is None:
+                    continue
+                index = full_threat_feature_index(
+                    perspective,
+                    perspective_king,
+                    attacker,
+                    attacker_square,
+                    victim,
+                    target_square,
+                )
+                if index is not None:
+                    features.append(index - HALFKA_V2_HM_LITE_FEATURE_COUNT)
+
+        for piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+            attacker = chess.Piece(piece_type, color)
+            for attacker_square in board.pieces(piece_type, color):
+                attacks = board.attacks(attacker_square) & occupied
+                for target_square in attacks:
+                    victim = board.piece_at(target_square)
+                    if victim is None:
+                        continue
+                    index = full_threat_feature_index(
+                        perspective,
+                        perspective_king,
+                        attacker,
+                        attacker_square,
+                        victim,
+                        target_square,
+                    )
+                    if index is not None:
+                        features.append(index - HALFKA_V2_HM_LITE_FEATURE_COUNT)
     return sorted(features)
 
 
@@ -326,6 +375,8 @@ class BinaryNnue:
     l3_size: int = 0
     hidden_bias_float: torch.Tensor | None = None
     feature_weights_float: torch.Tensor | None = None
+    placement_feature_weights_quantized: torch.Tensor | None = None
+    threat_feature_weights_quantized: torch.Tensor | None = None
     placement_feature_weights_float: torch.Tensor | None = None
     threat_feature_weights_float: torch.Tensor | None = None
     direct_weights: torch.Tensor | None = None
@@ -342,20 +393,27 @@ class BinaryNnue:
         if self.architecture == ARCHITECTURE_SF_LITE:
             assert self.hidden_bias_float is not None
             if self.feature_set == FEATURE_SET_HALFKA_V2_HM_FULL_THREATS:
-                assert self.placement_feature_weights_float is not None
-                assert self.threat_feature_weights_float is not None
-                values = self.hidden_bias_float.clone()
                 placement = [feature for feature in features if feature < HALFKA_V2_HM_LITE_FEATURE_COUNT]
                 threats = [
                     feature - HALFKA_V2_HM_LITE_FEATURE_COUNT
                     for feature in features
                     if HALFKA_V2_HM_LITE_FEATURE_COUNT <= feature < HALFKA_V2_HM_FULL_THREATS_FEATURE_COUNT
                 ]
+                if self.placement_feature_weights_quantized is not None and self.threat_feature_weights_quantized is not None:
+                    values = self.hidden_bias.to(torch.int32).clone()
+                    if placement:
+                        values += self.placement_feature_weights_quantized[torch.tensor(placement, dtype=torch.long)].to(torch.int32).sum(dim=0)
+                    if threats:
+                        values += self.threat_feature_weights_quantized[torch.tensor(threats, dtype=torch.long)].to(torch.int32).sum(dim=0)
+                    return values.to(torch.float32) / float(self.accumulator_scale)
+                assert self.placement_feature_weights_float is not None
+                assert self.threat_feature_weights_float is not None
+                values_float = self.hidden_bias_float.clone()
                 if placement:
-                    values += self.placement_feature_weights_float[torch.tensor(placement, dtype=torch.long)].sum(dim=0)
+                    values_float += self.placement_feature_weights_float[torch.tensor(placement, dtype=torch.long)].sum(dim=0)
                 if threats:
-                    values += self.threat_feature_weights_float[torch.tensor(threats, dtype=torch.long)].sum(dim=0)
-                return values
+                    values_float += self.threat_feature_weights_float[torch.tensor(threats, dtype=torch.long)].sum(dim=0)
+                return values_float
             assert self.feature_weights_float is not None
             if features:
                 indices = torch.tensor(features, dtype=torch.long)
@@ -701,21 +759,40 @@ def load_binary(path: Path) -> BinaryNnue:
                     raise ValueError(f"truncated SF-lite NNUE float tensor in {path}")
                 return torch.frombuffer(bytearray(data), dtype=torch.float32).clone().reshape(shape)
 
-            hidden_bias_float = read_float_tensor(hidden_size, (hidden_size,))
-            placement_feature_weights_float = None
-            threat_feature_weights_float = None
+            def read_int16_tensor(count: int, shape: tuple[int, ...]) -> torch.Tensor:
+                data = handle.read(count * 2)
+                if len(data) != count * 2:
+                    raise ValueError(f"truncated SF-lite NNUE int16 tensor in {path}")
+                return torch.frombuffer(bytearray(data), dtype=torch.int16).clone().reshape(shape)
+
+            def read_int8_tensor(count: int, shape: tuple[int, ...]) -> torch.Tensor:
+                data = handle.read(count)
+                if len(data) != count:
+                    raise ValueError(f"truncated SF-lite NNUE int8 tensor in {path}")
+                return torch.frombuffer(bytearray(data), dtype=torch.int8).clone().reshape(shape)
+
+            hidden_bias = torch.empty(0, dtype=torch.int16)
+            placement_feature_weights_quantized = None
+            threat_feature_weights_quantized = None
             if version >= FORMAT_VERSION_SPLIT_FEATURES:
-                placement_feature_weights_float = read_float_tensor(
+                hidden_bias = read_int16_tensor(hidden_size, (hidden_size,))
+                placement_feature_weights_quantized = read_int16_tensor(
                     placement_feature_count * hidden_size,
                     (placement_feature_count, hidden_size),
                 )
-                threat_feature_weights_float = read_float_tensor(
+                threat_feature_weights_quantized = read_int8_tensor(
                     threat_feature_count * hidden_size,
                     (threat_feature_count, hidden_size),
                 )
+                hidden_bias_float = hidden_bias.to(torch.float32) / float(accumulator_scale)
+                placement_feature_weights_float = None
+                threat_feature_weights_float = None
                 feature_weights_float = torch.empty((0, 0), dtype=torch.float32)
             else:
+                hidden_bias_float = read_float_tensor(hidden_size, (hidden_size,))
                 feature_weights_float = read_float_tensor(feature_count * hidden_size, (feature_count, hidden_size))
+                placement_feature_weights_float = None
+                threat_feature_weights_float = None
             direct_weights = read_float_tensor(hidden_size * 2, (hidden_size * 2,))
             direct_bias_data = handle.read(4)
             if len(direct_bias_data) != 4:
@@ -739,7 +816,7 @@ def load_binary(path: Path) -> BinaryNnue:
                 hidden_size=hidden_size,
                 accumulator_scale=accumulator_scale,
                 output_scale=output_scale,
-                hidden_bias=torch.empty(0, dtype=torch.int16),
+                hidden_bias=hidden_bias,
                 feature_weights=torch.empty((0, 0), dtype=torch.int16),
                 output_weights=torch.empty(0, dtype=torch.int16),
                 output_bias=0,
@@ -748,6 +825,8 @@ def load_binary(path: Path) -> BinaryNnue:
                 l3_size=l3_size,
                 hidden_bias_float=hidden_bias_float,
                 feature_weights_float=feature_weights_float,
+                placement_feature_weights_quantized=placement_feature_weights_quantized,
+                threat_feature_weights_quantized=threat_feature_weights_quantized,
                 placement_feature_weights_float=placement_feature_weights_float,
                 threat_feature_weights_float=threat_feature_weights_float,
                 direct_weights=direct_weights,
@@ -831,11 +910,27 @@ def export_binary(
     path.parent.mkdir(parents=True, exist_ok=True)
     if model.architecture == ARCHITECTURE_SF_LITE:
         with torch.no_grad():
-            hidden_bias = model.hidden_bias.detach().cpu().to(torch.float32).contiguous()
             if model.split_feature_blocks:
-                placement_feature_weights = model.placement_feature.weight.detach().cpu().to(torch.float32).contiguous()
-                threat_feature_weights = model.threat_feature.weight.detach().cpu().to(torch.float32).contiguous()
+                hidden_bias = (
+                    torch.round(model.hidden_bias.detach().cpu() * accumulator_scale)
+                    .clamp(-32768, 32767)
+                    .to(torch.int16)
+                    .contiguous()
+                )
+                placement_feature_weights = (
+                    torch.round(model.placement_feature.weight.detach().cpu() * accumulator_scale)
+                    .clamp(-32768, 32767)
+                    .to(torch.int16)
+                    .contiguous()
+                )
+                threat_feature_weights = (
+                    torch.round(model.threat_feature.weight.detach().cpu() * accumulator_scale)
+                    .clamp(-128, 127)
+                    .to(torch.int8)
+                    .contiguous()
+                )
             else:
+                hidden_bias = model.hidden_bias.detach().cpu().to(torch.float32).contiguous()
                 feature_weights = model.feature.weight.detach().cpu().to(torch.float32).contiguous()
             direct_weights = model.direct.weight.detach().cpu().squeeze(0).to(torch.float32).contiguous()
             direct_bias = float(model.direct.bias.detach().cpu()[0])

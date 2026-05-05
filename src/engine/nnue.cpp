@@ -86,15 +86,15 @@ Square halfka_v2_hm_oriented_square(Square square, Color perspective, bool mirro
     return mirror ? horizontal_mirror_square(oriented) : oriented;
 }
 
-constexpr std::array<int, 6> kFullThreatsValidTargets{{6, 12, 10, 10, 12, 8}};
+constexpr std::array<int, 6> kFullThreatsValidTargets{{6, 10, 8, 8, 10, 0}};
 
 constexpr std::array<std::array<int, 6>, 6> kFullThreatsTargetMap{{
     {{0, 1, -1, 2, -1, -1}},
-    {{0, 1, 2, 3, 4, 5}},
-    {{0, 1, 2, 3, -1, 4}},
-    {{0, 1, 2, 3, -1, 4}},
-    {{0, 1, 2, 3, 4, 5}},
+    {{0, 1, 2, 3, 4, -1}},
     {{0, 1, 2, 3, -1, -1}},
+    {{0, 1, 2, 3, -1, -1}},
+    {{0, 1, 2, 3, 4, -1}},
+    {{-1, -1, -1, -1, -1, -1}},
 }};
 
 int full_threat_piece_type_slot(PieceType type) {
@@ -115,6 +115,15 @@ int full_threat_piece_slot(Piece piece, Color perspective) {
 Bitboard full_threat_attacks(int attacker_slot, Square square, Bitboard occupancy) {
     const Color relative_color = attacker_slot < 6 ? Color::White : Color::Black;
     const PieceType type = static_cast<PieceType>(attacker_slot % 6);
+    if (type == PieceType::Pawn) {
+        Bitboard attacks = attacks::pawn_attacks(relative_color, square);
+        const int direction = relative_color == Color::White ? 8 : -8;
+        const Square push = square + direction;
+        if (is_valid_square(push)) {
+            attacks |= square_bb(push);
+        }
+        return attacks;
+    }
     return attacks::piece_attacks(type, relative_color, square, occupancy);
 }
 
@@ -303,8 +312,34 @@ std::vector<std::uint32_t> active_feature_indices(const Board& board, Color pers
     }
     if (feature_set == FeatureSet::HalfKaV2HmFullThreats) {
         const Bitboard occupied = board.occupancy();
+        const Bitboard pawns = board.pieces(Color::White, PieceType::Pawn) | board.pieces(Color::Black, PieceType::Pawn);
         for (Color color : {Color::White, Color::Black}) {
-            for (PieceType type : {PieceType::Pawn, PieceType::Knight, PieceType::Bishop, PieceType::Rook, PieceType::Queen, PieceType::King}) {
+            Bitboard pawn_attackers = board.pieces(color, PieceType::Pawn);
+            while (pawn_attackers != 0) {
+                const Square from = __builtin_ctzll(pawn_attackers);
+                pawn_attackers &= pawn_attackers - 1;
+                Bitboard targets = attacks::pawn_attacks(color, from) & occupied;
+                const Square push = from + (color == Color::White ? 8 : -8);
+                if (is_valid_square(push) && (pawns & square_bb(push)) != 0) {
+                    targets |= square_bb(push);
+                }
+                while (targets != 0) {
+                    const Square target = __builtin_ctzll(targets);
+                    targets &= targets - 1;
+                    const std::uint32_t index = full_threat_feature_index(
+                        perspective,
+                        king,
+                        make_piece(color, PieceType::Pawn),
+                        from,
+                        board.piece_at(target),
+                        target
+                    );
+                    if (index < maximum_feature) {
+                        features.push_back(index);
+                    }
+                }
+            }
+            for (PieceType type : {PieceType::Knight, PieceType::Bishop, PieceType::Rook, PieceType::Queen}) {
                 Bitboard attackers = board.pieces(color, type);
                 while (attackers != 0) {
                     const Square from = __builtin_ctzll(attackers);
@@ -454,6 +489,9 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         std::vector<float> feature_weights;
         std::vector<float> placement_feature_weights;
         std::vector<float> threat_feature_weights;
+        std::vector<std::int16_t> hidden_bias_quantized;
+        std::vector<std::int16_t> placement_feature_weights_quantized;
+        std::vector<std::int8_t> threat_feature_weights_quantized;
         std::vector<float> direct_weights;
         float direct_bias = 0.0F;
         std::vector<float> fc0_weights;
@@ -463,12 +501,14 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         std::vector<float> fc2_weights;
         float fc2_bias = 0.0F;
         float side_to_move_weight = 0.0F;
-        bool ok = read_vector(input, hidden_bias, hidden_size);
-        if (ok && version >= kFormatVersionV6) {
-            ok = read_vector(input, placement_feature_weights, static_cast<std::size_t>(placement_feature_count) * hidden_size)
-              && read_vector(input, threat_feature_weights, static_cast<std::size_t>(threat_feature_count) * hidden_size);
+        bool ok = true;
+        if (version >= kFormatVersionV6) {
+            ok = read_vector(input, hidden_bias_quantized, hidden_size)
+              && read_vector(input, placement_feature_weights_quantized, static_cast<std::size_t>(placement_feature_count) * hidden_size)
+              && read_vector(input, threat_feature_weights_quantized, static_cast<std::size_t>(threat_feature_count) * hidden_size);
         } else if (ok) {
-            ok = read_vector(input, feature_weights, feature_weight_count);
+            ok = read_vector(input, hidden_bias, hidden_size)
+              && read_vector(input, feature_weights, feature_weight_count);
         }
         if (!ok
             || !read_vector(input, direct_weights, static_cast<std::size_t>(hidden_size) * 2)
@@ -510,6 +550,9 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
         feature_weights_float_ = std::move(feature_weights);
         placement_feature_weights_float_ = std::move(placement_feature_weights);
         threat_feature_weights_float_ = std::move(threat_feature_weights);
+        feature_bias_ = std::move(hidden_bias_quantized);
+        placement_feature_weights_quantized_ = std::move(placement_feature_weights_quantized);
+        threat_feature_weights_quantized_ = std::move(threat_feature_weights_quantized);
         direct_weights_ = std::move(direct_weights);
         direct_bias_ = direct_bias;
         fc0_weights_ = std::move(fc0_weights);
@@ -567,6 +610,8 @@ bool Network::load(const std::filesystem::path& path, std::string* error) {
     feature_weights_float_.clear();
     placement_feature_weights_float_.clear();
     threat_feature_weights_float_.clear();
+    placement_feature_weights_quantized_.clear();
+    threat_feature_weights_quantized_.clear();
     direct_weights_.clear();
     direct_bias_ = 0.0F;
     fc0_weights_.clear();
@@ -590,6 +635,8 @@ void Network::clear() {
     feature_weights_float_.clear();
     placement_feature_weights_float_.clear();
     threat_feature_weights_float_.clear();
+    placement_feature_weights_quantized_.clear();
+    threat_feature_weights_quantized_.clear();
     direct_weights_.clear();
     direct_bias_ = 0.0F;
     fc0_weights_.clear();
@@ -626,6 +673,37 @@ std::vector<int> Network::accumulator(const Board& board, Color perspective) con
 }
 
 std::vector<float> Network::accumulator_float(const Board& board, Color perspective) const {
+    if (info_.feature_set == FeatureSet::HalfKaV2HmFullThreats && !placement_feature_weights_quantized_.empty()) {
+        std::vector<int> quantized;
+        quantized.reserve(info_.hidden_size);
+        for (const std::int16_t bias : feature_bias_) {
+            quantized.push_back(bias);
+        }
+
+        for (const std::uint32_t feature : active_feature_indices(board, perspective, info_.feature_set)) {
+            const bool placement = feature < info_.placement_feature_count;
+            const std::uint32_t weight_feature = placement ? feature : feature - info_.placement_feature_count;
+            const std::size_t offset = static_cast<std::size_t>(weight_feature) * info_.hidden_size;
+            if (placement) {
+                for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
+                    quantized[index] += placement_feature_weights_quantized_[offset + index];
+                }
+            } else {
+                for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
+                    quantized[index] += threat_feature_weights_quantized_[offset + index];
+                }
+            }
+        }
+
+        std::vector<float> values;
+        values.reserve(info_.hidden_size);
+        const float scale = static_cast<float>(info_.accumulator_scale);
+        for (const int value : quantized) {
+            values.push_back(static_cast<float>(value) / scale);
+        }
+        return values;
+    }
+
     std::vector<float> values = hidden_bias_float_;
     for (const std::uint32_t feature : active_feature_indices(board, perspective, info_.feature_set)) {
         const std::vector<float>* weights = &feature_weights_float_;

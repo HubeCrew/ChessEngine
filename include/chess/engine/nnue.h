@@ -20,7 +20,7 @@ constexpr std::uint32_t kFormatVersion = kFormatVersionV4;
 constexpr std::uint32_t kHalfKpFeatureCount = 64 * 10 * 64;
 constexpr std::uint32_t kHalfKaV2HmLiteKingBuckets = 32;
 constexpr std::uint32_t kHalfKaV2HmLiteFeatureCount = kHalfKaV2HmLiteKingBuckets * 10 * 64;
-constexpr std::uint32_t kFullThreatsFeatureCount = 79856;
+constexpr std::uint32_t kFullThreatsFeatureCount = 60720;
 constexpr std::uint32_t kFullThreatsMaxActive = 128;
 constexpr std::uint32_t kHalfKaV2HmFullThreatsFeatureCount =
     kHalfKaV2HmLiteFeatureCount + kFullThreatsFeatureCount;
@@ -96,6 +96,8 @@ private:
     std::vector<float> feature_weights_float_;
     std::vector<float> placement_feature_weights_float_;
     std::vector<float> threat_feature_weights_float_;
+    std::vector<std::int16_t> placement_feature_weights_quantized_;
+    std::vector<std::int8_t> threat_feature_weights_quantized_;
     std::vector<float> direct_weights_;
     float direct_bias_ = 0.0F;
     std::vector<float> fc0_weights_;
