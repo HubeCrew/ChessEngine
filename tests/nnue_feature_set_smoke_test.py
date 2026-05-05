@@ -153,6 +153,15 @@ def main() -> int:
             threat_model.hidden_bias.zero_()
             threat_model.placement_feature.weight.zero_()
             threat_model.threat_feature.weight.zero_()
+            threat_model.direct.weight.zero_()
+            threat_model.direct.bias.zero_()
+            threat_model.fc0.weight.zero_()
+            threat_model.fc0.bias.zero_()
+            threat_model.fc1.weight.zero_()
+            threat_model.fc1.bias.zero_()
+            threat_model.fc2.weight.zero_()
+            threat_model.fc2.bias.zero_()
+            threat_model.side_to_move_weight.zero_()
         save_checkpoint(threat_checkpoint, threat_model, {"test": "threat"})
         loaded_threat, threat_metadata = load_checkpoint(threat_checkpoint, torch.device("cpu"))
         if loaded_threat.feature_set != FEATURE_SET_HALFKA_V2_HM_FULL_THREATS or threat_metadata.get("test") != "threat":
@@ -163,6 +172,9 @@ def main() -> int:
             return 1
         export_binary(threat_binary_path, loaded_threat)
         threat_binary = load_binary(threat_binary_path)
+        if threat_binary.format_version != 7:
+            print(f"expected v7 integer-dense binary, got v{threat_binary.format_version}", file=sys.stderr)
+            return 1
         if threat_binary.feature_set != FEATURE_SET_HALFKA_V2_HM_FULL_THREATS:
             print("threat binary feature set was not preserved", file=sys.stderr)
             return 1

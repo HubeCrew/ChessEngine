@@ -14,8 +14,9 @@ FORMAT_VERSION_SIDE_TO_MOVE_PERSPECTIVE = 3
 FORMAT_VERSION_SF_LITE = 4
 FORMAT_VERSION_FEATURE_SET = 5
 FORMAT_VERSION_SPLIT_FEATURES = 6
+FORMAT_VERSION_INTEGER_DENSE = 7
 FORMAT_VERSION = FORMAT_VERSION_SF_LITE
-SUPPORTED_FORMAT_VERSIONS = (1, 2, 3, 4, 5, 6)
+SUPPORTED_FORMAT_VERSIONS = (1, 2, 3, 4, 5, 6, 7)
 FEATURE_SET_HALFKP = "halfkp-v1"
 FEATURE_SET_HALFKA_V2_HM_LITE = "halfka-v2-hm-lite"
 FEATURE_SET_HALFKA_V2_HM_FULL_THREATS = "halfka-v2-hm-full-threats"
@@ -38,6 +39,8 @@ DEFAULT_L2_SIZE = 64
 DEFAULT_L3_SIZE = 32
 DEFAULT_ACCUMULATOR_SCALE = 256
 DEFAULT_OUTPUT_SCALE = 1024
+DEFAULT_DENSE_ACTIVATION_SCALE = 1024
+DEFAULT_DENSE_WEIGHT_SCALE = 2048
 MAGIC = b"CENNUE1\0"
 ARCHITECTURE_LINEAR = "linear"
 ARCHITECTURE_SF_LITE = "sf-lite"
@@ -73,6 +76,14 @@ def rounded_divide(value: int, scale: int) -> int:
     if value >= 0:
         return (value + scale // 2) // scale
     return -((-value + scale // 2) // scale)
+
+
+def quantize_int16(values: torch.Tensor, scale: float) -> torch.Tensor:
+    return torch.round(values * scale).clamp(-32768, 32767).to(torch.int16).contiguous()
+
+
+def quantize_int32(values: torch.Tensor, scale: float) -> torch.Tensor:
+    return torch.round(values * scale).clamp(-(2**31), 2**31 - 1).to(torch.int32).contiguous()
 
 
 def perspective_square(square: chess.Square, perspective: chess.Color) -> chess.Square:
@@ -388,6 +399,18 @@ class BinaryNnue:
     fc2_weight: torch.Tensor | None = None
     fc2_bias: float = 0.0
     side_to_move_weight_float: float = 0.0
+    dense_activation_scale: int = DEFAULT_DENSE_ACTIVATION_SCALE
+    dense_weight_scale: int = DEFAULT_DENSE_WEIGHT_SCALE
+    integer_dense: bool = False
+    direct_weights_quantized: torch.Tensor | None = None
+    direct_bias_quantized: int = 0
+    fc0_weight_quantized: torch.Tensor | None = None
+    fc0_bias_quantized: torch.Tensor | None = None
+    fc1_weight_quantized: torch.Tensor | None = None
+    fc1_bias_quantized: torch.Tensor | None = None
+    fc2_weight_quantized: torch.Tensor | None = None
+    fc2_bias_quantized: int = 0
+    side_to_move_weight_quantized: int = 0
 
     def accumulator(self, features: list[int]) -> torch.Tensor:
         if self.architecture == ARCHITECTURE_SF_LITE:
@@ -405,6 +428,8 @@ class BinaryNnue:
                         values += self.placement_feature_weights_quantized[torch.tensor(placement, dtype=torch.long)].to(torch.int32).sum(dim=0)
                     if threats:
                         values += self.threat_feature_weights_quantized[torch.tensor(threats, dtype=torch.long)].to(torch.int32).sum(dim=0)
+                    if self.integer_dense:
+                        return values
                     return values.to(torch.float32) / float(self.accumulator_scale)
                 assert self.placement_feature_weights_float is not None
                 assert self.threat_feature_weights_float is not None
@@ -427,14 +452,63 @@ class BinaryNnue:
     def evaluate_white_perspective(self, board: chess.Board) -> int:
         side_to_move = 1 if board.turn == chess.WHITE else -1
         if self.architecture == ARCHITECTURE_SF_LITE:
+            white_raw = self.accumulator(active_features(board, chess.WHITE, self.feature_set))
+            black_raw = self.accumulator(active_features(board, chess.BLACK, self.feature_set))
+            if self.integer_dense:
+                assert self.direct_weights_quantized is not None
+                assert self.fc0_weight_quantized is not None
+                assert self.fc0_bias_quantized is not None
+                assert self.fc1_weight_quantized is not None
+                assert self.fc1_bias_quantized is not None
+                assert self.fc2_weight_quantized is not None
+                activation_scale = self.dense_activation_scale
+                weight_scale = self.dense_weight_scale
+                accumulator_scale = self.accumulator_scale
+                if self.placement_feature_weights_quantized is not None:
+                    white_q = white_raw.to(torch.int64).clamp(0, accumulator_scale)
+                    black_q = black_raw.to(torch.int64).clamp(0, accumulator_scale)
+                else:
+                    white_q = torch.round(white_raw.clamp(0.0, 1.0) * accumulator_scale).to(torch.int64)
+                    black_q = torch.round(black_raw.clamp(0.0, 1.0) * accumulator_scale).to(torch.int64)
+                stm_q = white_q if board.turn == chess.WHITE else black_q
+                nstm_q = black_q if board.turn == chess.WHITE else white_q
+                inputs_q = torch.cat([stm_q, nstm_q])
+                direct_sum = int((inputs_q * self.direct_weights_quantized.to(torch.int64)).sum())
+                total = rounded_divide(direct_sum, accumulator_scale) + self.direct_bias_quantized
+
+                fc0_values: list[int] = []
+                for row in range(self.l2_size):
+                    row_sum = int((inputs_q * self.fc0_weight_quantized[row].to(torch.int64)).sum())
+                    value = rounded_divide(row_sum * activation_scale, accumulator_scale * weight_scale)
+                    value += int(self.fc0_bias_quantized[row])
+                    fc0_values.append(max(0, min(activation_scale, value)))
+                fc0 = torch.tensor(fc0_values, dtype=torch.int64)
+
+                fc1_values: list[int] = []
+                for row in range(self.l3_size):
+                    square_weights = self.fc1_weight_quantized[row, : self.l2_size].to(torch.int64)
+                    linear_weights = self.fc1_weight_quantized[row, self.l2_size :].to(torch.int64)
+                    square_sum = int(((fc0 * fc0) * square_weights).sum())
+                    linear_sum = int((fc0 * linear_weights).sum())
+                    value = int(self.fc1_bias_quantized[row])
+                    value += rounded_divide(square_sum, activation_scale * weight_scale)
+                    value += rounded_divide(linear_sum, weight_scale)
+                    fc1_values.append(max(0, min(activation_scale, value)))
+                fc1 = torch.tensor(fc1_values, dtype=torch.int64)
+
+                total += rounded_divide(int((fc1 * self.fc2_weight_quantized.to(torch.int64)).sum()), activation_scale)
+                total += self.fc2_bias_quantized + self.side_to_move_weight_quantized
+                stm_score = rounded_divide(total, weight_scale)
+                return stm_score if side_to_move > 0 else -stm_score
+
             assert self.direct_weights is not None
             assert self.fc0_weight is not None
             assert self.fc0_bias is not None
             assert self.fc1_weight is not None
             assert self.fc1_bias is not None
             assert self.fc2_weight is not None
-            white = self.accumulator(active_features(board, chess.WHITE, self.feature_set)).clamp(0.0, 1.0)
-            black = self.accumulator(active_features(board, chess.BLACK, self.feature_set)).clamp(0.0, 1.0)
+            white = white_raw.clamp(0.0, 1.0)
+            black = black_raw.clamp(0.0, 1.0)
             stm = white if board.turn == chess.WHITE else black
             nstm = black if board.turn == chess.WHITE else white
             inputs = torch.cat([stm, nstm])
@@ -771,9 +845,25 @@ def load_binary(path: Path) -> BinaryNnue:
                     raise ValueError(f"truncated SF-lite NNUE int8 tensor in {path}")
                 return torch.frombuffer(bytearray(data), dtype=torch.int8).clone().reshape(shape)
 
+            def read_int32_tensor(count: int, shape: tuple[int, ...]) -> torch.Tensor:
+                data = handle.read(count * 4)
+                if len(data) != count * 4:
+                    raise ValueError(f"truncated SF-lite NNUE int32 tensor in {path}")
+                return torch.frombuffer(bytearray(data), dtype=torch.int32).clone().reshape(shape)
+
             hidden_bias = torch.empty(0, dtype=torch.int16)
             placement_feature_weights_quantized = None
             threat_feature_weights_quantized = None
+            integer_dense = version >= FORMAT_VERSION_INTEGER_DENSE
+            dense_activation_scale = DEFAULT_DENSE_ACTIVATION_SCALE
+            dense_weight_scale = DEFAULT_DENSE_WEIGHT_SCALE
+            if integer_dense:
+                dense_scale_header = handle.read(8)
+                if len(dense_scale_header) != 8:
+                    raise ValueError(f"truncated integer-dense NNUE scale header in {path}")
+                dense_activation_scale, dense_weight_scale = struct.unpack("<II", dense_scale_header)
+                if dense_activation_scale <= 0 or dense_weight_scale <= 0:
+                    raise ValueError(f"invalid integer-dense scales in {path}")
             if version >= FORMAT_VERSION_SPLIT_FEATURES:
                 hidden_bias = read_int16_tensor(hidden_size, (hidden_size,))
                 placement_feature_weights_quantized = read_int16_tensor(
@@ -793,22 +883,51 @@ def load_binary(path: Path) -> BinaryNnue:
                 feature_weights_float = read_float_tensor(feature_count * hidden_size, (feature_count, hidden_size))
                 placement_feature_weights_float = None
                 threat_feature_weights_float = None
-            direct_weights = read_float_tensor(hidden_size * 2, (hidden_size * 2,))
-            direct_bias_data = handle.read(4)
-            if len(direct_bias_data) != 4:
-                raise ValueError(f"truncated SF-lite NNUE direct bias in {path}")
-            (direct_bias,) = struct.unpack("<f", direct_bias_data)
-            fc0_weight = read_float_tensor(l2_size * hidden_size * 2, (l2_size, hidden_size * 2))
-            fc0_bias = read_float_tensor(l2_size, (l2_size,))
-            fc1_weight = read_float_tensor(l3_size * l2_size * 2, (l3_size, l2_size * 2))
-            fc1_bias = read_float_tensor(l3_size, (l3_size,))
-            fc2_weight = read_float_tensor(l3_size, (l3_size,))
-            fc2_bias_data = handle.read(4)
-            side_weight_data = handle.read(4)
-            if len(fc2_bias_data) != 4 or len(side_weight_data) != 4:
-                raise ValueError(f"truncated SF-lite NNUE output bias in {path}")
-            (fc2_bias,) = struct.unpack("<f", fc2_bias_data)
-            (side_to_move_weight_float,) = struct.unpack("<f", side_weight_data)
+            direct_weights_quantized = None
+            direct_bias_quantized = 0
+            fc0_weight_quantized = None
+            fc0_bias_quantized = None
+            fc1_weight_quantized = None
+            fc1_bias_quantized = None
+            fc2_weight_quantized = None
+            fc2_bias_quantized = 0
+            side_to_move_weight_quantized = 0
+            direct_weights = None
+            direct_bias = 0.0
+            fc0_weight = None
+            fc0_bias = None
+            fc1_weight = None
+            fc1_bias = None
+            fc2_weight = None
+            fc2_bias = 0.0
+            side_to_move_weight_float = 0.0
+            if integer_dense:
+                direct_weights_quantized = read_int16_tensor(hidden_size * 2, (hidden_size * 2,))
+                direct_bias_quantized = int(read_int32_tensor(1, (1,))[0])
+                fc0_weight_quantized = read_int16_tensor(l2_size * hidden_size * 2, (l2_size, hidden_size * 2))
+                fc0_bias_quantized = read_int32_tensor(l2_size, (l2_size,))
+                fc1_weight_quantized = read_int16_tensor(l3_size * l2_size * 2, (l3_size, l2_size * 2))
+                fc1_bias_quantized = read_int32_tensor(l3_size, (l3_size,))
+                fc2_weight_quantized = read_int16_tensor(l3_size, (l3_size,))
+                fc2_bias_quantized = int(read_int32_tensor(1, (1,))[0])
+                side_to_move_weight_quantized = int(read_int32_tensor(1, (1,))[0])
+            else:
+                direct_weights = read_float_tensor(hidden_size * 2, (hidden_size * 2,))
+                direct_bias_data = handle.read(4)
+                if len(direct_bias_data) != 4:
+                    raise ValueError(f"truncated SF-lite NNUE direct bias in {path}")
+                (direct_bias,) = struct.unpack("<f", direct_bias_data)
+                fc0_weight = read_float_tensor(l2_size * hidden_size * 2, (l2_size, hidden_size * 2))
+                fc0_bias = read_float_tensor(l2_size, (l2_size,))
+                fc1_weight = read_float_tensor(l3_size * l2_size * 2, (l3_size, l2_size * 2))
+                fc1_bias = read_float_tensor(l3_size, (l3_size,))
+                fc2_weight = read_float_tensor(l3_size, (l3_size,))
+                fc2_bias_data = handle.read(4)
+                side_weight_data = handle.read(4)
+                if len(fc2_bias_data) != 4 or len(side_weight_data) != 4:
+                    raise ValueError(f"truncated SF-lite NNUE output bias in {path}")
+                (fc2_bias,) = struct.unpack("<f", fc2_bias_data)
+                (side_to_move_weight_float,) = struct.unpack("<f", side_weight_data)
             return BinaryNnue(
                 format_version=version,
                 feature_count=feature_count,
@@ -838,6 +957,18 @@ def load_binary(path: Path) -> BinaryNnue:
                 fc2_weight=fc2_weight,
                 fc2_bias=fc2_bias,
                 side_to_move_weight_float=side_to_move_weight_float,
+                dense_activation_scale=dense_activation_scale,
+                dense_weight_scale=dense_weight_scale,
+                integer_dense=integer_dense,
+                direct_weights_quantized=direct_weights_quantized,
+                direct_bias_quantized=direct_bias_quantized,
+                fc0_weight_quantized=fc0_weight_quantized,
+                fc0_bias_quantized=fc0_bias_quantized,
+                fc1_weight_quantized=fc1_weight_quantized,
+                fc1_bias_quantized=fc1_bias_quantized,
+                fc2_weight_quantized=fc2_weight_quantized,
+                fc2_bias_quantized=fc2_bias_quantized,
+                side_to_move_weight_quantized=side_to_move_weight_quantized,
             )
         hidden_bias = torch.frombuffer(bytearray(handle.read(hidden_size * 2)), dtype=torch.int16).clone()
         if hidden_bias.numel() != hidden_size:
@@ -910,6 +1041,7 @@ def export_binary(
     path.parent.mkdir(parents=True, exist_ok=True)
     if model.architecture == ARCHITECTURE_SF_LITE:
         with torch.no_grad():
+            export_format_version = FORMAT_VERSION_INTEGER_DENSE if model.split_feature_blocks else model.format_version
             if model.split_feature_blocks:
                 hidden_bias = (
                     torch.round(model.hidden_bias.detach().cpu() * accumulator_scale)
@@ -929,24 +1061,41 @@ def export_binary(
                     .to(torch.int8)
                     .contiguous()
                 )
+                direct_weights_quantized = quantize_int16(
+                    model.direct.weight.detach().cpu().squeeze(0),
+                    DEFAULT_DENSE_WEIGHT_SCALE,
+                )
+                direct_bias_quantized = int(round(float(model.direct.bias.detach().cpu()[0]) * DEFAULT_DENSE_WEIGHT_SCALE))
+                fc0_weight_quantized = quantize_int16(model.fc0.weight.detach().cpu(), DEFAULT_DENSE_WEIGHT_SCALE)
+                fc0_bias_quantized = quantize_int32(model.fc0.bias.detach().cpu(), DEFAULT_DENSE_ACTIVATION_SCALE)
+                fc1_weight_quantized = quantize_int16(model.fc1.weight.detach().cpu(), DEFAULT_DENSE_WEIGHT_SCALE)
+                fc1_bias_quantized = quantize_int32(model.fc1.bias.detach().cpu(), DEFAULT_DENSE_ACTIVATION_SCALE)
+                fc2_weight_quantized = quantize_int16(
+                    model.fc2.weight.detach().cpu().squeeze(0),
+                    DEFAULT_DENSE_WEIGHT_SCALE,
+                )
+                fc2_bias_quantized = int(round(float(model.fc2.bias.detach().cpu()[0]) * DEFAULT_DENSE_WEIGHT_SCALE))
+                side_to_move_weight_quantized = int(
+                    round(float(model.side_to_move_weight.detach().cpu()[0]) * DEFAULT_DENSE_WEIGHT_SCALE)
+                )
             else:
                 hidden_bias = model.hidden_bias.detach().cpu().to(torch.float32).contiguous()
                 feature_weights = model.feature.weight.detach().cpu().to(torch.float32).contiguous()
-            direct_weights = model.direct.weight.detach().cpu().squeeze(0).to(torch.float32).contiguous()
-            direct_bias = float(model.direct.bias.detach().cpu()[0])
-            fc0_weight = model.fc0.weight.detach().cpu().to(torch.float32).contiguous()
-            fc0_bias = model.fc0.bias.detach().cpu().to(torch.float32).contiguous()
-            fc1_weight = model.fc1.weight.detach().cpu().to(torch.float32).contiguous()
-            fc1_bias = model.fc1.bias.detach().cpu().to(torch.float32).contiguous()
-            fc2_weight = model.fc2.weight.detach().cpu().squeeze(0).to(torch.float32).contiguous()
-            fc2_bias = float(model.fc2.bias.detach().cpu()[0])
-            side_to_move_weight = float(model.side_to_move_weight.detach().cpu()[0])
+                direct_weights = model.direct.weight.detach().cpu().squeeze(0).to(torch.float32).contiguous()
+                direct_bias = float(model.direct.bias.detach().cpu()[0])
+                fc0_weight = model.fc0.weight.detach().cpu().to(torch.float32).contiguous()
+                fc0_bias = model.fc0.bias.detach().cpu().to(torch.float32).contiguous()
+                fc1_weight = model.fc1.weight.detach().cpu().to(torch.float32).contiguous()
+                fc1_bias = model.fc1.bias.detach().cpu().to(torch.float32).contiguous()
+                fc2_weight = model.fc2.weight.detach().cpu().squeeze(0).to(torch.float32).contiguous()
+                fc2_bias = float(model.fc2.bias.detach().cpu()[0])
+                side_to_move_weight = float(model.side_to_move_weight.detach().cpu()[0])
         with path.open("wb") as handle:
             handle.write(MAGIC)
             handle.write(
                 struct.pack(
                     "<IIIII",
-                    model.format_version,
+                    export_format_version,
                     model.feature_count,
                     model.hidden_size,
                     accumulator_scale,
@@ -958,21 +1107,32 @@ def export_binary(
             if model.format_version >= FORMAT_VERSION_SPLIT_FEATURES:
                 handle.write(struct.pack("<II", model.placement_feature_count, model.threat_feature_count))
             handle.write(struct.pack("<II", model.l2_size, model.l3_size))
+            if export_format_version >= FORMAT_VERSION_INTEGER_DENSE:
+                handle.write(struct.pack("<II", DEFAULT_DENSE_ACTIVATION_SCALE, DEFAULT_DENSE_WEIGHT_SCALE))
             handle.write(hidden_bias.numpy().tobytes())
             if model.split_feature_blocks:
                 handle.write(placement_feature_weights.numpy().tobytes())
                 handle.write(threat_feature_weights.numpy().tobytes())
+                handle.write(direct_weights_quantized.numpy().tobytes())
+                handle.write(struct.pack("<i", direct_bias_quantized))
+                handle.write(fc0_weight_quantized.numpy().tobytes())
+                handle.write(fc0_bias_quantized.numpy().tobytes())
+                handle.write(fc1_weight_quantized.numpy().tobytes())
+                handle.write(fc1_bias_quantized.numpy().tobytes())
+                handle.write(fc2_weight_quantized.numpy().tobytes())
+                handle.write(struct.pack("<i", fc2_bias_quantized))
+                handle.write(struct.pack("<i", side_to_move_weight_quantized))
             else:
                 handle.write(feature_weights.numpy().tobytes())
-            handle.write(direct_weights.numpy().tobytes())
-            handle.write(struct.pack("<f", direct_bias))
-            handle.write(fc0_weight.numpy().tobytes())
-            handle.write(fc0_bias.numpy().tobytes())
-            handle.write(fc1_weight.numpy().tobytes())
-            handle.write(fc1_bias.numpy().tobytes())
-            handle.write(fc2_weight.numpy().tobytes())
-            handle.write(struct.pack("<f", fc2_bias))
-            handle.write(struct.pack("<f", side_to_move_weight))
+                handle.write(direct_weights.numpy().tobytes())
+                handle.write(struct.pack("<f", direct_bias))
+                handle.write(fc0_weight.numpy().tobytes())
+                handle.write(fc0_bias.numpy().tobytes())
+                handle.write(fc1_weight.numpy().tobytes())
+                handle.write(fc1_bias.numpy().tobytes())
+                handle.write(fc2_weight.numpy().tobytes())
+                handle.write(struct.pack("<f", fc2_bias))
+                handle.write(struct.pack("<f", side_to_move_weight))
         return
 
     with torch.no_grad():

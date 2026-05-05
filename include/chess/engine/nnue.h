@@ -16,6 +16,7 @@ constexpr std::uint32_t kFormatVersionV3 = 3;
 constexpr std::uint32_t kFormatVersionV4 = 4;
 constexpr std::uint32_t kFormatVersionV5 = 5;
 constexpr std::uint32_t kFormatVersionV6 = 6;
+constexpr std::uint32_t kFormatVersionV7 = 7;
 constexpr std::uint32_t kFormatVersion = kFormatVersionV4;
 constexpr std::uint32_t kHalfKpFeatureCount = 64 * 10 * 64;
 constexpr std::uint32_t kHalfKaV2HmLiteKingBuckets = 32;
@@ -29,6 +30,8 @@ constexpr std::uint32_t kDefaultHiddenSize = 256;
 constexpr std::uint32_t kMaxHiddenSize = 1024;
 constexpr std::uint32_t kDefaultAccumulatorScale = 256;
 constexpr std::uint32_t kDefaultOutputScale = 1024;
+constexpr std::uint32_t kDefaultDenseActivationScale = 1024;
+constexpr std::uint32_t kDefaultDenseWeightScale = 2048;
 
 enum class FeatureSet : std::uint32_t {
     HalfKp = 1,
@@ -48,6 +51,9 @@ struct ModelInfo {
     std::uint32_t l3_size = 0;
     std::uint32_t placement_feature_count = 0;
     std::uint32_t threat_feature_count = 0;
+    bool integer_dense = false;
+    std::uint32_t dense_activation_scale = 0;
+    std::uint32_t dense_weight_scale = 0;
     FeatureSet feature_set = FeatureSet::HalfKp;
     std::filesystem::path path;
 };
@@ -154,6 +160,15 @@ private:
     std::vector<float> fc2_weights_;
     float fc2_bias_ = 0.0F;
     float side_to_move_weight_float_ = 0.0F;
+    std::vector<std::int16_t> direct_weights_quantized_;
+    std::int32_t direct_bias_quantized_ = 0;
+    std::vector<std::int16_t> fc0_weights_quantized_;
+    std::vector<std::int32_t> fc0_bias_quantized_;
+    std::vector<std::int16_t> fc1_weights_quantized_;
+    std::vector<std::int32_t> fc1_bias_quantized_;
+    std::vector<std::int16_t> fc2_weights_quantized_;
+    std::int32_t fc2_bias_quantized_ = 0;
+    std::int32_t side_to_move_weight_quantized_ = 0;
 
     [[nodiscard]] std::vector<int> accumulator(const Board& board, Color perspective) const;
     [[nodiscard]] std::vector<float> accumulator_float(const Board& board, Color perspective) const;
@@ -164,6 +179,12 @@ private:
     ) const;
     [[nodiscard]] int evaluate_sf_lite_white_perspective(const Board& board) const;
     void refresh_quantized_accumulator(
+        const Board& board,
+        Color perspective,
+        std::vector<int>& accumulator,
+        ProfileCounters* profile = nullptr
+    ) const;
+    void add_active_quantized_features(
         const Board& board,
         Color perspective,
         std::vector<int>& accumulator,
@@ -184,6 +205,12 @@ private:
         ProfileCounters* profile = nullptr
     ) const;
     [[nodiscard]] int evaluate_sf_lite_white_perspective_quantized(
+        const Board& board,
+        const std::vector<int>& white,
+        const std::vector<int>& black,
+        ProfileCounters* profile = nullptr
+    ) const;
+    [[nodiscard]] int evaluate_sf_lite_white_perspective_integer_dense(
         const Board& board,
         const std::vector<int>& white,
         const std::vector<int>& black,
