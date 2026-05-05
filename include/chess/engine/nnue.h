@@ -58,6 +58,29 @@ struct QuantizedAccumulatorPair {
     bool valid = false;
 };
 
+struct ProfileCounters {
+    std::uint64_t refresh_placement_ns = 0;
+    std::uint64_t refresh_threat_ns = 0;
+    std::uint64_t update_placement_ns = 0;
+    std::uint64_t update_threat_ns = 0;
+    std::uint64_t dense_convert_ns = 0;
+    std::uint64_t dense_forward_ns = 0;
+    std::uint64_t dirty_squares = 0;
+    std::uint64_t dirty_attackers_before = 0;
+    std::uint64_t dirty_attackers_after = 0;
+    std::uint64_t dirty_threat_removed = 0;
+    std::uint64_t dirty_threat_added = 0;
+    std::uint64_t dirty_threat_unchanged = 0;
+    std::uint64_t fallback_parent_invalid = 0;
+    std::uint64_t fallback_unsupported = 0;
+    std::uint64_t fallback_invalid_move = 0;
+    std::uint64_t fallback_missing_king = 0;
+    std::uint64_t fallback_moving_king = 0;
+    std::uint64_t fallback_placement_feature = 0;
+    std::uint64_t fallback_dirty_overflow = 0;
+    std::uint64_t partial_refreshes = 0;
+};
+
 [[nodiscard]] Square perspective_square(Square square, Color perspective);
 [[nodiscard]] Square horizontal_mirror_square(Square square);
 [[nodiscard]] std::uint32_t feature_count(FeatureSet feature_set);
@@ -91,16 +114,22 @@ public:
     [[nodiscard]] const ModelInfo& info() const;
     [[nodiscard]] int evaluate_white_perspective(const Board& board) const;
     [[nodiscard]] bool supports_quantized_accumulator_stack() const;
-    void refresh_quantized_accumulator_pair(const Board& board, QuantizedAccumulatorPair& pair) const;
+    void refresh_quantized_accumulator_pair(
+        const Board& board,
+        QuantizedAccumulatorPair& pair,
+        ProfileCounters* profile = nullptr
+    ) const;
     [[nodiscard]] bool update_quantized_accumulator_pair_after_move(
         const Board& board_after_move,
         const UndoState& undo,
         const QuantizedAccumulatorPair& parent,
-        QuantizedAccumulatorPair& child
+        QuantizedAccumulatorPair& child,
+        ProfileCounters* profile = nullptr
     ) const;
     [[nodiscard]] int evaluate_white_perspective(
         const Board& board,
-        const QuantizedAccumulatorPair& accumulator_pair
+        const QuantizedAccumulatorPair& accumulator_pair,
+        ProfileCounters* profile = nullptr
     ) const;
 
 private:
@@ -134,10 +163,31 @@ private:
         const std::vector<int>& quantized_accumulator
     ) const;
     [[nodiscard]] int evaluate_sf_lite_white_perspective(const Board& board) const;
+    void refresh_quantized_accumulator(
+        const Board& board,
+        Color perspective,
+        std::vector<int>& accumulator,
+        ProfileCounters* profile = nullptr
+    ) const;
     [[nodiscard]] int evaluate_sf_lite_white_perspective(
         const Board& board,
         const std::vector<float>& white,
-        const std::vector<float>& black
+        const std::vector<float>& black,
+        ProfileCounters* profile = nullptr
+    ) const;
+    [[nodiscard]] int evaluate_sf_lite_white_perspective_clamped(
+        const Board& board,
+        const std::vector<float>& white,
+        const std::vector<float>& black,
+        std::vector<float>& fc0,
+        std::vector<float>& fc1,
+        ProfileCounters* profile = nullptr
+    ) const;
+    [[nodiscard]] int evaluate_sf_lite_white_perspective_quantized(
+        const Board& board,
+        const std::vector<int>& white,
+        const std::vector<int>& black,
+        ProfileCounters* profile = nullptr
     ) const;
 };
 

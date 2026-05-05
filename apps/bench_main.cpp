@@ -342,6 +342,26 @@ chess::engine::SearchDiagnostics add_diagnostics(
     lhs.nnue_accumulator_update_fallbacks += rhs.nnue_accumulator_update_fallbacks;
     lhs.nnue_accumulator_update_ns += rhs.nnue_accumulator_update_ns;
     lhs.nnue_accumulator_null_copies += rhs.nnue_accumulator_null_copies;
+    lhs.nnue_refresh_placement_ns += rhs.nnue_refresh_placement_ns;
+    lhs.nnue_refresh_threat_ns += rhs.nnue_refresh_threat_ns;
+    lhs.nnue_update_placement_ns += rhs.nnue_update_placement_ns;
+    lhs.nnue_update_threat_ns += rhs.nnue_update_threat_ns;
+    lhs.nnue_dense_convert_ns += rhs.nnue_dense_convert_ns;
+    lhs.nnue_dense_forward_ns += rhs.nnue_dense_forward_ns;
+    lhs.nnue_dirty_squares += rhs.nnue_dirty_squares;
+    lhs.nnue_dirty_attackers_before += rhs.nnue_dirty_attackers_before;
+    lhs.nnue_dirty_attackers_after += rhs.nnue_dirty_attackers_after;
+    lhs.nnue_dirty_threat_removed += rhs.nnue_dirty_threat_removed;
+    lhs.nnue_dirty_threat_added += rhs.nnue_dirty_threat_added;
+    lhs.nnue_dirty_threat_unchanged += rhs.nnue_dirty_threat_unchanged;
+    lhs.nnue_fallback_parent_invalid += rhs.nnue_fallback_parent_invalid;
+    lhs.nnue_fallback_unsupported += rhs.nnue_fallback_unsupported;
+    lhs.nnue_fallback_invalid_move += rhs.nnue_fallback_invalid_move;
+    lhs.nnue_fallback_missing_king += rhs.nnue_fallback_missing_king;
+    lhs.nnue_fallback_moving_king += rhs.nnue_fallback_moving_king;
+    lhs.nnue_fallback_placement_feature += rhs.nnue_fallback_placement_feature;
+    lhs.nnue_fallback_dirty_overflow += rhs.nnue_fallback_dirty_overflow;
+    lhs.nnue_partial_refreshes += rhs.nnue_partial_refreshes;
     lhs.move_picker_pv_picks += rhs.move_picker_pv_picks;
     lhs.move_picker_tt_picks += rhs.move_picker_tt_picks;
     lhs.move_picker_scored_moves += rhs.move_picker_scored_moves;
@@ -419,12 +439,33 @@ void print_profile_summary(const chess::engine::SearchDiagnostics& diagnostics, 
         << "  accumulator_refreshes " << diagnostics.nnue_accumulator_refreshes
         << " total_ms " << ns_to_ms(diagnostics.nnue_accumulator_refresh_ns)
         << " avg_ns " << average_ns(diagnostics.nnue_accumulator_refresh_ns, diagnostics.nnue_accumulator_refreshes) << '\n'
+        << "    placement_ms " << ns_to_ms(diagnostics.nnue_refresh_placement_ns)
+        << " threat_ms " << ns_to_ms(diagnostics.nnue_refresh_threat_ns) << '\n'
         << "  accumulator_update_attempts " << diagnostics.nnue_accumulator_update_attempts
         << " successes " << diagnostics.nnue_accumulator_update_successes
         << " fallbacks " << diagnostics.nnue_accumulator_update_fallbacks
         << " fallback_pct " << percent_of(diagnostics.nnue_accumulator_update_fallbacks, diagnostics.nnue_accumulator_update_attempts)
         << " total_ms " << ns_to_ms(diagnostics.nnue_accumulator_update_ns)
         << " avg_ns " << average_ns(diagnostics.nnue_accumulator_update_ns, diagnostics.nnue_accumulator_update_attempts) << '\n'
+        << "    placement_ms " << ns_to_ms(diagnostics.nnue_update_placement_ns)
+        << " threat_ms " << ns_to_ms(diagnostics.nnue_update_threat_ns) << '\n'
+        << "  dense_convert_ms " << ns_to_ms(diagnostics.nnue_dense_convert_ns)
+        << " dense_forward_ms " << ns_to_ms(diagnostics.nnue_dense_forward_ns) << '\n'
+        << "  dirty_squares_avg " << average_ns(diagnostics.nnue_dirty_squares, diagnostics.nnue_accumulator_update_attempts)
+        << " attackers_before_avg " << average_ns(diagnostics.nnue_dirty_attackers_before, diagnostics.nnue_accumulator_update_attempts)
+        << " attackers_after_avg " << average_ns(diagnostics.nnue_dirty_attackers_after, diagnostics.nnue_accumulator_update_attempts) << '\n'
+        << "  dirty_threat_removed " << diagnostics.nnue_dirty_threat_removed
+        << " added " << diagnostics.nnue_dirty_threat_added
+        << " unchanged_skipped " << diagnostics.nnue_dirty_threat_unchanged << '\n'
+        << "  fallback_reasons"
+        << " parent_invalid=" << diagnostics.nnue_fallback_parent_invalid
+        << " unsupported=" << diagnostics.nnue_fallback_unsupported
+        << " invalid_move=" << diagnostics.nnue_fallback_invalid_move
+        << " missing_king=" << diagnostics.nnue_fallback_missing_king
+        << " moving_king=" << diagnostics.nnue_fallback_moving_king
+        << " placement_feature=" << diagnostics.nnue_fallback_placement_feature
+        << " dirty_overflow=" << diagnostics.nnue_fallback_dirty_overflow << '\n'
+        << "  partial_refreshes " << diagnostics.nnue_partial_refreshes << '\n'
         << "  accumulator_null_copies " << diagnostics.nnue_accumulator_null_copies << '\n'
         << std::defaultfloat;
 }

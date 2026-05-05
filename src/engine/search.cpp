@@ -52,6 +52,29 @@ std::uint64_t elapsed_ns_since(ProfileClock::time_point start) {
     );
 }
 
+void merge_nnue_profile(SearchDiagnostics& diagnostics, const nnue::ProfileCounters& profile) {
+    diagnostics.nnue_refresh_placement_ns += profile.refresh_placement_ns;
+    diagnostics.nnue_refresh_threat_ns += profile.refresh_threat_ns;
+    diagnostics.nnue_update_placement_ns += profile.update_placement_ns;
+    diagnostics.nnue_update_threat_ns += profile.update_threat_ns;
+    diagnostics.nnue_dense_convert_ns += profile.dense_convert_ns;
+    diagnostics.nnue_dense_forward_ns += profile.dense_forward_ns;
+    diagnostics.nnue_dirty_squares += profile.dirty_squares;
+    diagnostics.nnue_dirty_attackers_before += profile.dirty_attackers_before;
+    diagnostics.nnue_dirty_attackers_after += profile.dirty_attackers_after;
+    diagnostics.nnue_dirty_threat_removed += profile.dirty_threat_removed;
+    diagnostics.nnue_dirty_threat_added += profile.dirty_threat_added;
+    diagnostics.nnue_dirty_threat_unchanged += profile.dirty_threat_unchanged;
+    diagnostics.nnue_fallback_parent_invalid += profile.fallback_parent_invalid;
+    diagnostics.nnue_fallback_unsupported += profile.fallback_unsupported;
+    diagnostics.nnue_fallback_invalid_move += profile.fallback_invalid_move;
+    diagnostics.nnue_fallback_missing_king += profile.fallback_missing_king;
+    diagnostics.nnue_fallback_moving_king += profile.fallback_moving_king;
+    diagnostics.nnue_fallback_placement_feature += profile.fallback_placement_feature;
+    diagnostics.nnue_fallback_dirty_overflow += profile.fallback_dirty_overflow;
+    diagnostics.nnue_partial_refreshes += profile.partial_refreshes;
+}
+
 int color_index(Color color) {
     return static_cast<int>(color);
 }
@@ -1047,10 +1070,16 @@ int Searcher::evaluate_with_diagnostics(const Board& board, int ply) {
     };
     if (eval_type_ == EvalType::Nnue && nnue_.supports_quantized_accumulator_stack() && ply >= 0 && ply < kMaxPly) {
         const auto nnue_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
-        const int white_perspective = nnue_.evaluate_white_perspective(board, nnue_accumulator_stack_[ply]);
+        nnue::ProfileCounters nnue_profile;
+        const int white_perspective = nnue_.evaluate_white_perspective(
+            board,
+            nnue_accumulator_stack_[ply],
+            profiling_ ? &nnue_profile : nullptr
+        );
         if (profiling_) {
             ++diagnostics_.nnue_stack_evaluations;
             diagnostics_.nnue_stack_evaluation_ns += elapsed_ns_since(nnue_start);
+            merge_nnue_profile(diagnostics_, nnue_profile);
         }
         return finish(board.side_to_move() == Color::White ? white_perspective : -white_perspective);
     }
@@ -1062,10 +1091,16 @@ int Searcher::evaluate_with_diagnostics(const Board& board, int ply) {
             diagnostics_.classical_evaluation_ns += elapsed_ns_since(classical_start);
         }
         const auto nnue_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
-        const int nnue = nnue_.evaluate_white_perspective(board, nnue_accumulator_stack_[ply]);
+        nnue::ProfileCounters nnue_profile;
+        const int nnue = nnue_.evaluate_white_perspective(
+            board,
+            nnue_accumulator_stack_[ply],
+            profiling_ ? &nnue_profile : nullptr
+        );
         if (profiling_) {
             ++diagnostics_.nnue_stack_evaluations;
             diagnostics_.nnue_stack_evaluation_ns += elapsed_ns_since(nnue_start);
+            merge_nnue_profile(diagnostics_, nnue_profile);
         }
         const int blended = (classical + nnue) / 2;
         return finish(board.side_to_move() == Color::White ? blended : -blended);
@@ -1086,10 +1121,16 @@ void Searcher::refresh_nnue_accumulator(Board& board, int ply) {
     nnue_accumulator_stack_[ply].valid = false;
     if (nnue_.supports_quantized_accumulator_stack()) {
         const auto start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
-        nnue_.refresh_quantized_accumulator_pair(board, nnue_accumulator_stack_[ply]);
+        nnue::ProfileCounters nnue_profile;
+        nnue_.refresh_quantized_accumulator_pair(
+            board,
+            nnue_accumulator_stack_[ply],
+            profiling_ ? &nnue_profile : nullptr
+        );
         if (profiling_) {
             ++diagnostics_.nnue_accumulator_refreshes;
             diagnostics_.nnue_accumulator_refresh_ns += elapsed_ns_since(start);
+            merge_nnue_profile(diagnostics_, nnue_profile);
         }
     }
 }
@@ -1104,25 +1145,34 @@ void Searcher::update_nnue_accumulator_after_move(
         return;
     }
     const auto start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
+    nnue::ProfileCounters update_profile;
     const bool updated = nnue_.update_quantized_accumulator_pair_after_move(
             board,
             undo,
             nnue_accumulator_stack_[parent_ply],
-            nnue_accumulator_stack_[child_ply]
+            nnue_accumulator_stack_[child_ply],
+            profiling_ ? &update_profile : nullptr
         );
     if (profiling_) {
         ++diagnostics_.nnue_accumulator_update_attempts;
         diagnostics_.nnue_accumulator_update_ns += elapsed_ns_since(start);
+        merge_nnue_profile(diagnostics_, update_profile);
     }
     if (!updated) {
         if (profiling_) {
             ++diagnostics_.nnue_accumulator_update_fallbacks;
         }
         const auto refresh_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
-        nnue_.refresh_quantized_accumulator_pair(board, nnue_accumulator_stack_[child_ply]);
+        nnue::ProfileCounters refresh_profile;
+        nnue_.refresh_quantized_accumulator_pair(
+            board,
+            nnue_accumulator_stack_[child_ply],
+            profiling_ ? &refresh_profile : nullptr
+        );
         if (profiling_) {
             ++diagnostics_.nnue_accumulator_refreshes;
             diagnostics_.nnue_accumulator_refresh_ns += elapsed_ns_since(refresh_start);
+            merge_nnue_profile(diagnostics_, refresh_profile);
         }
     } else if (profiling_) {
         ++diagnostics_.nnue_accumulator_update_successes;

@@ -786,12 +786,16 @@ TEST_CASE("NNUE quantized accumulator stack updates placement and threat feature
     };
     const chess::UndoState e2e3_undo = king_move.make_move(e2e3);
     chess::engine::nnue::QuantizedAccumulatorPair king_move_updated;
-    REQUIRE_FALSE(network.update_quantized_accumulator_pair_after_move(
+    REQUIRE(network.update_quantized_accumulator_pair_after_move(
         king_move,
         e2e3_undo,
         before_king_move,
         king_move_updated
     ));
+    network.refresh_quantized_accumulator_pair(king_move, refreshed);
+    REQUIRE(king_move_updated.valid);
+    REQUIRE(king_move_updated.white == refreshed.white);
+    REQUIRE(king_move_updated.black == refreshed.black);
 
     REQUIRE(std::filesystem::remove(path));
 }

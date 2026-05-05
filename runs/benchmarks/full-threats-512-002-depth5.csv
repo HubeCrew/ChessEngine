@@ -1,0 +1,9 @@
+id,theme,depth,bestmove,expected,avoided,matched,score_cp,nodes,nps,time_ms,description,qnodes
+"startpos","bench",5,"e2e4","","",true,26,13280,96231,138,"Initial position",6440
+"kiwipete","bench",5,"e2a6","","",true,-44,88678,73530,1206,"Castling, pins, discovered attacks",53975
+"endgame-pawns","bench",5,"b4f4","","",true,61,11225,123351,91,"Endgame pawn races and rook checks",6428
+"promotion-race","bench",5,"c4c5","","",true,-304,157665,80359,1962,"Promotions, castling rights, and exposed kings",110525
+"middlegame-tension","bench",5,"c3d5","","",true,25,44081,80001,551,"Symmetric middlegame with bishop pins and castled kings",29105
+"queen-pressure","bench",5,"a2a3","","",true,94,46653,93869,497,"Open files and loose heavy pieces",25423
+"minor-piece-endgame","bench",5,"c3d2","","",true,20,1324,189142,7,"Minor pieces and passed pawns",442
+"king-safety","bench",5,"f3e5","","",true,237,26376,88808,297,"King shelter and attacking chances",14861
