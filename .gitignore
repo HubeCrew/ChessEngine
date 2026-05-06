@@ -12,6 +12,11 @@ build/
 build-*/
 gauntlet-results/
 runs/nnue/
+runs/opening-books/
+runs/tablebases/
+runs/benchmarks/
+runs/gauntlets/
+runs/postmortems/
 data/raw/
 data/suites/*_results.csv
 data/suites/*_misses.epd

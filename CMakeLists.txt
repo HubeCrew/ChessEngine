@@ -8,6 +8,17 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(CHESSENGINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(CHESSENGINE_FETCH_CATCH2 "Download Catch2 for tests when it is not installed" OFF)
+option(CHESSENGINE_ENABLE_FATHOM "Enable Syzygy tablebase probing with libfathom when available" ON)
+
+if(CHESSENGINE_ENABLE_FATHOM)
+    find_path(FATHOM_INCLUDE_DIR tbprobe.h)
+    find_library(FATHOM_LIBRARY fathom)
+    if(FATHOM_INCLUDE_DIR AND FATHOM_LIBRARY)
+        set(CHESSENGINE_HAS_FATHOM ON)
+    else()
+        message(STATUS "Fathom not found; Syzygy tablebase probing disabled")
+    endif()
+endif()
 
 add_library(chess_core
     src/core/attacks.cpp
@@ -28,12 +39,19 @@ endif()
 add_library(chess_engine
     src/engine/evaluation.cpp
     src/engine/nnue.cpp
+    src/engine/opening_book.cpp
     src/engine/position_suite.cpp
     src/engine/search.cpp
     src/engine/static_exchange.cpp
+    src/engine/tablebase.cpp
     src/engine/transposition_table.cpp
 )
 target_link_libraries(chess_engine PUBLIC chess_core)
+if(CHESSENGINE_HAS_FATHOM)
+    target_compile_definitions(chess_engine PUBLIC CHESSENGINE_HAS_FATHOM=1)
+    target_include_directories(chess_engine PRIVATE ${FATHOM_INCLUDE_DIR})
+    target_link_libraries(chess_engine PRIVATE ${FATHOM_LIBRARY})
+endif()
 target_compile_options(chess_engine PRIVATE -Wall -Wextra -Wpedantic)
 if(CHESSENGINE_WARNINGS_AS_ERRORS)
     target_compile_options(chess_engine PRIVATE -Werror)

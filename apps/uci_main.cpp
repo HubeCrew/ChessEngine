@@ -121,6 +121,40 @@ void apply_setoption(chess::engine::Searcher& searcher, std::istringstream& inpu
         searcher.set_thread_count(std::stoi(value));
     } else if (name == "MultiPV" && !value.empty()) {
         searcher.set_multi_pv(std::stoi(value));
+    } else if (name == "SyzygyPath") {
+        std::string error;
+        if (value.empty()) {
+            (void)searcher.set_syzygy_path({}, &error);
+            std::cout << "info string syzygy cleared\n";
+        } else if (!searcher.set_syzygy_path(std::filesystem::path{value}, &error)) {
+            std::cout << "info string syzygy load failed: " << error << '\n';
+        } else {
+            std::cout << "info string syzygy loaded " << searcher.syzygy_path().string()
+                      << " largest " << searcher.syzygy_largest() << '\n';
+        }
+    } else if (name == "SyzygyProbeDepth" && !value.empty()) {
+        searcher.set_syzygy_probe_depth(std::stoi(value));
+    } else if (name == "OwnBook" && !value.empty()) {
+        searcher.set_own_book(parse_bool(value));
+    } else if (name == "BookFile") {
+        if (value.empty()) {
+            searcher.clear_book();
+            std::cout << "info string book cleared\n";
+        } else {
+            std::string error;
+            if (!searcher.load_book(std::filesystem::path{value}, &error)) {
+                std::cout << "info string book load failed: " << error << '\n';
+            } else {
+                std::cout << "info string book loaded " << searcher.book_path().string()
+                          << " entries " << searcher.book_entry_count() << '\n';
+            }
+        }
+    } else if (name == "BestBookMove" && !value.empty()) {
+        searcher.set_best_book_move(parse_bool(value));
+    } else if (name == "BookDepth" && !value.empty()) {
+        searcher.set_book_depth(std::stoi(value));
+    } else if (name == "BookMinimumWeight" && !value.empty()) {
+        searcher.set_book_minimum_weight(std::stoi(value));
     } else if (name == "Move Overhead" && !value.empty()) {
         searcher.set_move_overhead(std::chrono::milliseconds{std::max(0, std::stoi(value))});
     } else if (name == "Slow Mover" && !value.empty()) {
@@ -285,6 +319,13 @@ int main() {
                 std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
                 std::cout << "option name Threads type spin default 1 min 1 max 512\n";
                 std::cout << "option name MultiPV type spin default 1 min 1 max 256\n";
+                std::cout << "option name SyzygyPath type string default <empty>\n";
+                std::cout << "option name SyzygyProbeDepth type spin default 1 min 0 max 127\n";
+                std::cout << "option name OwnBook type check default true\n";
+                std::cout << "option name BookFile type string default <empty>\n";
+                std::cout << "option name BestBookMove type check default true\n";
+                std::cout << "option name BookDepth type spin default 255 min 0 max 255\n";
+                std::cout << "option name BookMinimumWeight type spin default 1 min 0 max 65535\n";
                 std::cout << "option name Move Overhead type spin default 20 min 0 max 5000\n";
                 std::cout << "option name Slow Mover type spin default 100 min 10 max 1000\n";
                 std::cout << "option name NullMovePruning type check default true\n";
