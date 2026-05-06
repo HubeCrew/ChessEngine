@@ -119,6 +119,8 @@ void apply_setoption(chess::engine::Searcher& searcher, std::istringstream& inpu
         searcher.set_hash_size_mb(static_cast<std::size_t>(std::stoul(value)));
     } else if (name == "Threads" && !value.empty()) {
         searcher.set_thread_count(std::stoi(value));
+    } else if (name == "MultiPV" && !value.empty()) {
+        searcher.set_multi_pv(std::stoi(value));
     } else if (name == "Move Overhead" && !value.empty()) {
         searcher.set_move_overhead(std::chrono::milliseconds{std::max(0, std::stoi(value))});
     } else if (name == "Slow Mover" && !value.empty()) {
@@ -156,6 +158,19 @@ std::string pv_to_string(const std::vector<chess::Move>& principal_variation) {
 }
 
 void print_search_result(const chess::engine::SearchResult& result) {
+    for (const chess::engine::SearchResult::Line& line : result.lines) {
+        std::cout << "info depth " << result.depth
+                  << " multipv " << line.multipv
+                  << " score cp " << line.score_centipawns
+                  << " nodes " << result.nodes
+                  << " qnodes " << result.qnodes
+                  << " nps " << result.nps
+                  << " time " << result.elapsed.count();
+        if (!line.principal_variation.empty()) {
+            std::cout << " pv " << pv_to_string(line.principal_variation);
+        }
+        std::cout << '\n';
+    }
     std::cout << "info depth " << result.depth
               << " score cp " << result.score_centipawns
               << " nodes " << result.nodes
@@ -269,6 +284,7 @@ int main() {
                 std::cout << "id author HubeKnaepkens\n";
                 std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
                 std::cout << "option name Threads type spin default 1 min 1 max 512\n";
+                std::cout << "option name MultiPV type spin default 1 min 1 max 256\n";
                 std::cout << "option name Move Overhead type spin default 20 min 0 max 5000\n";
                 std::cout << "option name Slow Mover type spin default 100 min 10 max 1000\n";
                 std::cout << "option name NullMovePruning type check default true\n";

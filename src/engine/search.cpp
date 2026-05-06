@@ -49,6 +49,10 @@ constexpr int kDeltaPruningMargin = 200;
 constexpr std::size_t kMaxHistoryQuiets = 256;
 constexpr std::size_t kMaxHistoryCaptures = 128;
 constexpr std::size_t kNoMoveIndex = static_cast<std::size_t>(-1);
+constexpr std::array<int, 4> kContinuationPlyOffsets{1, 2, 4, 6};
+constexpr std::array<int, 4> kContinuationScoreWeights{100, 65, 40, 25};
+constexpr std::array<int, 4> kContinuationUpdateWeights{128, 96, 64, 32};
+constexpr int kGoodQuietScore = -12'000;
 
 using ProfileClock = std::chrono::steady_clock;
 
@@ -148,6 +152,14 @@ void add_search_diagnostics(SearchDiagnostics& lhs, const SearchDiagnostics& rhs
 
 int color_index(Color color) {
     return static_cast<int>(color);
+}
+
+int piece_index(Piece piece) {
+    return static_cast<int>(piece);
+}
+
+int captured_type_index(Piece piece) {
+    return static_cast<int>(type_of(piece));
 }
 
 Piece captured_piece_for(const Board& board, const Move& move) {
@@ -347,8 +359,27 @@ int correction_bonus(int depth, int delta) {
     return std::clamp(delta * std::min(depth + 1, 16), -32'000, 32'000);
 }
 
-int correction_index(const Board& board) {
-    return static_cast<int>(board.hash_key() & (kCorrectionHistorySize - 1));
+int pawn_correction_index(const Board& board) {
+    const std::uint64_t pawns = board.pieces(Color::White, PieceType::Pawn)
+        ^ (board.pieces(Color::Black, PieceType::Pawn) * 0x9e3779b97f4a7c15ULL);
+    return static_cast<int>((pawns ^ (pawns >> 32)) & (kCorrectionHistorySize - 1));
+}
+
+int minor_correction_index(const Board& board) {
+    const std::uint64_t minors =
+        board.pieces(Color::White, PieceType::Knight)
+        ^ (board.pieces(Color::White, PieceType::Bishop) << 1)
+        ^ (board.pieces(Color::Black, PieceType::Knight) * 0x94d049bb133111ebULL)
+        ^ (board.pieces(Color::Black, PieceType::Bishop) * 0xbf58476d1ce4e5b9ULL);
+    return static_cast<int>((minors ^ (minors >> 32)) & (kCorrectionHistorySize - 1));
+}
+
+int nonpawn_correction_index(const Board& board, Color side) {
+    const std::uint64_t rooks = board.pieces(side, PieceType::Rook);
+    const std::uint64_t queens = board.pieces(side, PieceType::Queen);
+    const std::uint64_t king = board.pieces(side, PieceType::King);
+    const std::uint64_t signature = rooks ^ (queens << 1) ^ (king * 0x9e3779b97f4a7c15ULL);
+    return static_cast<int>((signature ^ (signature >> 32)) & (kCorrectionHistorySize - 1));
 }
 
 int capture_history_bonus(int depth) {
@@ -385,7 +416,7 @@ int late_move_reduction(int depth, int move_index, int stat_score, bool improvin
         return 0;
     }
 
-    int reduction = static_cast<int>(std::log(static_cast<double>(depth)) * std::log(static_cast<double>(move_index + 1)) / 1.85);
+    int reduction = static_cast<int>(std::log(static_cast<double>(depth)) * std::log(static_cast<double>(move_index + 1)) / 1.80);
     if (!improving) {
         ++reduction;
     }
@@ -395,8 +426,12 @@ int late_move_reduction(int depth, int move_index, int stat_score, bool improvin
     if (is_pv_node) {
         --reduction;
     }
-    if (stat_score > 6'000) {
+    if (stat_score > 18'000) {
+        reduction -= 2;
+    } else if (stat_score > 6'000) {
         --reduction;
+    } else if (stat_score < -18'000) {
+        reduction += 2;
     } else if (stat_score < -6'000) {
         ++reduction;
     }
@@ -405,14 +440,38 @@ int late_move_reduction(int depth, int move_index, int stat_score, bool improvin
 
 enum class MovePickerStage {
     PreviousPv,
-    Remainder,
+    TtMove,
+    GenerateCaptures,
+    GoodCaptures,
+    FirstKiller,
+    SecondKiller,
+    CounterMove,
+    GenerateQuiets,
+    GoodQuiets,
+    BadCaptures,
+    BadQuiets,
+    GenerateEvasions,
+    Evasions,
     Done,
+};
+
+enum class MovePickerMode {
+    Main,
+    Evasion,
+    ProbCut,
+    QSearch,
 };
 
 struct PickedMove {
     Move move;
     bool see_known = false;
     int see_score = 0;
+};
+
+struct ContinuationContext {
+    Piece previous_piece = Piece::None;
+    Square previous_to = kNoSquare;
+    int weight = 0;
 };
 
 template <typename T, std::size_t Capacity>
@@ -486,28 +545,34 @@ public:
     MovePicker(
         Board& board,
         const MoveList& moves,
+        MovePickerMode mode,
         Move previous_pv_move,
         Move tt_move,
         Move first_killer,
         Move second_killer,
         Move counter_move,
-        Square continuation_square,
+        std::array<ContinuationContext, kContinuationPlyOffsets.size()> continuation_contexts,
+        int ply,
         bool use_see_for_ordering,
         const HistoryTable& history,
+        const LowPlyHistoryTable& low_ply_history,
         const CaptureHistoryTable& capture_history,
-        const ContinuationHistoryTable& continuation_history,
+        const ContinuationHistoryStack& continuation_history,
         SearchDiagnostics& diagnostics
     )
         : board_(board),
           side_to_move_(board.side_to_move()),
+          mode_(mode),
           previous_pv_move_(previous_pv_move),
           tt_move_(tt_move),
           first_killer_(first_killer),
           second_killer_(second_killer),
           counter_move_(counter_move),
-          continuation_square_(continuation_square),
+          continuation_contexts_(continuation_contexts),
+          ply_(ply),
           use_see_for_ordering_(use_see_for_ordering),
           history_(history),
+          low_ply_history_(low_ply_history),
           capture_history_(capture_history),
           continuation_history_(continuation_history),
           diagnostics_(diagnostics) {
@@ -520,17 +585,89 @@ public:
         while (stage_ != MovePickerStage::Done) {
             switch (stage_) {
                 case MovePickerStage::PreviousPv:
-                    if (pick_special(previous_pv_move_, picked)) {
+                    if (mode_ == MovePickerMode::Main && pick_special(previous_pv_move_, picked)) {
                         ++diagnostics_.move_picker_pv_picks;
                         return true;
                     }
-                    stage_ = MovePickerStage::Remainder;
+                    stage_ = MovePickerStage::TtMove;
                     break;
-                case MovePickerStage::Remainder:
-                    if (!remainder_built_) {
-                        build_remainder();
+                case MovePickerStage::TtMove:
+                    if (pick_special(tt_move_, picked)) {
+                        ++diagnostics_.move_picker_tt_picks;
+                        return true;
                     }
-                    if (pick_from_ordered(remainder_, remainder_cursor_, picked)) {
+                    stage_ = mode_ == MovePickerMode::Evasion
+                        ? MovePickerStage::GenerateEvasions
+                        : MovePickerStage::GenerateCaptures;
+                    break;
+                case MovePickerStage::GenerateCaptures:
+                    build_captures();
+                    stage_ = MovePickerStage::GoodCaptures;
+                    break;
+                case MovePickerStage::GoodCaptures:
+                    if (pick_from_ordered(good_captures_, good_capture_cursor_, picked)) {
+                        return true;
+                    }
+                    if (mode_ == MovePickerMode::ProbCut) {
+                        stage_ = MovePickerStage::Done;
+                    } else if (mode_ == MovePickerMode::QSearch) {
+                        stage_ = MovePickerStage::BadCaptures;
+                    } else {
+                        stage_ = MovePickerStage::FirstKiller;
+                    }
+                    break;
+                case MovePickerStage::FirstKiller:
+                    if (pick_quiet_special(first_killer_, picked)) {
+                        ++diagnostics_.move_picker_killer_picks;
+                        return true;
+                    }
+                    stage_ = MovePickerStage::SecondKiller;
+                    break;
+                case MovePickerStage::SecondKiller:
+                    if (pick_quiet_special(second_killer_, picked)) {
+                        ++diagnostics_.move_picker_killer_picks;
+                        return true;
+                    }
+                    stage_ = MovePickerStage::CounterMove;
+                    break;
+                case MovePickerStage::CounterMove:
+                    if (pick_quiet_special(counter_move_, picked)) {
+                        return true;
+                    }
+                    stage_ = MovePickerStage::GenerateQuiets;
+                    break;
+                case MovePickerStage::GenerateQuiets:
+                    build_quiets();
+                    stage_ = MovePickerStage::GoodQuiets;
+                    break;
+                case MovePickerStage::GoodQuiets:
+                    if (pick_from_ordered(good_quiets_, good_quiet_cursor_, picked)) {
+                        return true;
+                    }
+                    stage_ = mode_ == MovePickerMode::QSearch
+                        ? MovePickerStage::BadQuiets
+                        : MovePickerStage::BadCaptures;
+                    break;
+                case MovePickerStage::BadCaptures:
+                    if (pick_from_ordered(bad_captures_, bad_capture_cursor_, picked)) {
+                        return true;
+                    }
+                    stage_ = mode_ == MovePickerMode::QSearch
+                        ? MovePickerStage::GenerateQuiets
+                        : MovePickerStage::BadQuiets;
+                    break;
+                case MovePickerStage::BadQuiets:
+                    if (pick_from_ordered(bad_quiets_, bad_quiet_cursor_, picked)) {
+                        return true;
+                    }
+                    stage_ = MovePickerStage::Done;
+                    break;
+                case MovePickerStage::GenerateEvasions:
+                    build_evasions();
+                    stage_ = MovePickerStage::Evasions;
+                    break;
+                case MovePickerStage::Evasions:
+                    if (pick_from_ordered(evasions_, evasion_cursor_, picked)) {
                         return true;
                     }
                     stage_ = MovePickerStage::Done;
@@ -548,6 +685,7 @@ private:
         bool emitted = false;
         bool tactical_classified = false;
         bool is_tactical = false;
+        bool good_tactical = false;
         int tactical_score = 0;
         int tactical_exchange_score = 0;
         bool quiet_score_known = false;
@@ -567,60 +705,104 @@ private:
 
     Board& board_;
     Color side_to_move_ = Color::White;
+    MovePickerMode mode_ = MovePickerMode::Main;
     Move previous_pv_move_;
     Move tt_move_;
     Move first_killer_;
     Move second_killer_;
     Move counter_move_;
-    Square continuation_square_ = kNoSquare;
+    std::array<ContinuationContext, kContinuationPlyOffsets.size()> continuation_contexts_{};
+    int ply_ = 0;
     bool use_see_for_ordering_ = true;
     const HistoryTable& history_;
+    const LowPlyHistoryTable& low_ply_history_;
     const CaptureHistoryTable& capture_history_;
-    const ContinuationHistoryTable& continuation_history_;
+    const ContinuationHistoryStack& continuation_history_;
     SearchDiagnostics& diagnostics_;
     FixedVector<ScoredMove, MoveList::kCapacity> moves_;
-    FixedVector<ScoredIndex, MoveList::kCapacity> remainder_;
+    FixedVector<ScoredIndex, MoveList::kCapacity> good_captures_;
+    FixedVector<ScoredIndex, MoveList::kCapacity> bad_captures_;
+    FixedVector<ScoredIndex, MoveList::kCapacity> good_quiets_;
+    FixedVector<ScoredIndex, MoveList::kCapacity> bad_quiets_;
+    FixedVector<ScoredIndex, MoveList::kCapacity> evasions_;
     MovePickerStage stage_ = MovePickerStage::PreviousPv;
-    std::size_t remainder_cursor_ = 0;
-    bool remainder_built_ = false;
+    std::size_t good_capture_cursor_ = 0;
+    std::size_t bad_capture_cursor_ = 0;
+    std::size_t good_quiet_cursor_ = 0;
+    std::size_t bad_quiet_cursor_ = 0;
+    std::size_t evasion_cursor_ = 0;
 
-    void build_remainder() {
-        remainder_built_ = true;
+    void build_captures() {
         for (std::size_t index = 0; index < moves_.size(); ++index) {
             ScoredMove& state = moves_[index];
             if (state.emitted) {
                 continue;
             }
-            remainder_.emplace_back(index, move_order_score(state));
+            classify_tactical(state);
+            if (!state.is_tactical) {
+                continue;
+            }
+            if (state.good_tactical) {
+                good_captures_.emplace_back(index, state.tactical_score);
+            } else {
+                bad_captures_.emplace_back(index, state.tactical_score);
+            }
         }
-        sort_descending(remainder_);
+        sort_descending(good_captures_);
+        sort_descending(bad_captures_);
     }
 
-    void sort_descending(FixedVector<ScoredIndex, MoveList::kCapacity>& indices) {
+    void build_quiets() {
+        for (std::size_t index = 0; index < moves_.size(); ++index) {
+            ScoredMove& state = moves_[index];
+            if (state.emitted) {
+                continue;
+            }
+            classify_tactical(state);
+            if (state.is_tactical) {
+                continue;
+            }
+            const int score = quiet_score(state);
+            if (score >= kGoodQuietScore) {
+                good_quiets_.emplace_back(index, score);
+            } else {
+                bad_quiets_.emplace_back(index, score);
+            }
+        }
+        sort_descending(good_quiets_);
+        sort_descending(bad_quiets_);
+    }
+
+    void build_evasions() {
+        for (std::size_t index = 0; index < moves_.size(); ++index) {
+            ScoredMove& state = moves_[index];
+            if (state.emitted) {
+                continue;
+            }
+            classify_tactical(state);
+            int score = 0;
+            if (state.is_tactical) {
+                score = state.tactical_score + 10'000;
+            } else {
+                score = quiet_score(state);
+                if (same_move(state.move, first_killer_)) {
+                    score += 30'000;
+                } else if (same_move(state.move, second_killer_)) {
+                    score += 29'000;
+                } else if (same_move_identity(state.move, counter_move_)) {
+                    score += 28'000;
+                }
+            }
+            evasions_.emplace_back(index, score);
+        }
+        sort_descending(evasions_);
+    }
+
+    template <std::size_t Capacity>
+    void sort_descending(FixedVector<ScoredIndex, Capacity>& indices) {
         std::stable_sort(indices.begin(), indices.end(), [](const ScoredIndex& lhs, const ScoredIndex& rhs) {
             return lhs.score > rhs.score;
         });
-    }
-
-    int quiet_move_order_score(ScoredMove& state) {
-        int score = 0;
-        if (same_move(state.move, first_killer_)) {
-            score += 30'000;
-        } else if (same_move(state.move, second_killer_)) {
-            score += 29'000;
-        } else if (same_move_identity(state.move, counter_move_)) {
-            score += 28'000;
-        }
-        score += quiet_score(state);
-        return score;
-    }
-
-    int move_order_score(ScoredMove& state) {
-        if (is_valid_move_shape(tt_move_) && same_move_identity(state.move, tt_move_)) {
-            return 1'000'000;
-        }
-        classify_tactical(state);
-        return state.is_tactical ? state.tactical_score : quiet_move_order_score(state);
     }
 
     bool pick_special(const Move& move, PickedMove& picked) {
@@ -631,6 +813,25 @@ private:
             ScoredMove& state = moves_[index];
             if (state.emitted || !same_move_identity(state.move, move)) {
                 continue;
+            }
+            emit(state, picked);
+            return true;
+        }
+        return false;
+    }
+
+    bool pick_quiet_special(const Move& move, PickedMove& picked) {
+        if (!is_valid_move_shape(move)) {
+            return false;
+        }
+        for (std::size_t index = 0; index < moves_.size(); ++index) {
+            ScoredMove& state = moves_[index];
+            if (state.emitted || !same_move_identity(state.move, move)) {
+                continue;
+            }
+            classify_tactical(state);
+            if (state.is_tactical) {
+                return false;
             }
             emit(state, picked);
             return true;
@@ -661,13 +862,8 @@ private:
         classify_tactical(state);
         if (state.is_tactical) {
             ++diagnostics_.move_picker_tactical_picks;
-        } else if (same_move(state.move, first_killer_) || same_move(state.move, second_killer_)) {
-            ++diagnostics_.move_picker_killer_picks;
         } else {
             ++diagnostics_.move_picker_quiet_picks;
-        }
-        if (is_valid_move_shape(tt_move_) && same_move_identity(state.move, tt_move_)) {
-            ++diagnostics_.move_picker_tt_picks;
         }
         picked = PickedMove{
             state.move,
@@ -689,6 +885,7 @@ private:
 
         if (state.move.is_promotion()) {
             state.tactical_score += 90'000 + material_value(state.move.promotion);
+            state.good_tactical = true;
         }
 
         if (state.move.is_capture()) {
@@ -702,21 +899,41 @@ private:
                 state.see_score = exchange_score;
             }
 
+            const Piece moved_piece = board_.piece_at(state.move.from);
+            const Piece captured_piece = captured_piece_for(board_, state.move);
+            const int capture_history_score =
+                moved_piece == Piece::None || captured_piece == Piece::None
+                    ? 0
+                    : capture_history_[piece_index(moved_piece)][state.move.to][captured_type_index(captured_piece)];
             if (exchange_score >= 0) {
                 state.tactical_score += 70'000 + exchange_score + mvv_lva_score(board_, state.move);
+                state.good_tactical = true;
             } else {
                 state.tactical_score += 5'000 + exchange_score + mvv_lva_score(board_, state.move);
             }
-            state.tactical_score += capture_history_[color_index(side_to_move_)][state.move.from][state.move.to] / 16;
+            state.tactical_score += capture_history_score / 8;
         }
     }
 
     int quiet_score(ScoredMove& state) {
         if (!state.quiet_score_known) {
             state.quiet_score_known = true;
+            const Piece moved_piece = board_.piece_at(state.move.from);
             state.quiet_score = history_[color_index(side_to_move_)][state.move.from][state.move.to];
-            if (is_valid_square(continuation_square_)) {
-                state.quiet_score += continuation_history_[color_index(side_to_move_)][continuation_square_][state.move.from][state.move.to] / 2;
+            if (ply_ >= 0 && ply_ < static_cast<int>(low_ply_history_.size())) {
+                state.quiet_score += low_ply_history_[static_cast<std::size_t>(ply_)][state.move.from][state.move.to];
+            }
+            if (moved_piece != Piece::None) {
+                for (std::size_t index = 0; index < continuation_contexts_.size(); ++index) {
+                    const ContinuationContext& context = continuation_contexts_[index];
+                    if (context.previous_piece == Piece::None || !is_valid_square(context.previous_to)) {
+                        continue;
+                    }
+                    const int continuation_score =
+                        continuation_history_[index][piece_index(context.previous_piece)][context.previous_to]
+                                             [piece_index(moved_piece)][state.move.to];
+                    state.quiet_score += continuation_score * context.weight / 128;
+                }
             }
         }
         return state.quiet_score;
@@ -731,6 +948,94 @@ private:
 void append_moves(MoveList& destination, const MoveList& source) {
     for (const Move& move : source) {
         destination.push_back(move);
+    }
+}
+
+int quiet_history_score(
+    const HistoryTable& history,
+    const LowPlyHistoryTable& low_ply_history,
+    const ContinuationHistoryStack& continuation_history,
+    const std::array<ContinuationContext, kContinuationPlyOffsets.size()>& contexts,
+    Color side_to_move,
+    Piece moved_piece,
+    const Move& move,
+    int ply
+) {
+    int score = history[color_index(side_to_move)][move.from][move.to];
+    if (ply >= 0 && ply < static_cast<int>(low_ply_history.size())) {
+        score += low_ply_history[static_cast<std::size_t>(ply)][move.from][move.to];
+    }
+    if (moved_piece == Piece::None) {
+        return score;
+    }
+    for (std::size_t index = 0; index < contexts.size(); ++index) {
+        const ContinuationContext& context = contexts[index];
+        if (context.previous_piece == Piece::None || !is_valid_square(context.previous_to)) {
+            continue;
+        }
+        score += continuation_history[index][piece_index(context.previous_piece)][context.previous_to]
+                                     [piece_index(moved_piece)][move.to]
+            * context.weight / 128;
+    }
+    return score;
+}
+
+int capture_history_score(
+    const CaptureHistoryTable& capture_history,
+    Piece moved_piece,
+    Piece captured_piece,
+    const Move& move
+) {
+    if (moved_piece == Piece::None || captured_piece == Piece::None) {
+        return 0;
+    }
+    return capture_history[piece_index(moved_piece)][move.to][captured_type_index(captured_piece)];
+}
+
+void blend_history_value(int& target, int source, int divisor) {
+    if (target == source) {
+        return;
+    }
+    target = clamp_history(target + (source - target) / std::max(1, divisor));
+}
+
+std::uint32_t encode_history_key(int color, Square from, Square to) {
+    return static_cast<std::uint32_t>((color * kBoardSquareCount + from) * kBoardSquareCount + to);
+}
+
+std::uint32_t encode_low_ply_history_key(int ply, Square from, Square to) {
+    return static_cast<std::uint32_t>((ply * kBoardSquareCount + from) * kBoardSquareCount + to);
+}
+
+std::uint32_t encode_capture_history_key(Piece moved_piece, Square to, Piece captured_piece) {
+    return static_cast<std::uint32_t>((piece_index(moved_piece) * kBoardSquareCount + to) * 7 + captured_type_index(captured_piece));
+}
+
+std::uint32_t encode_continuation_history_key(
+    int distance,
+    Piece previous_piece,
+    Square previous_to,
+    Piece moved_piece,
+    Square to
+) {
+    return static_cast<std::uint32_t>(
+        ((((distance * 13 + piece_index(previous_piece)) * kBoardSquareCount + previous_to) * 13
+             + piece_index(moved_piece))
+            * kBoardSquareCount)
+        + to
+    );
+}
+
+std::uint32_t encode_correction_history_key(int kind, int color, int index) {
+    return static_cast<std::uint32_t>((kind * 2 + color) * kCorrectionHistorySize + index);
+}
+
+template <typename Fn>
+void for_each_unique_key(std::vector<std::uint32_t> keys, Fn&& fn) {
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    for (std::uint32_t key : keys) {
+        fn(key);
     }
 }
 
@@ -871,6 +1176,7 @@ Searcher::Searcher() {
     nnue_ = std::make_shared<nnue::Network>();
     tt_ = std::make_shared<TranspositionTable>();
     stop_signal_ = std::make_shared<std::atomic_bool>(false);
+    continuation_history_ = std::make_unique<ContinuationHistoryStack>();
     clear();
 }
 
@@ -884,35 +1190,49 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
         return search_single(board, limits, false);
     }
 
-    std::vector<std::future<SearchResult>> futures;
+    struct HelperSearch {
+        std::shared_ptr<Searcher> helper;
+        std::future<SearchResult> future;
+    };
+
+    std::vector<HelperSearch> futures;
     futures.reserve(static_cast<std::size_t>(workers - 1));
     for (int worker = 1; worker < workers; ++worker) {
         Board worker_board = board;
-        Searcher helper;
-        helper.nnue_ = nnue_;
-        helper.tt_ = tt_;
-        helper.stop_signal_ = stop_signal_;
-        helper.null_move_pruning_ = null_move_pruning_;
-        helper.search_extensions_ = search_extensions_;
-        helper.profiling_ = profiling_;
-        helper.eval_type_ = eval_type_;
-        helper.time_manager_.set_config(time_manager_.config());
-        helper.thread_count_ = 1;
-        helper.worker_index_ = worker;
-        helper.history_ = history_;
-        helper.capture_history_ = capture_history_;
-        helper.counter_moves_ = counter_moves_;
-        helper.continuation_history_ = continuation_history_;
-        helper.correction_history_ = correction_history_;
-        futures.push_back(std::async(std::launch::async, [helper = std::move(helper), worker_board, limits]() mutable {
-            return helper.search_single(worker_board, limits, false);
-        }));
+        auto helper = std::make_shared<Searcher>();
+        helper->nnue_ = nnue_;
+        helper->tt_ = tt_;
+        helper->stop_signal_ = stop_signal_;
+        helper->null_move_pruning_ = null_move_pruning_;
+        helper->search_extensions_ = search_extensions_;
+        helper->profiling_ = profiling_;
+        helper->eval_type_ = eval_type_;
+        helper->time_manager_.set_config(time_manager_.config());
+        helper->thread_count_ = 1;
+        helper->multi_pv_ = multi_pv_;
+        helper->worker_index_ = worker;
+        helper->history_ = history_;
+        helper->low_ply_history_ = low_ply_history_;
+        helper->capture_history_ = capture_history_;
+        helper->counter_moves_ = counter_moves_;
+        *helper->continuation_history_ = *continuation_history_;
+        helper->pawn_correction_history_ = pawn_correction_history_;
+        helper->minor_correction_history_ = minor_correction_history_;
+        helper->nonpawn_white_correction_history_ = nonpawn_white_correction_history_;
+        helper->nonpawn_black_correction_history_ = nonpawn_black_correction_history_;
+        futures.push_back(HelperSearch{
+            helper,
+            std::async(std::launch::async, [helper, worker_board, limits]() mutable {
+                return helper->search_single(worker_board, limits, false);
+            })
+        });
     }
 
     SearchResult best = search_single(board, limits, false);
     SearchDiagnostics total_diagnostics = best.diagnostics;
-    for (auto& future : futures) {
-        SearchResult candidate = future.get();
+    for (auto& helper_search : futures) {
+        SearchResult candidate = helper_search.future.get();
+        merge_history_from(*helper_search.helper, workers);
         add_search_diagnostics(total_diagnostics, candidate.diagnostics);
         const bool candidate_is_better = is_valid_move_shape(candidate.best_move)
             && (candidate.depth > best.depth
@@ -950,6 +1270,7 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
     qnodes_ = 0;
     tt_hits_ = 0;
     diagnostics_ = {};
+    clear_history_touch_lists();
     if (prepare_shared_state) {
         stop_signal_->store(false, std::memory_order_relaxed);
         tt_->new_search();
@@ -991,7 +1312,7 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
         int alpha = -kInfinity;
         int beta = kInfinity;
         int window = kAspirationWindow;
-        if (depth > 1 && !is_mate_score(result.score_centipawns)) {
+        if (multi_pv_ == 1 && depth > 1 && !is_mate_score(result.score_centipawns)) {
             alpha = std::max(-kInfinity, result.score_centipawns - window);
             beta = std::min(kInfinity, result.score_centipawns + window);
         }
@@ -1031,6 +1352,20 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
             if (result.principal_variation.empty()) {
                 result.principal_variation.push_back(result.best_move);
             }
+            result.lines.clear();
+            const int pv_count = std::min<int>(std::max(1, multi_pv_), static_cast<int>(root_moves_.size()));
+            for (int index = 0; index < pv_count; ++index) {
+                const RootMoveInfo& root = root_moves_[static_cast<std::size_t>(index)];
+                if (!root.searched) {
+                    continue;
+                }
+                result.lines.push_back(SearchResult::Line{
+                    index + 1,
+                    root.move,
+                    root.score,
+                    root.principal_variation,
+                });
+            }
             previous_iteration_pv_ = result.principal_variation;
             if (same_move_identity(result.best_move, previous_best_move)) {
                 ++stable_best_move_iterations;
@@ -1063,6 +1398,15 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
 
     if (!is_valid_move_shape(result.best_move)) {
         result.best_move = root_search_moves_.front();
+    }
+    if (result.depth == 0 && is_valid_move_shape(result.best_move)) {
+        result.depth = 1;
+        result.score_centipawns = evaluate_with_diagnostics(board, 0);
+        result.nodes = nodes_;
+        result.qnodes = qnodes_;
+        result.tt_hits = tt_hits_;
+        result.principal_variation.clear();
+        result.principal_variation.push_back(result.best_move);
     }
 
     result.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1112,6 +1456,14 @@ void Searcher::set_thread_count(int threads) {
 
 int Searcher::thread_count() const {
     return thread_count_;
+}
+
+void Searcher::set_multi_pv(int multi_pv) {
+    multi_pv_ = std::clamp(multi_pv, 1, 256);
+}
+
+int Searcher::multi_pv() const {
+    return multi_pv_;
 }
 
 void Searcher::stop() {
@@ -1188,24 +1540,38 @@ void Searcher::clear() {
             from_history.fill(0);
         }
     }
-    for (auto& color_history : capture_history_) {
-        for (auto& from_history : color_history) {
+    for (auto& ply_history : low_ply_history_) {
+        for (auto& from_history : ply_history) {
             from_history.fill(0);
         }
     }
-    for (auto& color_counters : counter_moves_) {
-        for (auto& from_counters : color_counters) {
-            from_counters.fill(Move{});
+    for (auto& piece_history : capture_history_) {
+        for (auto& to_history : piece_history) {
+            to_history.fill(0);
         }
     }
-    for (auto& color_history : continuation_history_) {
-        for (auto& previous_to_history : color_history) {
-            for (auto& from_history : previous_to_history) {
-                from_history.fill(0);
+    for (auto& piece_counters : counter_moves_) {
+        piece_counters.fill(Move{});
+    }
+    for (auto& distance_history : *continuation_history_) {
+        for (auto& previous_piece_history : distance_history) {
+            for (auto& previous_to_history : previous_piece_history) {
+                for (auto& moved_piece_history : previous_to_history) {
+                    moved_piece_history.fill(0);
+                }
             }
         }
     }
-    for (auto& color_correction : correction_history_) {
+    for (auto& color_correction : pawn_correction_history_) {
+        color_correction.fill(0);
+    }
+    for (auto& color_correction : minor_correction_history_) {
+        color_correction.fill(0);
+    }
+    for (auto& color_correction : nonpawn_white_correction_history_) {
+        color_correction.fill(0);
+    }
+    for (auto& color_correction : nonpawn_black_correction_history_) {
         color_correction.fill(0);
     }
     for (auto& stack : search_stack_) {
@@ -1214,6 +1580,7 @@ void Searcher::clear() {
     previous_iteration_pv_.clear();
     root_moves_.clear();
     root_search_moves_.clear();
+    clear_history_touch_lists();
 }
 
 void Searcher::build_root_moves(const MoveList& legal_moves, const SearchLimits& limits) {
@@ -1301,6 +1668,7 @@ int Searcher::root_search(Board& board, int depth, int alpha, int beta) {
     ++nodes_;
     const int original_alpha = alpha;
     const int original_beta = beta;
+    const bool multi_pv_root = multi_pv_ > 1;
     const bool in_check = board.in_check(board.side_to_move());
     Move best_move;
     int best_score = -kInfinity;
@@ -1310,6 +1678,8 @@ int Searcher::root_search(Board& board, int depth, int alpha, int beta) {
         const Move move = root_move.move;
         const std::uint64_t start_nodes = nodes_;
         const Color moving_side = board.side_to_move();
+        const Piece moved_piece = board.piece_at(move.from);
+        const Piece captured_piece = captured_piece_for(board, move);
         const UndoState undo = board.make_move(move);
         if (!move_is_legal_after_make(board, moving_side)) {
             ++diagnostics_.illegal_pseudo_moves;
@@ -1324,13 +1694,25 @@ int Searcher::root_search(Board& board, int depth, int alpha, int beta) {
             : 0;
         const int child_depth = std::max(0, depth - 1 + extension);
         search_stack_[0].current_move = move;
+        search_stack_[0].moved_piece = moved_piece;
+        search_stack_[0].captured_piece = captured_piece;
         search_stack_[0].stat_score = is_quiet_history_move(move)
-            ? history_[color_index(moving_side)][move.from][move.to]
-            : capture_history_[color_index(moving_side)][move.from][move.to] / 16;
+            ? quiet_history_score(
+                history_,
+                low_ply_history_,
+                *continuation_history_,
+                {},
+                moving_side,
+                moved_piece,
+                move,
+                0)
+            : capture_history_score(capture_history_, moved_piece, captured_piece, move) / 8;
 
         const int alpha_before_move = alpha;
         int score = 0;
-        if (searched_moves == 0) {
+        if (multi_pv_root) {
+            score = -negamax(board, child_depth, 1, -kInfinity, kInfinity, true, extension);
+        } else if (searched_moves == 0) {
             score = -negamax(board, child_depth, 1, -beta, -alpha, true, extension);
         } else {
             score = -negamax(board, child_depth, 1, -alpha - 1, -alpha, true, extension);
@@ -1345,6 +1727,8 @@ int Searcher::root_search(Board& board, int depth, int alpha, int beta) {
         }
         board.unmake_move(undo);
         search_stack_[0].current_move = Move{};
+        search_stack_[0].moved_piece = Piece::None;
+        search_stack_[0].captured_piece = Piece::None;
 
         const std::uint64_t effort = nodes_ - start_nodes;
         root_move.effort += effort;
@@ -1366,8 +1750,10 @@ int Searcher::root_search(Board& board, int depth, int alpha, int beta) {
             best_score = score;
             best_move = move;
         }
-        alpha = std::max(alpha, score);
-        if (alpha >= beta || should_stop()) {
+        if (!multi_pv_root) {
+            alpha = std::max(alpha, score);
+        }
+        if ((!multi_pv_root && alpha >= beta) || should_stop()) {
             break;
         }
     }
@@ -1518,16 +1904,19 @@ int Searcher::negamax(
         MovePicker probcut_picker{
             board,
             noisy_moves,
+            MovePickerMode::ProbCut,
             Move{},
             tt_move,
             Move{},
             Move{},
             Move{},
-            kNoSquare,
+            {},
+            ply,
             true,
             history_,
+            low_ply_history_,
             capture_history_,
-            continuation_history_,
+            *continuation_history_,
             diagnostics_,
         };
         PickedMove probcut_picked;
@@ -1565,23 +1954,42 @@ int Searcher::negamax(
     int move_index = 0;
     Move pv_move;
     const Move previous_move = ply > 0 ? search_stack_[ply - 1].current_move : Move{};
-    const Move counter_move = is_valid_move_shape(previous_move)
-        ? counter_moves_[color_index(board.side_to_move())][previous_move.from][previous_move.to]
+    const Piece previous_piece = ply > 0 ? search_stack_[ply - 1].moved_piece : Piece::None;
+    const Move counter_move = previous_piece != Piece::None && is_valid_move_shape(previous_move)
+        ? counter_moves_[piece_index(previous_piece)][previous_move.to]
         : Move{};
-    const Square continuation_square = is_valid_move_shape(previous_move) ? previous_move.to : kNoSquare;
+    std::array<ContinuationContext, kContinuationPlyOffsets.size()> continuation_contexts{};
+    for (std::size_t offset_index = 0; offset_index < kContinuationPlyOffsets.size(); ++offset_index) {
+        const int previous_ply = ply - kContinuationPlyOffsets[offset_index];
+        if (previous_ply < 0) {
+            continue;
+        }
+        const SearchStack& previous = search_stack_[previous_ply];
+        if (previous.moved_piece == Piece::None || !is_valid_move_shape(previous.current_move)) {
+            continue;
+        }
+        continuation_contexts[offset_index] = ContinuationContext{
+            previous.moved_piece,
+            previous.current_move.to,
+            kContinuationScoreWeights[offset_index],
+        };
+    }
     MovePicker picker{
         board,
         moves,
+        in_check ? MovePickerMode::Evasion : MovePickerMode::Main,
         pv_move,
         tt_move,
         ply < kMaxPly ? killer_moves_[ply][0] : Move{},
         ply < kMaxPly ? killer_moves_[ply][1] : Move{},
         counter_move,
-        continuation_square,
+        continuation_contexts,
+        ply,
         true,
         history_,
+        low_ply_history_,
         capture_history_,
-        continuation_history_,
+        *continuation_history_,
         diagnostics_,
     };
     std::array<Move, kMaxHistoryQuiets> quiets_tried_before_cutoff{};
@@ -1600,6 +2008,17 @@ int Searcher::negamax(
         const bool is_quiet = is_quiet_history_move(move);
         const bool is_tt_move = is_valid_move_shape(tt_move) && same_move_identity(move, tt_move);
         const bool is_pv_move = is_valid_move_shape(pv_move) && same_move_identity(move, pv_move);
+        const int preliminary_stat_score = is_quiet
+            ? quiet_history_score(
+                history_,
+                low_ply_history_,
+                *continuation_history_,
+                continuation_contexts,
+                moving_side,
+                moved_piece,
+                move,
+                ply)
+            : capture_history_score(capture_history_, moved_piece, captured_piece, move) / 8;
 
         if (!is_pv_node && !in_check && !is_tt_move && !is_pv_move && best_score > -kMateScore + kMateWindow) {
             bool gives_check_for_pruning = false;
@@ -1609,15 +2028,22 @@ int Searcher::negamax(
             }
 
             if (is_quiet && !gives_check_for_pruning) {
-                if (depth <= 4 && move_index >= quiet_lmp_limit(depth, stack.improving)) {
+                const int history_adjusted_lmp =
+                    quiet_lmp_limit(depth, stack.improving)
+                    + (preliminary_stat_score > 8'000 ? 2 : 0)
+                    - (preliminary_stat_score < -8'000 ? 1 : 0);
+                if (depth <= 4 && move_index >= std::max(1, history_adjusted_lmp)) {
                     ++diagnostics_.late_move_prunes;
                     continue;
                 }
-                if (depth <= kFutilityMaxDepth && static_eval + futility_margin(depth, stack.improving) <= alpha) {
+                const int history_futility_adjust = std::clamp(preliminary_stat_score / 96, -150, 150);
+                if (depth <= kFutilityMaxDepth
+                    && static_eval + futility_margin(depth, stack.improving) + history_futility_adjust <= alpha) {
                     ++diagnostics_.futility_prunes;
                     continue;
                 }
-                if (depth <= kQuietSeePruneMaxDepth && static_exchange_with_diagnostics(board, move) < -75 * depth) {
+                const int quiet_see_floor = -75 * depth - std::max(0, -preliminary_stat_score / 192);
+                if (depth <= kQuietSeePruneMaxDepth && static_exchange_with_diagnostics(board, move) < quiet_see_floor) {
                     ++diagnostics_.futility_prunes;
                     continue;
                 }
@@ -1674,13 +2100,10 @@ int Searcher::negamax(
             : 0);
         const int child_depth = depth - 1 + extension;
         const int child_extensions_used = extensions_used + extension;
-        const int stat_score = is_quiet
-            ? history_[color_index(moving_side)][move.from][move.to]
-                + (is_valid_square(continuation_square)
-                    ? continuation_history_[color_index(moving_side)][continuation_square][move.from][move.to] / 2
-                    : 0)
-            : capture_history_[color_index(moving_side)][move.from][move.to] / 16;
+        const int stat_score = preliminary_stat_score;
         stack.current_move = move;
+        stack.moved_piece = moved_piece;
+        stack.captured_piece = captured_piece;
         stack.stat_score = stat_score;
         int score = 0;
         if (move_index == 0) {
@@ -1712,6 +2135,8 @@ int Searcher::negamax(
         board.unmake_move(undo);
         ++move_index;
         stack.current_move = Move{};
+        stack.moved_piece = Piece::None;
+        stack.captured_piece = Piece::None;
 
         if (score > best_score) {
             best_score = score;
@@ -1722,6 +2147,7 @@ int Searcher::negamax(
             ++diagnostics_.beta_cutoffs;
             diagnostics_.beta_cutoff_move_index_sum += static_cast<std::uint64_t>(move_index);
             record_cutoff(
+                board,
                 move,
                 depth,
                 ply,
@@ -1804,19 +2230,38 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
     if (allow_quiet_checks) {
         append_moves(moves, generate_pseudo_legal_quiet_checks(board));
     }
+    std::array<ContinuationContext, kContinuationPlyOffsets.size()> continuation_contexts{};
+    for (std::size_t offset_index = 0; offset_index < kContinuationPlyOffsets.size(); ++offset_index) {
+        const int previous_ply = ply - kContinuationPlyOffsets[offset_index];
+        if (previous_ply < 0) {
+            continue;
+        }
+        const SearchStack& previous = search_stack_[previous_ply];
+        if (previous.moved_piece == Piece::None || !is_valid_move_shape(previous.current_move)) {
+            continue;
+        }
+        continuation_contexts[offset_index] = ContinuationContext{
+            previous.moved_piece,
+            previous.current_move.to,
+            kContinuationScoreWeights[offset_index],
+        };
+    }
     MovePicker picker{
         board,
         moves,
+        in_check ? MovePickerMode::Evasion : MovePickerMode::QSearch,
         Move{},
         tt_move,
         ply < kMaxPly ? killer_moves_[ply][0] : Move{},
         ply < kMaxPly ? killer_moves_[ply][1] : Move{},
         Move{},
-        ply > 0 && is_valid_move_shape(search_stack_[ply - 1].current_move) ? search_stack_[ply - 1].current_move.to : kNoSquare,
+        continuation_contexts,
+        ply,
         false,
         history_,
+        low_ply_history_,
         capture_history_,
-        continuation_history_,
+        *continuation_history_,
         diagnostics_,
     };
 
@@ -1852,6 +2297,8 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         }
 
         const Color moving_side = board.side_to_move();
+        const Piece moved_piece = board.piece_at(move.from);
+        const Piece captured_piece = captured_piece_for(board, move);
         const UndoState undo = board.make_move(move);
         if (!move_is_legal_after_make(board, moving_side)) {
             ++diagnostics_.illegal_pseudo_moves;
@@ -1859,9 +2306,15 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
             continue;
         }
         update_nnue_accumulator_after_move(board, undo, ply, ply + 1);
+        search_stack_[ply].current_move = move;
+        search_stack_[ply].moved_piece = moved_piece;
+        search_stack_[ply].captured_piece = captured_piece;
         ++legal_moves_searched;
         const int score = -quiescence(board, ply + 1, -beta, -alpha, qply + 1);
         board.unmake_move(undo);
+        search_stack_[ply].current_move = Move{};
+        search_stack_[ply].moved_piece = Piece::None;
+        search_stack_[ply].captured_piece = Piece::None;
         if (score >= beta) {
             return beta;
         }
@@ -2016,32 +2469,60 @@ void Searcher::age_history() {
             }
         }
     }
-    for (auto& color_history : capture_history_) {
-        for (auto& from_history : color_history) {
+    for (auto& ply_history : low_ply_history_) {
+        for (auto& from_history : ply_history) {
             for (int& score : from_history) {
                 score /= 2;
             }
         }
     }
-    for (auto& color_history : continuation_history_) {
-        for (auto& previous_to_history : color_history) {
-            for (auto& from_history : previous_to_history) {
-                for (int& score : from_history) {
-                    score /= 2;
+    for (auto& piece_history : capture_history_) {
+        for (auto& to_history : piece_history) {
+            for (int& score : to_history) {
+                score /= 2;
+            }
+        }
+    }
+    for (auto& distance_history : *continuation_history_) {
+        for (auto& previous_piece_history : distance_history) {
+            for (auto& previous_to_history : previous_piece_history) {
+                for (auto& moved_piece_history : previous_to_history) {
+                    for (int& score : moved_piece_history) {
+                        score /= 2;
+                    }
                 }
             }
         }
     }
-    for (auto& color_correction : correction_history_) {
-        for (int& value : color_correction) {
-            value = value * 15 / 16;
+    const auto age_correction = [](auto& correction_history) {
+        for (auto& color_correction : correction_history) {
+            for (int& value : color_correction) {
+                value = value * 15 / 16;
+            }
         }
-    }
+    };
+    age_correction(pawn_correction_history_);
+    age_correction(minor_correction_history_);
+    age_correction(nonpawn_white_correction_history_);
+    age_correction(nonpawn_black_correction_history_);
+}
+
+void Searcher::clear_history_touch_lists() {
+    touched_history_.clear();
+    touched_low_ply_history_.clear();
+    touched_capture_history_.clear();
+    touched_continuation_history_.clear();
+    touched_correction_history_.clear();
 }
 
 int Searcher::corrected_static_eval(const Board& board, int raw_eval) const {
-    const int correction = correction_history_[color_index(board.side_to_move())][correction_index(board)];
-    return std::clamp(raw_eval + correction / 128, -kMateScore + kMateWindow, kMateScore - kMateWindow);
+    const int side = color_index(board.side_to_move());
+    int correction = 0;
+    correction += pawn_correction_history_[side][pawn_correction_index(board)];
+    correction += minor_correction_history_[side][minor_correction_index(board)];
+    correction += nonpawn_white_correction_history_[side][nonpawn_correction_index(board, Color::White)];
+    correction += nonpawn_black_correction_history_[side][nonpawn_correction_index(board, Color::Black)];
+    return std::clamp(raw_eval + correction / 512, -kMateScore + kMateWindow, kMateScore - kMateWindow);
 }
 
 void Searcher::update_correction_history(const Board& board, Color side_to_move, int depth, int static_eval, int score) {
@@ -2049,12 +2530,99 @@ void Searcher::update_correction_history(const Board& board, Color side_to_move,
     if (delta == 0) {
         return;
     }
-    int& entry = correction_history_[color_index(side_to_move)][correction_index(board)];
-    update_history_score(entry, correction_bonus(depth, delta));
+    const int bonus = correction_bonus(depth, delta);
+    const int side = color_index(side_to_move);
+    const int pawn_index = pawn_correction_index(board);
+    const int minor_index = minor_correction_index(board);
+    const int nonpawn_white_index = nonpawn_correction_index(board, Color::White);
+    const int nonpawn_black_index = nonpawn_correction_index(board, Color::Black);
+    update_history_score(pawn_correction_history_[side][pawn_index], bonus);
+    update_history_score(minor_correction_history_[side][minor_index], bonus * 5 / 4);
+    update_history_score(nonpawn_white_correction_history_[side][nonpawn_white_index], bonus * 3 / 4);
+    update_history_score(nonpawn_black_correction_history_[side][nonpawn_black_index], bonus * 3 / 4);
+    touched_correction_history_.push_back(encode_correction_history_key(0, side, pawn_index));
+    touched_correction_history_.push_back(encode_correction_history_key(1, side, minor_index));
+    touched_correction_history_.push_back(encode_correction_history_key(2, side, nonpawn_white_index));
+    touched_correction_history_.push_back(encode_correction_history_key(3, side, nonpawn_black_index));
     ++diagnostics_.correction_history_updates;
 }
 
+void Searcher::merge_history_from(const Searcher& helper, int divisor) {
+    divisor = std::max(2, divisor);
+    for_each_unique_key(helper.touched_history_, [&](std::uint32_t key) {
+        const std::size_t to = key % kBoardSquareCount;
+        key /= kBoardSquareCount;
+        const std::size_t from = key % kBoardSquareCount;
+        key /= kBoardSquareCount;
+        const std::size_t color = key;
+        blend_history_value(history_[color][from][to], helper.history_[color][from][to], divisor);
+    });
+    for_each_unique_key(helper.touched_low_ply_history_, [&](std::uint32_t key) {
+        const std::size_t to = key % kBoardSquareCount;
+        key /= kBoardSquareCount;
+        const std::size_t from = key % kBoardSquareCount;
+        key /= kBoardSquareCount;
+        const std::size_t ply = key;
+        blend_history_value(low_ply_history_[ply][from][to], helper.low_ply_history_[ply][from][to], divisor);
+    });
+    for_each_unique_key(helper.touched_capture_history_, [&](std::uint32_t key) {
+        const std::size_t captured = key % 7;
+        key /= 7;
+        const std::size_t to = key % kBoardSquareCount;
+        key /= kBoardSquareCount;
+        const std::size_t piece = key;
+        blend_history_value(capture_history_[piece][to][captured], helper.capture_history_[piece][to][captured], divisor);
+    });
+    for (std::size_t piece = 0; piece < counter_moves_.size(); ++piece) {
+        for (std::size_t to = 0; to < counter_moves_[piece].size(); ++to) {
+            if (is_valid_move_shape(helper.counter_moves_[piece][to])) {
+                counter_moves_[piece][to] = helper.counter_moves_[piece][to];
+            }
+        }
+    }
+    for_each_unique_key(helper.touched_continuation_history_, [&](std::uint32_t key) {
+        const std::size_t to = key % kBoardSquareCount;
+        key /= kBoardSquareCount;
+        const std::size_t moved_piece = key % 13;
+        key /= 13;
+        const std::size_t previous_to = key % kBoardSquareCount;
+        key /= kBoardSquareCount;
+        const std::size_t previous_piece = key % 13;
+        key /= 13;
+        const std::size_t distance = key;
+        blend_history_value(
+            (*continuation_history_)[distance][previous_piece][previous_to][moved_piece][to],
+            (*helper.continuation_history_)[distance][previous_piece][previous_to][moved_piece][to],
+            divisor
+        );
+    });
+    for_each_unique_key(helper.touched_correction_history_, [&](std::uint32_t key) {
+        const std::size_t index = key % kCorrectionHistorySize;
+        key /= kCorrectionHistorySize;
+        const std::size_t color = key % 2;
+        key /= 2;
+        const std::size_t kind = key;
+        switch (kind) {
+            case 0:
+                blend_history_value(pawn_correction_history_[color][index], helper.pawn_correction_history_[color][index], divisor);
+                break;
+            case 1:
+                blend_history_value(minor_correction_history_[color][index], helper.minor_correction_history_[color][index], divisor);
+                break;
+            case 2:
+                blend_history_value(nonpawn_white_correction_history_[color][index], helper.nonpawn_white_correction_history_[color][index], divisor);
+                break;
+            case 3:
+                blend_history_value(nonpawn_black_correction_history_[color][index], helper.nonpawn_black_correction_history_[color][index], divisor);
+                break;
+            default:
+                break;
+        }
+    });
+}
+
 void Searcher::record_cutoff(
+    const Board& board,
     const Move& move,
     int depth,
     int ply,
@@ -2081,13 +2649,35 @@ void Searcher::record_cutoff(
 
         int& history_score = history_[color_index(side_to_move)][move.from][move.to];
         update_history_score(history_score, bonus);
+        touched_history_.push_back(encode_history_key(color_index(side_to_move), move.from, move.to));
+        if (ply >= 0 && ply < static_cast<int>(low_ply_history_.size())) {
+            update_history_score(low_ply_history_[static_cast<std::size_t>(ply)][move.from][move.to], bonus);
+            touched_low_ply_history_.push_back(encode_low_ply_history_key(ply, move.from, move.to));
+        }
 
-        if (ply > 0 && is_valid_move_shape(search_stack_[ply - 1].current_move)) {
-            const Move previous_move = search_stack_[ply - 1].current_move;
-            counter_moves_[color_index(side_to_move)][previous_move.from][previous_move.to] = move;
+        for (std::size_t offset_index = 0; offset_index < kContinuationPlyOffsets.size(); ++offset_index) {
+            const int previous_ply = ply - kContinuationPlyOffsets[offset_index];
+            if (previous_ply < 0) {
+                continue;
+            }
+            const SearchStack& previous = search_stack_[previous_ply];
+            if (previous.moved_piece == Piece::None || !is_valid_move_shape(previous.current_move)) {
+                continue;
+            }
+            if (offset_index == 0) {
+                counter_moves_[piece_index(previous.moved_piece)][previous.current_move.to] = move;
+            }
             int& continuation_score =
-                continuation_history_[color_index(side_to_move)][previous_move.to][move.from][move.to];
-            update_history_score(continuation_score, bonus);
+                (*continuation_history_)[offset_index][piece_index(previous.moved_piece)][previous.current_move.to]
+                                     [piece_index(moved_piece)][move.to];
+            update_history_score(continuation_score, bonus * kContinuationUpdateWeights[offset_index] / 128);
+            touched_continuation_history_.push_back(encode_continuation_history_key(
+                static_cast<int>(offset_index),
+                previous.moved_piece,
+                previous.current_move.to,
+                moved_piece,
+                move.to
+            ));
         }
 
         for (std::size_t index = 0; index < quiet_count; ++index) {
@@ -2095,18 +2685,43 @@ void Searcher::record_cutoff(
             if (same_move_identity(quiet, move)) {
                 continue;
             }
+            const Piece failed_piece = board.piece_at(quiet.from);
+            if (failed_piece == Piece::None) {
+                continue;
+            }
             int& failed_score = history_[color_index(side_to_move)][quiet.from][quiet.to];
             update_history_score(failed_score, -malus);
-            if (ply > 0 && is_valid_move_shape(search_stack_[ply - 1].current_move)) {
-                const Move previous_move = search_stack_[ply - 1].current_move;
+            touched_history_.push_back(encode_history_key(color_index(side_to_move), quiet.from, quiet.to));
+            if (ply >= 0 && ply < static_cast<int>(low_ply_history_.size())) {
+                update_history_score(low_ply_history_[static_cast<std::size_t>(ply)][quiet.from][quiet.to], -malus);
+                touched_low_ply_history_.push_back(encode_low_ply_history_key(ply, quiet.from, quiet.to));
+            }
+            for (std::size_t offset_index = 0; offset_index < kContinuationPlyOffsets.size(); ++offset_index) {
+                const int previous_ply = ply - kContinuationPlyOffsets[offset_index];
+                if (previous_ply < 0) {
+                    continue;
+                }
+                const SearchStack& previous = search_stack_[previous_ply];
+                if (previous.moved_piece == Piece::None || !is_valid_move_shape(previous.current_move)) {
+                    continue;
+                }
                 int& continuation_score =
-                    continuation_history_[color_index(side_to_move)][previous_move.to][quiet.from][quiet.to];
-                update_history_score(continuation_score, -malus);
+                    (*continuation_history_)[offset_index][piece_index(previous.moved_piece)][previous.current_move.to]
+                                         [piece_index(failed_piece)][quiet.to];
+                update_history_score(continuation_score, -malus * kContinuationUpdateWeights[offset_index] / 128);
+                touched_continuation_history_.push_back(encode_continuation_history_key(
+                    static_cast<int>(offset_index),
+                    previous.moved_piece,
+                    previous.current_move.to,
+                    failed_piece,
+                    quiet.to
+                ));
             }
         }
     } else if (move.is_capture() && captured_piece != Piece::None && moved_piece != Piece::None) {
-        int& score = capture_history_[color_index(side_to_move)][move.from][move.to];
+        int& score = capture_history_[piece_index(moved_piece)][move.to][captured_type_index(captured_piece)];
         update_history_score(score, capture_history_bonus(depth));
+        touched_capture_history_.push_back(encode_capture_history_key(moved_piece, move.to, captured_piece));
 
         const int capture_malus = capture_history_bonus(depth) / 2;
         for (std::size_t index = 0; index < capture_count; ++index) {
@@ -2114,8 +2729,14 @@ void Searcher::record_cutoff(
             if (same_move_identity(capture, move)) {
                 continue;
             }
-            int& failed_score = capture_history_[color_index(side_to_move)][capture.from][capture.to];
+            const Piece failed_piece = board.piece_at(capture.from);
+            const Piece failed_captured_piece = captured_piece_for(board, capture);
+            if (failed_piece == Piece::None || failed_captured_piece == Piece::None) {
+                continue;
+            }
+            int& failed_score = capture_history_[piece_index(failed_piece)][capture.to][captured_type_index(failed_captured_piece)];
             update_history_score(failed_score, -capture_malus);
+            touched_capture_history_.push_back(encode_capture_history_key(failed_piece, capture.to, failed_captured_piece));
         }
     }
 }

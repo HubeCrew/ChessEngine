@@ -91,6 +91,13 @@ struct SearchDiagnostics {
 };
 
 struct SearchResult {
+    struct Line {
+        int multipv = 1;
+        Move best_move;
+        int score_centipawns = 0;
+        std::vector<Move> principal_variation;
+    };
+
     Move best_move;
     int score_centipawns = 0;
     int depth = 0;
@@ -100,6 +107,7 @@ struct SearchResult {
     std::chrono::milliseconds elapsed{0};
     std::uint64_t nps = 0;
     std::vector<Move> principal_variation;
+    std::vector<Line> lines;
     SearchDiagnostics diagnostics;
 };
 
@@ -151,10 +159,12 @@ private:
 };
 
 using HistoryTable = std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, 2>;
-using CaptureHistoryTable = std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, 2>;
-using CounterMoveTable = std::array<std::array<std::array<Move, kBoardSquareCount>, kBoardSquareCount>, 2>;
+using LowPlyHistoryTable = std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, 8>;
+using CaptureHistoryTable = std::array<std::array<std::array<int, 7>, kBoardSquareCount>, 13>;
+using CounterMoveTable = std::array<std::array<Move, kBoardSquareCount>, 13>;
 using ContinuationHistoryTable =
-    std::array<std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, kBoardSquareCount>, 2>;
+    std::array<std::array<std::array<std::array<int, kBoardSquareCount>, 13>, kBoardSquareCount>, 13>;
+using ContinuationHistoryStack = std::array<ContinuationHistoryTable, 4>;
 
 class Searcher {
 public:
@@ -171,6 +181,8 @@ public:
     [[nodiscard]] bool profiling() const;
     void set_thread_count(int threads);
     [[nodiscard]] int thread_count() const;
+    void set_multi_pv(int multi_pv);
+    [[nodiscard]] int multi_pv() const;
     void set_move_overhead(std::chrono::milliseconds overhead);
     [[nodiscard]] std::chrono::milliseconds move_overhead() const;
     void set_slow_mover(int slow_mover);
@@ -193,6 +205,8 @@ private:
 
     struct SearchStack {
         Move current_move;
+        Piece moved_piece = Piece::None;
+        Piece captured_piece = Piece::None;
         int static_eval = 0;
         int corrected_static_eval = 0;
         int stat_score = 0;
@@ -216,13 +230,23 @@ private:
     std::shared_ptr<std::atomic_bool> stop_signal_;
     TimeManager time_manager_;
     int thread_count_ = 1;
+    int multi_pv_ = 1;
     int worker_index_ = 0;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
     HistoryTable history_{};
+    LowPlyHistoryTable low_ply_history_{};
     CaptureHistoryTable capture_history_{};
     CounterMoveTable counter_moves_{};
-    ContinuationHistoryTable continuation_history_{};
-    std::array<std::array<int, kCorrectionHistorySize>, 2> correction_history_{};
+    std::unique_ptr<ContinuationHistoryStack> continuation_history_;
+    std::array<std::array<int, kCorrectionHistorySize>, 2> pawn_correction_history_{};
+    std::array<std::array<int, kCorrectionHistorySize>, 2> minor_correction_history_{};
+    std::array<std::array<int, kCorrectionHistorySize>, 2> nonpawn_white_correction_history_{};
+    std::array<std::array<int, kCorrectionHistorySize>, 2> nonpawn_black_correction_history_{};
+    std::vector<std::uint32_t> touched_history_;
+    std::vector<std::uint32_t> touched_low_ply_history_;
+    std::vector<std::uint32_t> touched_capture_history_;
+    std::vector<std::uint32_t> touched_continuation_history_;
+    std::vector<std::uint32_t> touched_correction_history_;
     std::array<SearchStack, kMaxPly> search_stack_{};
     std::array<nnue::QuantizedAccumulatorPair, kMaxPly> nnue_accumulator_stack_{};
     std::vector<Move> previous_iteration_pv_;
@@ -255,9 +279,12 @@ private:
     void update_nnue_accumulator_after_move(const Board& board, const UndoState& undo, int parent_ply, int child_ply);
     void update_nnue_accumulator_after_null_move(int parent_ply, int child_ply);
     void age_history();
+    void clear_history_touch_lists();
     [[nodiscard]] int corrected_static_eval(const Board& board, int raw_eval) const;
     void update_correction_history(const Board& board, Color side_to_move, int depth, int static_eval, int score);
+    void merge_history_from(const Searcher& helper, int divisor);
     void record_cutoff(
+        const Board& board,
         const Move& move,
         int depth,
         int ply,
