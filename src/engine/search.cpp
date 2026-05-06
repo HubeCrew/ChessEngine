@@ -46,9 +46,6 @@ constexpr int kCorrectionHistorySize = 16384;
 constexpr int kMaxExtensionsPerLine = 6;
 constexpr int kMaxQuiescenceQuietCheckPly = 1;
 constexpr int kDeltaPruningMargin = 200;
-constexpr int kDefaultMovesToGo = 30;
-constexpr int kMinAllocatedMoveTimeMs = 10;
-constexpr int kMoveTimeSafetyMs = 20;
 constexpr std::size_t kMaxHistoryQuiets = 256;
 constexpr std::size_t kMaxHistoryCaptures = 128;
 constexpr std::size_t kNoMoveIndex = static_cast<std::size_t>(-1);
@@ -737,33 +734,138 @@ void append_moves(MoveList& destination, const MoveList& source) {
     }
 }
 
-std::chrono::milliseconds allocated_time(const Board& board, const SearchLimits& limits) {
+}  // namespace
+
+void TimeManager::clear() {
+    optimum_ = std::chrono::milliseconds{0};
+    maximum_ = std::chrono::milliseconds{0};
+    previous_time_reduction_ = 1.0;
+}
+
+void TimeManager::set_config(TimeManagementConfig config) {
+    config.move_overhead = std::max(std::chrono::milliseconds{0}, config.move_overhead);
+    config.slow_mover = std::clamp(config.slow_mover, 10, 1000);
+    config_ = config;
+}
+
+TimeManagementConfig TimeManager::config() const {
+    return config_;
+}
+
+void TimeManager::init(const Board& board, const SearchLimits& limits) {
+    optimum_ = std::chrono::milliseconds{0};
+    maximum_ = std::chrono::milliseconds{0};
     if (limits.move_time.count() > 0) {
-        return limits.move_time;
+        const auto overhead = std::min(config_.move_overhead, limits.move_time);
+        optimum_ = std::max(std::chrono::milliseconds{1}, limits.move_time - overhead);
+        maximum_ = optimum_;
+        return;
     }
 
     const bool white_to_move = board.side_to_move() == Color::White;
-    const std::chrono::milliseconds remaining = white_to_move ? limits.white_time : limits.black_time;
-    const std::chrono::milliseconds increment = white_to_move ? limits.white_increment : limits.black_increment;
+    const auto remaining = white_to_move ? limits.white_time : limits.black_time;
+    const auto increment = white_to_move ? limits.white_increment : limits.black_increment;
     if (remaining.count() <= 0) {
-        return std::chrono::milliseconds{0};
+        return;
     }
 
-    const int moves_to_go = limits.moves_to_go > 0 ? limits.moves_to_go : kDefaultMovesToGo;
-    const std::int64_t safety = std::min<std::int64_t>(kMoveTimeSafetyMs, std::max<std::int64_t>(0, remaining.count() / 10));
-    const std::int64_t usable = std::max<std::int64_t>(1, remaining.count() - safety);
-    const std::int64_t base = usable / moves_to_go;
-    const std::int64_t increment_part = increment.count() * 3 / 4;
-    const std::int64_t cap = std::max<std::int64_t>(1, usable / 4);
-    const std::int64_t allocated = std::clamp<std::int64_t>(
-        base + increment_part,
-        std::min<std::int64_t>(kMinAllocatedMoveTimeMs, usable),
-        cap
+    const auto overhead = std::min(config_.move_overhead, remaining);
+    const auto available = std::max(std::chrono::milliseconds{1}, remaining - overhead);
+    const double slow_mover_scale = static_cast<double>(config_.slow_mover) / 100.0;
+    const int ply_estimate = std::max(0, board.fullmove_number() * 2 - (board.side_to_move() == Color::White ? 2 : 1));
+
+    double optimum_scale = 0.0;
+    double maximum_scale = 0.0;
+    if (limits.moves_to_go > 0) {
+        const double moves_to_go = static_cast<double>(std::clamp(limits.moves_to_go, 1, 120));
+        optimum_scale = (0.88 + static_cast<double>(ply_estimate) / 116.4) / moves_to_go;
+        maximum_scale = 1.3 + 0.11 * moves_to_go;
+    } else {
+        optimum_scale = std::pow(static_cast<double>(ply_estimate) + 2.94693, 0.461073) * 0.0120;
+        maximum_scale = 5.5 + static_cast<double>(ply_estimate) / 12.0;
+    }
+
+    const std::int64_t available_ms = available.count();
+    const std::int64_t increment_ms = increment.count();
+    std::int64_t optimum_ms = static_cast<std::int64_t>(
+        static_cast<double>(available_ms) * optimum_scale * slow_mover_scale
     );
-    return std::chrono::milliseconds{allocated};
+    optimum_ms += increment_ms * 75 / 100;
+    optimum_ms = std::clamp<std::int64_t>(optimum_ms, 1, std::max<std::int64_t>(1, available_ms * 825 / 1000));
+
+    std::int64_t maximum_ms = static_cast<std::int64_t>(static_cast<double>(optimum_ms) * maximum_scale);
+    maximum_ms = std::clamp<std::int64_t>(maximum_ms, optimum_ms, std::max<std::int64_t>(1, available_ms * 825 / 1000));
+
+    optimum_ = std::chrono::milliseconds{optimum_ms};
+    maximum_ = std::chrono::milliseconds{maximum_ms};
 }
 
-}  // namespace
+bool TimeManager::active() const {
+    return maximum_.count() > 0;
+}
+
+std::chrono::milliseconds TimeManager::optimum() const {
+    return optimum_;
+}
+
+std::chrono::milliseconds TimeManager::maximum() const {
+    return maximum_;
+}
+
+std::chrono::steady_clock::time_point TimeManager::deadline(std::chrono::steady_clock::time_point start) const {
+    return start + maximum_;
+}
+
+bool TimeManager::should_stop_after_iteration(
+    std::chrono::milliseconds elapsed,
+    int completed_depth,
+    int best_move_stability,
+    int best_move_changes,
+    int previous_score,
+    int best_score,
+    int previous_average_score,
+    std::uint64_t best_effort,
+    std::uint64_t total_nodes
+) {
+    if (!active() || completed_depth <= 1) {
+        return false;
+    }
+    if (elapsed >= maximum_) {
+        return true;
+    }
+
+    const double nodes_effort = total_nodes == 0
+        ? 0.0
+        : static_cast<double>(best_effort) / static_cast<double>(total_nodes);
+    const double falling_eval_raw =
+        (12.44 + 2.318 * static_cast<double>(previous_average_score - best_score)
+            + 0.95 * static_cast<double>(previous_score - best_score)) / 100.0;
+    const double falling_eval = std::clamp(falling_eval_raw, 0.581, 1.655);
+    const double stability_center = static_cast<double>(best_move_stability) + 11.565;
+    const double time_reduction = 0.64 + 0.93 / (0.953 + std::exp(-0.476 * (static_cast<double>(completed_depth) - stability_center)));
+    const double reduction = (1.5 + previous_time_reduction_) / (2.255 * time_reduction);
+    double effort_factor = 1.0;
+    if (nodes_effort > 0.60) {
+        effort_factor -= std::min(0.25, (nodes_effort - 0.60) * 0.60);
+    } else if (nodes_effort < 0.35) {
+        effort_factor += std::min(0.25, (0.35 - nodes_effort) * 0.75);
+    }
+    const double change_factor = 1.0 + std::min(0.55, 0.14 * static_cast<double>(best_move_changes));
+
+    const double scale = std::clamp(falling_eval * reduction * effort_factor * change_factor, 0.55, 1.90);
+    const auto adjusted_optimum = std::chrono::milliseconds{
+        std::clamp<std::int64_t>(
+            static_cast<std::int64_t>(static_cast<double>(optimum_.count()) * scale),
+            std::max<std::int64_t>(1, optimum_.count() / 2),
+            maximum_.count()
+        )
+    };
+    const bool stop = elapsed >= adjusted_optimum;
+    if (stop) {
+        previous_time_reduction_ = time_reduction;
+    }
+    return stop;
+}
 
 Searcher::Searcher() {
     nnue_ = std::make_shared<nnue::Network>();
@@ -794,6 +896,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
         helper.search_extensions_ = search_extensions_;
         helper.profiling_ = profiling_;
         helper.eval_type_ = eval_type_;
+        helper.time_manager_.set_config(time_manager_.config());
         helper.thread_count_ = 1;
         helper.worker_index_ = worker;
         helper.history_ = history_;
@@ -852,39 +955,16 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
         tt_->new_search();
         age_history();
     }
-    optimum_time_ = allocated_time(board, limits);
-    if (limits.move_time.count() > 0) {
-        maximum_time_ = limits.move_time;
-    } else if (optimum_time_.count() > 0) {
-        maximum_time_ = std::max(optimum_time_ * 2, optimum_time_ + std::chrono::milliseconds{50});
-    } else {
-        maximum_time_ = std::chrono::milliseconds{0};
-    }
-    use_deadline_ = maximum_time_.count() > 0;
+    time_manager_.init(board, limits);
+    use_deadline_ = time_manager_.active();
     start_time_ = std::chrono::steady_clock::now();
-    deadline_ = start_time_ + maximum_time_;
+    deadline_ = time_manager_.deadline(start_time_);
     previous_iteration_pv_.clear();
     refresh_nnue_accumulator(board, 0);
 
     SearchResult result;
     const MoveList legal_moves = generate_legal_moves(board);
-    root_search_moves_constrained_ = !limits.search_moves.empty();
-    root_search_moves_.clear();
-    if (root_search_moves_constrained_) {
-        for (const Move& move : legal_moves) {
-            if (contains_move_identity(limits.search_moves, move)) {
-                root_search_moves_.push_back(move);
-            }
-        }
-    } else {
-        root_search_moves_ = legal_moves;
-    }
-    if (worker_index_ > 0 && root_search_moves_.size() > 1) {
-        const auto offset = static_cast<std::ptrdiff_t>(
-            static_cast<std::size_t>(worker_index_) % root_search_moves_.size()
-        );
-        std::rotate(root_search_moves_.begin(), root_search_moves_.begin() + offset, root_search_moves_.end());
-    }
+    build_root_moves(legal_moves, limits);
 
     if (root_search_moves_.empty()) {
         result.best_move = Move{};
@@ -897,12 +977,14 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
 
     const int max_depth = std::min(std::max(1, limits.depth), kMaxPly - 1);
     int stable_best_move_iterations = 0;
+    int best_move_changes = 0;
     for (int depth = 1; depth <= max_depth; ++depth) {
         if (should_stop()) {
             break;
         }
 
         previous_iteration_pv_ = result.principal_variation;
+        begin_root_iteration();
         const Move previous_best_move = result.best_move;
         const int previous_score = result.score_centipawns;
 
@@ -916,7 +998,7 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
 
         int score = 0;
         while (true) {
-            score = negamax(board, depth, 0, alpha, beta, true, 0);
+            score = root_search(board, depth, alpha, beta);
             if (should_stop() || (score > alpha && score < beta)) {
                 break;
             }
@@ -936,27 +1018,43 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
         }
 
         if (!should_stop()) {
-            const std::optional<TranspositionEntry> root_entry = tt_->probe_entry(board.hash_key());
-            if (root_entry.has_value() && is_valid_move_shape(root_entry->best_move)) {
-                result.best_move = root_entry->best_move;
-            } else if (!is_valid_move_shape(result.best_move)) {
-                result.best_move = root_search_moves_.front();
-            }
-            result.score_centipawns = score;
+            finish_root_iteration();
+            const RootMoveInfo* best_root = best_root_move();
+            result.best_move = best_root != nullptr ? best_root->move : root_search_moves_.front();
+            result.score_centipawns = best_root != nullptr ? best_root->score : score;
             result.depth = depth;
             result.nodes = nodes_;
             result.qnodes = qnodes_;
             result.tt_hits = tt_hits_;
             result.diagnostics = diagnostics_;
-            result.principal_variation = extract_principal_variation(board, depth);
-            if (!result.principal_variation.empty()) {
-                result.best_move = result.principal_variation.front();
+            result.principal_variation = best_root != nullptr ? best_root->principal_variation : extract_principal_variation(board, depth);
+            if (result.principal_variation.empty()) {
+                result.principal_variation.push_back(result.best_move);
             }
             previous_iteration_pv_ = result.principal_variation;
-            stable_best_move_iterations = same_move_identity(result.best_move, previous_best_move)
-                ? stable_best_move_iterations + 1
-                : 0;
-            if (should_stop_after_iteration(depth, result, previous_best_move, previous_score, stable_best_move_iterations)) {
+            if (same_move_identity(result.best_move, previous_best_move)) {
+                ++stable_best_move_iterations;
+            } else {
+                stable_best_move_iterations = 0;
+                if (is_valid_move_shape(previous_best_move)) {
+                    ++best_move_changes;
+                }
+            }
+            const int previous_average_score = best_root != nullptr ? best_root->average_score : previous_score;
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start_time_
+            );
+            const std::uint64_t best_effort = best_root != nullptr ? best_root->effort : 0;
+            if (time_manager_.should_stop_after_iteration(
+                    elapsed,
+                    depth,
+                    stable_best_move_iterations,
+                    best_move_changes,
+                    previous_score,
+                    result.score_centipawns,
+                    previous_average_score,
+                    best_effort,
+                    nodes_)) {
                 stop_signal_->store(true, std::memory_order_relaxed);
                 break;
             }
@@ -1059,8 +1157,29 @@ int Searcher::evaluate_side_to_move(const Board& board) const {
     return evaluate(board, EvaluationConfig{eval_type_, nnue_.get(), 50});
 }
 
+void Searcher::set_move_overhead(std::chrono::milliseconds overhead) {
+    TimeManagementConfig config = time_manager_.config();
+    config.move_overhead = overhead;
+    time_manager_.set_config(config);
+}
+
+std::chrono::milliseconds Searcher::move_overhead() const {
+    return time_manager_.config().move_overhead;
+}
+
+void Searcher::set_slow_mover(int slow_mover) {
+    TimeManagementConfig config = time_manager_.config();
+    config.slow_mover = slow_mover;
+    time_manager_.set_config(config);
+}
+
+int Searcher::slow_mover() const {
+    return time_manager_.config().slow_mover;
+}
+
 void Searcher::clear() {
     tt_->clear();
+    time_manager_.clear();
     for (auto& ply_killers : killer_moves_) {
         ply_killers = {Move{}, Move{}};
     }
@@ -1093,6 +1212,178 @@ void Searcher::clear() {
         stack = SearchStack{};
     }
     previous_iteration_pv_.clear();
+    root_moves_.clear();
+    root_search_moves_.clear();
+}
+
+void Searcher::build_root_moves(const MoveList& legal_moves, const SearchLimits& limits) {
+    root_search_moves_constrained_ = !limits.search_moves.empty();
+    root_moves_.clear();
+    root_search_moves_.clear();
+
+    for (const Move& move : legal_moves) {
+        if (root_search_moves_constrained_ && !contains_move_identity(limits.search_moves, move)) {
+            continue;
+        }
+        RootMoveInfo info;
+        info.move = move;
+        info.principal_variation.push_back(move);
+        root_moves_.push_back(std::move(info));
+    }
+
+    if (worker_index_ > 0 && root_moves_.size() > 1) {
+        const auto offset = static_cast<std::ptrdiff_t>(
+            static_cast<std::size_t>(worker_index_) % root_moves_.size()
+        );
+        std::rotate(root_moves_.begin(), root_moves_.begin() + offset, root_moves_.end());
+    }
+    sync_root_move_list();
+}
+
+void Searcher::sync_root_move_list() {
+    root_search_moves_.clear();
+    for (const RootMoveInfo& root_move : root_moves_) {
+        root_search_moves_.push_back(root_move.move);
+    }
+}
+
+RootMoveInfo* Searcher::find_root_move(const Move& move) {
+    const auto found = std::find_if(root_moves_.begin(), root_moves_.end(), [&](const RootMoveInfo& root_move) {
+        return same_move_identity(root_move.move, move);
+    });
+    return found == root_moves_.end() ? nullptr : &*found;
+}
+
+const RootMoveInfo* Searcher::best_root_move() const {
+    if (root_moves_.empty()) {
+        return nullptr;
+    }
+    return &root_moves_.front();
+}
+
+void Searcher::begin_root_iteration() {
+    for (RootMoveInfo& root_move : root_moves_) {
+        root_move.previous_score = root_move.score;
+        root_move.effort = 0;
+        root_move.searched = false;
+    }
+}
+
+void Searcher::finish_root_iteration() {
+    for (RootMoveInfo& root_move : root_moves_) {
+        if (!root_move.searched) {
+            continue;
+        }
+        root_move.average_score = root_move.average_score == 0
+            ? root_move.score
+            : (root_move.average_score * 3 + root_move.score) / 4;
+    }
+    std::stable_sort(root_moves_.begin(), root_moves_.end(), [](const RootMoveInfo& lhs, const RootMoveInfo& rhs) {
+        if (lhs.searched != rhs.searched) {
+            return lhs.searched;
+        }
+        if (lhs.score != rhs.score) {
+            return lhs.score > rhs.score;
+        }
+        return lhs.effort > rhs.effort;
+    });
+    sync_root_move_list();
+}
+
+int Searcher::root_search(Board& board, int depth, int alpha, int beta) {
+    if (root_moves_.empty()) {
+        return board.in_check(board.side_to_move()) ? -kMateScore : 0;
+    }
+    if (should_stop()) {
+        return evaluate_with_diagnostics(board, 0);
+    }
+
+    ++nodes_;
+    const int original_alpha = alpha;
+    const int original_beta = beta;
+    const bool in_check = board.in_check(board.side_to_move());
+    Move best_move;
+    int best_score = -kInfinity;
+    int searched_moves = 0;
+
+    for (RootMoveInfo& root_move : root_moves_) {
+        const Move move = root_move.move;
+        const std::uint64_t start_nodes = nodes_;
+        const Color moving_side = board.side_to_move();
+        const UndoState undo = board.make_move(move);
+        if (!move_is_legal_after_make(board, moving_side)) {
+            ++diagnostics_.illegal_pseudo_moves;
+            board.unmake_move(undo);
+            continue;
+        }
+
+        update_nnue_accumulator_after_move(board, undo, 0, 1);
+        const bool gives_check = board.in_check(board.side_to_move());
+        const int extension = search_extensions_
+            ? extension_for_move(board, move, in_check, gives_check, moving_side, depth, 0)
+            : 0;
+        const int child_depth = std::max(0, depth - 1 + extension);
+        search_stack_[0].current_move = move;
+        search_stack_[0].stat_score = is_quiet_history_move(move)
+            ? history_[color_index(moving_side)][move.from][move.to]
+            : capture_history_[color_index(moving_side)][move.from][move.to] / 16;
+
+        const int alpha_before_move = alpha;
+        int score = 0;
+        if (searched_moves == 0) {
+            score = -negamax(board, child_depth, 1, -beta, -alpha, true, extension);
+        } else {
+            score = -negamax(board, child_depth, 1, -alpha - 1, -alpha, true, extension);
+            if (score > alpha && score < beta && !should_stop()) {
+                score = -negamax(board, child_depth, 1, -beta, -alpha, true, extension);
+            }
+        }
+
+        std::vector<Move> child_pv;
+        if (!should_stop()) {
+            child_pv = extract_principal_variation(board, child_depth);
+        }
+        board.unmake_move(undo);
+        search_stack_[0].current_move = Move{};
+
+        const std::uint64_t effort = nodes_ - start_nodes;
+        root_move.effort += effort;
+        root_move.nodes += effort;
+        root_move.searched = true;
+        root_move.score = searched_moves > 0 && score <= alpha_before_move
+            ? std::max(-kInfinity, alpha_before_move - 1)
+            : score;
+        root_move.principal_variation.clear();
+        root_move.principal_variation.push_back(move);
+        root_move.principal_variation.insert(
+            root_move.principal_variation.end(),
+            child_pv.begin(),
+            child_pv.end()
+        );
+
+        ++searched_moves;
+        if (score > best_score) {
+            best_score = score;
+            best_move = move;
+        }
+        alpha = std::max(alpha, score);
+        if (alpha >= beta || should_stop()) {
+            break;
+        }
+    }
+
+    if (searched_moves == 0) {
+        return in_check ? -kMateScore : 0;
+    }
+
+    Bound bound = Bound::Exact;
+    if (best_score <= original_alpha) {
+        bound = Bound::Upper;
+    } else if (best_score >= original_beta) {
+        bound = Bound::Lower;
+    }
+    tt_->store(board.hash_key(), depth, score_to_tt(best_score, 0), bound, best_move, kNoTranspositionStaticEval);
+    return best_score;
 }
 
 int Searcher::negamax(
@@ -1112,7 +1403,7 @@ int Searcher::negamax(
 
     const int original_alpha = alpha;
     const int original_beta = beta;
-    const bool is_root = ply == 0;
+    assert(ply > 0);
     const bool is_pv_node = beta - alpha > 1;
     const bool is_excluded_node = is_valid_move_shape(excluded_move);
     const bool cut_node = !is_pv_node;
@@ -1129,7 +1420,7 @@ int Searcher::negamax(
     int tt_static_eval = kNoTranspositionStaticEval;
     Bound tt_bound = Bound::Exact;
     int tt_depth = -1;
-    const bool use_tt_entry = !is_excluded_node && !(is_root && root_search_moves_constrained_);
+    const bool use_tt_entry = !is_excluded_node;
     if (use_tt_entry) {
         const std::optional<TranspositionEntry> entry = tt_->probe_entry(board.hash_key());
         if (entry.has_value()) {
@@ -1173,8 +1464,7 @@ int Searcher::negamax(
             && static_eval > search_stack_[ply - 2].corrected_static_eval;
     }
 
-    if (!is_root
-        && !is_pv_node
+    if (!is_pv_node
         && !is_excluded_node
         && !in_check
         && !is_mate_score(beta)
@@ -1184,8 +1474,7 @@ int Searcher::negamax(
         return static_eval;
     }
 
-    if (!is_root
-        && !is_pv_node
+    if (!is_pv_node
         && !is_excluded_node
         && !in_check
         && depth <= kRazoringMaxDepth
@@ -1218,8 +1507,7 @@ int Searcher::negamax(
         }
     }
 
-    if (!is_root
-        && !is_pv_node
+    if (!is_pv_node
         && !is_excluded_node
         && !in_check
         && depth >= kProbCutMinDepth
@@ -1270,17 +1558,12 @@ int Searcher::negamax(
         }
     }
 
-    MoveList moves = is_root
-        ? root_search_moves_
-        : (in_check ? generate_pseudo_legal_check_evasions(board) : generate_pseudo_legal_moves(board));
+    MoveList moves = in_check ? generate_pseudo_legal_check_evasions(board) : generate_pseudo_legal_moves(board);
 
     Move best_move;
     int best_score = -kInfinity;
     int move_index = 0;
     Move pv_move;
-    if (ply == 0 && !previous_iteration_pv_.empty()) {
-        pv_move = previous_iteration_pv_.front();
-    }
     const Move previous_move = ply > 0 ? search_stack_[ply - 1].current_move : Move{};
     const Move counter_move = is_valid_move_shape(previous_move)
         ? counter_moves_[color_index(board.side_to_move())][previous_move.from][previous_move.to]
@@ -1318,7 +1601,7 @@ int Searcher::negamax(
         const bool is_tt_move = is_valid_move_shape(tt_move) && same_move_identity(move, tt_move);
         const bool is_pv_move = is_valid_move_shape(pv_move) && same_move_identity(move, pv_move);
 
-        if (!is_root && !is_pv_node && !in_check && !is_tt_move && !is_pv_move && best_score > -kMateScore + kMateWindow) {
+        if (!is_pv_node && !in_check && !is_tt_move && !is_pv_move && best_score > -kMateScore + kMateWindow) {
             bool gives_check_for_pruning = false;
             if (depth <= 3) {
                 ++diagnostics_.move_gives_check_calls;
@@ -1349,8 +1632,7 @@ int Searcher::negamax(
         }
 
         int singular_extension = 0;
-        if (!is_root
-            && !is_excluded_node
+        if (!is_excluded_node
             && is_tt_move
             && depth >= 7
             && tt_depth >= depth - 3
@@ -1868,46 +2150,6 @@ std::vector<Move> Searcher::extract_principal_variation(Board& board, int depth)
 bool Searcher::should_stop() const {
     return stop_signal_->load(std::memory_order_relaxed)
         || (use_deadline_ && std::chrono::steady_clock::now() >= deadline_);
-}
-
-bool Searcher::should_stop_after_iteration(
-    int depth,
-    const SearchResult& result,
-    const Move& previous_best_move,
-    int previous_score,
-    int stable_best_move_iterations
-) const {
-    if (!use_deadline_ || depth <= 1 || optimum_time_.count() <= 0) {
-        return false;
-    }
-
-    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - start_time_
-    );
-    if (elapsed >= maximum_time_) {
-        return true;
-    }
-
-    const bool best_move_changed = is_valid_move_shape(previous_best_move)
-        && !same_move_identity(result.best_move, previous_best_move);
-    const int score_drop = previous_score - result.score_centipawns;
-    double multiplier = 1.0;
-    if (best_move_changed) {
-        multiplier += 0.75;
-    }
-    if (score_drop > 35) {
-        multiplier += std::min(0.75, static_cast<double>(score_drop) / 220.0);
-    }
-    multiplier -= std::min(0.35, 0.08 * static_cast<double>(stable_best_move_iterations));
-
-    const auto adjusted_optimum = std::chrono::milliseconds{
-        std::clamp<std::int64_t>(
-            static_cast<std::int64_t>(static_cast<double>(optimum_time_.count()) * multiplier),
-            std::max<std::int64_t>(1, optimum_time_.count() / 2),
-            maximum_time_.count()
-        )
-    };
-    return elapsed >= adjusted_optimum;
 }
 
 }  // namespace chess::engine

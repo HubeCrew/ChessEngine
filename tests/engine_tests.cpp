@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -471,6 +472,23 @@ TEST_CASE("lazy SMP search returns legal moves and aggregates worker nodes") {
     REQUIRE(result.depth == 3);
     REQUIRE(result.nodes > 0);
     REQUIRE(result.qnodes > 0);
+    REQUIRE(is_legal_best_move(board, result.best_move));
+}
+
+TEST_CASE("time-managed search accepts move overhead and slow mover configuration") {
+    chess::Board board = chess::Board::start_position();
+    chess::engine::Searcher searcher;
+    searcher.set_move_overhead(std::chrono::milliseconds{5});
+    searcher.set_slow_mover(80);
+
+    chess::engine::SearchLimits limits;
+    limits.depth = 8;
+    limits.move_time = std::chrono::milliseconds{30};
+    const chess::engine::SearchResult result = searcher.search(board, limits);
+
+    REQUIRE(searcher.move_overhead() == std::chrono::milliseconds{5});
+    REQUIRE(searcher.slow_mover() == 80);
+    REQUIRE(result.depth >= 1);
     REQUIRE(is_legal_best_move(board, result.best_move));
 }
 

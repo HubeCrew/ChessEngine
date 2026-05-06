@@ -103,7 +103,52 @@ struct SearchResult {
     SearchDiagnostics diagnostics;
 };
 
+struct RootMoveInfo {
+    Move move;
+    int score = 0;
+    int previous_score = 0;
+    int average_score = 0;
+    std::uint64_t nodes = 0;
+    std::uint64_t effort = 0;
+    bool searched = false;
+    std::vector<Move> principal_variation;
+};
+
+struct TimeManagementConfig {
+    std::chrono::milliseconds move_overhead{20};
+    int slow_mover = 100;
+};
+
 [[nodiscard]] bool move_gives_check(const Board& board, const Move& move);
+
+class TimeManager {
+public:
+    void clear();
+    void set_config(TimeManagementConfig config);
+    [[nodiscard]] TimeManagementConfig config() const;
+    void init(const Board& board, const SearchLimits& limits);
+    [[nodiscard]] bool active() const;
+    [[nodiscard]] std::chrono::milliseconds optimum() const;
+    [[nodiscard]] std::chrono::milliseconds maximum() const;
+    [[nodiscard]] std::chrono::steady_clock::time_point deadline(std::chrono::steady_clock::time_point start) const;
+    [[nodiscard]] bool should_stop_after_iteration(
+        std::chrono::milliseconds elapsed,
+        int completed_depth,
+        int best_move_stability,
+        int best_move_changes,
+        int previous_score,
+        int best_score,
+        int previous_average_score,
+        std::uint64_t best_effort,
+        std::uint64_t total_nodes
+    );
+
+private:
+    TimeManagementConfig config_{};
+    std::chrono::milliseconds optimum_{0};
+    std::chrono::milliseconds maximum_{0};
+    double previous_time_reduction_ = 1.0;
+};
 
 using HistoryTable = std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, 2>;
 using CaptureHistoryTable = std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, 2>;
@@ -126,6 +171,10 @@ public:
     [[nodiscard]] bool profiling() const;
     void set_thread_count(int threads);
     [[nodiscard]] int thread_count() const;
+    void set_move_overhead(std::chrono::milliseconds overhead);
+    [[nodiscard]] std::chrono::milliseconds move_overhead() const;
+    void set_slow_mover(int slow_mover);
+    [[nodiscard]] int slow_mover() const;
     void stop();
     void set_eval_type(EvalType type);
     [[nodiscard]] EvalType eval_type() const;
@@ -156,8 +205,6 @@ private:
     std::uint64_t tt_hits_ = 0;
     std::chrono::steady_clock::time_point deadline_{};
     std::chrono::steady_clock::time_point start_time_{};
-    std::chrono::milliseconds optimum_time_{0};
-    std::chrono::milliseconds maximum_time_{0};
     bool use_deadline_ = false;
     bool null_move_pruning_ = true;
     bool search_extensions_ = true;
@@ -167,6 +214,7 @@ private:
     SearchDiagnostics diagnostics_{};
     std::shared_ptr<TranspositionTable> tt_;
     std::shared_ptr<std::atomic_bool> stop_signal_;
+    TimeManager time_manager_;
     int thread_count_ = 1;
     int worker_index_ = 0;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
@@ -178,17 +226,18 @@ private:
     std::array<SearchStack, kMaxPly> search_stack_{};
     std::array<nnue::QuantizedAccumulatorPair, kMaxPly> nnue_accumulator_stack_{};
     std::vector<Move> previous_iteration_pv_;
+    std::vector<RootMoveInfo> root_moves_;
     MoveList root_search_moves_;
     bool root_search_moves_constrained_ = false;
 
     SearchResult search_single(Board& board, const SearchLimits& limits, bool prepare_shared_state);
-    [[nodiscard]] bool should_stop_after_iteration(
-        int depth,
-        const SearchResult& result,
-        const Move& previous_best_move,
-        int previous_score,
-        int stable_best_move_iterations
-    ) const;
+    int root_search(Board& board, int depth, int alpha, int beta);
+    void begin_root_iteration();
+    void finish_root_iteration();
+    void build_root_moves(const MoveList& legal_moves, const SearchLimits& limits);
+    void sync_root_move_list();
+    [[nodiscard]] RootMoveInfo* find_root_move(const Move& move);
+    [[nodiscard]] const RootMoveInfo* best_root_move() const;
     int negamax(
         Board& board,
         int depth,

@@ -119,6 +119,10 @@ void apply_setoption(chess::engine::Searcher& searcher, std::istringstream& inpu
         searcher.set_hash_size_mb(static_cast<std::size_t>(std::stoul(value)));
     } else if (name == "Threads" && !value.empty()) {
         searcher.set_thread_count(std::stoi(value));
+    } else if (name == "Move Overhead" && !value.empty()) {
+        searcher.set_move_overhead(std::chrono::milliseconds{std::max(0, std::stoi(value))});
+    } else if (name == "Slow Mover" && !value.empty()) {
+        searcher.set_slow_mover(std::stoi(value));
     } else if (name == "NullMovePruning" && !value.empty()) {
         searcher.set_null_move_pruning(parse_bool(value));
     } else if (name == "SearchExtensions" && !value.empty()) {
@@ -265,6 +269,8 @@ int main() {
                 std::cout << "id author HubeKnaepkens\n";
                 std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
                 std::cout << "option name Threads type spin default 1 min 1 max 512\n";
+                std::cout << "option name Move Overhead type spin default 20 min 0 max 5000\n";
+                std::cout << "option name Slow Mover type spin default 100 min 10 max 1000\n";
                 std::cout << "option name NullMovePruning type check default true\n";
                 std::cout << "option name SearchExtensions type check default true\n";
                 std::cout << "option name EvalType type combo default classical var classical var nnue var hybrid\n";
