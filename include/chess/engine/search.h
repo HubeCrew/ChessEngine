@@ -71,8 +71,17 @@ struct SearchDiagnostics {
     std::uint64_t illegal_pseudo_moves = 0;
     std::uint64_t null_move_attempts = 0;
     std::uint64_t null_move_cutoffs = 0;
+    std::uint64_t reverse_futility_prunes = 0;
+    std::uint64_t razoring_prunes = 0;
+    std::uint64_t probcut_attempts = 0;
+    std::uint64_t probcut_cutoffs = 0;
+    std::uint64_t futility_prunes = 0;
+    std::uint64_t late_move_prunes = 0;
     std::uint64_t lmr_reductions = 0;
     std::uint64_t lmr_researches = 0;
+    std::uint64_t singular_extension_attempts = 0;
+    std::uint64_t singular_extensions = 0;
+    std::uint64_t correction_history_updates = 0;
     std::uint64_t qsearch_in_check_nodes = 0;
     std::uint64_t qsearch_stand_pat_nodes = 0;
     std::uint64_t see_calls = 0;
@@ -93,6 +102,12 @@ struct SearchResult {
 };
 
 [[nodiscard]] bool move_gives_check(const Board& board, const Move& move);
+
+using HistoryTable = std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, 2>;
+using CaptureHistoryTable = std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, 2>;
+using CounterMoveTable = std::array<std::array<std::array<Move, kBoardSquareCount>, kBoardSquareCount>, 2>;
+using ContinuationHistoryTable =
+    std::array<std::array<std::array<std::array<int, kBoardSquareCount>, kBoardSquareCount>, kBoardSquareCount>, 2>;
 
 class Searcher {
 public:
@@ -120,6 +135,16 @@ public:
 
 private:
     static constexpr int kMaxPly = 128;
+    static constexpr int kCorrectionHistorySize = 16384;
+
+    struct SearchStack {
+        Move current_move;
+        int static_eval = 0;
+        int corrected_static_eval = 0;
+        int stat_score = 0;
+        bool has_static_eval = false;
+        bool improving = false;
+    };
 
     std::uint64_t nodes_ = 0;
     std::uint64_t qnodes_ = 0;
@@ -135,13 +160,27 @@ private:
     SearchDiagnostics diagnostics_{};
     TranspositionTable tt_;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
-    std::array<std::array<std::array<int, 64>, 64>, 2> history_{};
+    HistoryTable history_{};
+    CaptureHistoryTable capture_history_{};
+    CounterMoveTable counter_moves_{};
+    ContinuationHistoryTable continuation_history_{};
+    std::array<std::array<int, kCorrectionHistorySize>, 2> correction_history_{};
+    std::array<SearchStack, kMaxPly> search_stack_{};
     std::array<nnue::QuantizedAccumulatorPair, kMaxPly> nnue_accumulator_stack_{};
     std::vector<Move> previous_iteration_pv_;
     MoveList root_search_moves_;
     bool root_search_moves_constrained_ = false;
 
-    int negamax(Board& board, int depth, int ply, int alpha, int beta, bool allow_null_move, int extensions_used);
+    int negamax(
+        Board& board,
+        int depth,
+        int ply,
+        int alpha,
+        int beta,
+        bool allow_null_move,
+        int extensions_used,
+        Move excluded_move = Move{}
+    );
     int quiescence(Board& board, int ply, int alpha, int beta, int qply);
     int evaluate_with_diagnostics(const Board& board, int ply);
     int static_exchange_with_diagnostics(const Board& board, const Move& move);
@@ -149,13 +188,19 @@ private:
     void update_nnue_accumulator_after_move(const Board& board, const UndoState& undo, int parent_ply, int child_ply);
     void update_nnue_accumulator_after_null_move(int parent_ply, int child_ply);
     void age_history();
+    [[nodiscard]] int corrected_static_eval(const Board& board, int raw_eval) const;
+    void update_correction_history(const Board& board, Color side_to_move, int depth, int static_eval, int score);
     void record_cutoff(
         const Move& move,
         int depth,
         int ply,
         Color side_to_move,
+        Piece moved_piece,
+        Piece captured_piece,
         const Move* quiets_tried_before_cutoff,
-        std::size_t quiet_count
+        std::size_t quiet_count,
+        const Move* captures_tried_before_cutoff,
+        std::size_t capture_count
     );
     std::vector<Move> extract_principal_variation(Board& board, int depth) const;
     bool should_stop() const;

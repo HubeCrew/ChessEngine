@@ -603,6 +603,7 @@ def main() -> int:
     parser.add_argument("--output-dir", default="gauntlet-results")
     parser.add_argument("--csv", action="store_true", help="write results.csv")
     parser.add_argument("--no-pgn", action="store_true", help="skip PGN output")
+    parser.add_argument("--no-live-state", action="store_true", help="skip live-state.json updates for the browser viewer")
     parser.add_argument("--protocol-timeout", type=float, default=5.0)
     args = parser.parse_args()
 
@@ -636,6 +637,8 @@ def main() -> int:
 
     def update_live_state(current: dict[str, Any] | None) -> None:
         nonlocal current_live_state
+        if args.no_live_state:
+            return
         current_live_state = current
         write_live_state(output_dir, args.games, args.name_a, args.name_b, results, current_live_state)
 

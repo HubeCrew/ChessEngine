@@ -9,6 +9,8 @@
 
 namespace chess::engine {
 
+constexpr int kNoTranspositionStaticEval = 2'000'000;
+
 enum class Bound : std::uint8_t {
     Exact,
     Lower,
@@ -20,6 +22,7 @@ struct TranspositionEntry {
     Move best_move;
     int depth = -1;
     int score = 0;
+    int static_eval = kNoTranspositionStaticEval;
     Bound bound = Bound::Exact;
     std::uint8_t generation = 0;
     bool occupied = false;
@@ -34,7 +37,14 @@ public:
     void new_search();
 
     [[nodiscard]] const TranspositionEntry* probe(std::uint64_t key) const;
-    void store(std::uint64_t key, int depth, int score, Bound bound, Move best_move);
+    void store(
+        std::uint64_t key,
+        int depth,
+        int score,
+        Bound bound,
+        Move best_move,
+        int static_eval = kNoTranspositionStaticEval
+    );
 
     [[nodiscard]] std::size_t size_mb() const;
     [[nodiscard]] std::size_t entry_count() const;
@@ -48,4 +58,3 @@ private:
 };
 
 }  // namespace chess::engine
-

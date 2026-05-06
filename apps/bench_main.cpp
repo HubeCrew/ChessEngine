@@ -374,8 +374,17 @@ chess::engine::SearchDiagnostics add_diagnostics(
     lhs.illegal_pseudo_moves += rhs.illegal_pseudo_moves;
     lhs.null_move_attempts += rhs.null_move_attempts;
     lhs.null_move_cutoffs += rhs.null_move_cutoffs;
+    lhs.reverse_futility_prunes += rhs.reverse_futility_prunes;
+    lhs.razoring_prunes += rhs.razoring_prunes;
+    lhs.probcut_attempts += rhs.probcut_attempts;
+    lhs.probcut_cutoffs += rhs.probcut_cutoffs;
+    lhs.futility_prunes += rhs.futility_prunes;
+    lhs.late_move_prunes += rhs.late_move_prunes;
     lhs.lmr_reductions += rhs.lmr_reductions;
     lhs.lmr_researches += rhs.lmr_researches;
+    lhs.singular_extension_attempts += rhs.singular_extension_attempts;
+    lhs.singular_extensions += rhs.singular_extensions;
+    lhs.correction_history_updates += rhs.correction_history_updates;
     lhs.qsearch_in_check_nodes += rhs.qsearch_in_check_nodes;
     lhs.qsearch_stand_pat_nodes += rhs.qsearch_stand_pat_nodes;
     lhs.see_calls += rhs.see_calls;
@@ -402,8 +411,17 @@ void print_diagnostics_summary(const chess::engine::SearchDiagnostics& diagnosti
         << "  illegal_pseudo_moves " << diagnostics.illegal_pseudo_moves << '\n'
         << "  null_move_attempts " << diagnostics.null_move_attempts << '\n'
         << "  null_move_cutoffs " << diagnostics.null_move_cutoffs << '\n'
+        << "  reverse_futility_prunes " << diagnostics.reverse_futility_prunes << '\n'
+        << "  razoring_prunes " << diagnostics.razoring_prunes << '\n'
+        << "  probcut_attempts " << diagnostics.probcut_attempts << '\n'
+        << "  probcut_cutoffs " << diagnostics.probcut_cutoffs << '\n'
+        << "  futility_prunes " << diagnostics.futility_prunes << '\n'
+        << "  late_move_prunes " << diagnostics.late_move_prunes << '\n'
         << "  lmr_reductions " << diagnostics.lmr_reductions << '\n'
         << "  lmr_researches " << diagnostics.lmr_researches << '\n'
+        << "  singular_extension_attempts " << diagnostics.singular_extension_attempts << '\n'
+        << "  singular_extensions " << diagnostics.singular_extensions << '\n'
+        << "  correction_history_updates " << diagnostics.correction_history_updates << '\n'
         << "  qsearch_in_check_nodes " << diagnostics.qsearch_in_check_nodes << '\n'
         << "  qsearch_stand_pat_nodes " << diagnostics.qsearch_stand_pat_nodes << '\n'
         << "  see_calls " << diagnostics.see_calls << '\n'
@@ -451,6 +469,15 @@ void print_profile_summary(const chess::engine::SearchDiagnostics& diagnostics, 
         << " threat_ms " << ns_to_ms(diagnostics.nnue_update_threat_ns) << '\n'
         << "  dense_convert_ms " << ns_to_ms(diagnostics.nnue_dense_convert_ns)
         << " dense_forward_ms " << ns_to_ms(diagnostics.nnue_dense_forward_ns) << '\n'
+        << "  search_selectivity"
+        << " reverse_futility=" << diagnostics.reverse_futility_prunes
+        << " razoring=" << diagnostics.razoring_prunes
+        << " probcut=" << diagnostics.probcut_cutoffs << '/' << diagnostics.probcut_attempts
+        << " futility=" << diagnostics.futility_prunes
+        << " lmp=" << diagnostics.late_move_prunes
+        << " lmr=" << diagnostics.lmr_reductions
+        << " singular=" << diagnostics.singular_extensions << '/' << diagnostics.singular_extension_attempts
+        << " correction_updates=" << diagnostics.correction_history_updates << '\n'
         << "  dirty_squares_avg " << average_ns(diagnostics.nnue_dirty_squares, diagnostics.nnue_accumulator_update_attempts)
         << " attackers_before_avg " << average_ns(diagnostics.nnue_dirty_attackers_before, diagnostics.nnue_accumulator_update_attempts)
         << " attackers_after_avg " << average_ns(diagnostics.nnue_dirty_attackers_after, diagnostics.nnue_accumulator_update_attempts) << '\n'

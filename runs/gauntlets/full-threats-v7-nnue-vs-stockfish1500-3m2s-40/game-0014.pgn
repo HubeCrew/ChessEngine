@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.06"]
+[Round "14"]
+[White "stockfish-1500"]
+[Black "full-threats-v7-nnue"]
+[Result "1/2-1/2"]
+[Opening "kings_indian"]
+[SetUp "1"]
+[FEN "rnbqk2r/ppppppbp/5np1/8/2PPP3/2N2N2/PP3PPP/R1BQKB1R b KQkq - 4 4"]
+[Termination "draw:threefold_repetition"]
+
+1. d7d6 h2h3 2. e8g8 c1g5 3. c7c6 f1e2 4. h7h6 g5f4 5. f8e8 e1g1 6. e7e5 f4h2 7. e5d4 f3d4 8. f6e4 d1c2 9. e4f2 c2d2 10. f2h3 g1h1 11. d8h4 d4f3 12. h3f2 f1f2 13. h4f2 c4c5 14. g7c3 d2c3 15. e8e2 f3h4 16. f2h4 a1d1 17. c8e6 c3d4 18. h4d4 d1d4 19. e2e1 h2g1 20. b8d7 h1h2 21. d7c5 g1f2 22. e1e2 h2g1 23. c5e4 f2g3 24. e4g3 d4d6 25. e2b2 g1h2 26. g3f1 h2h1 27. f1g3 h1h2 28. g3f1 h2h1 29. f1g3 h1h2 1/2-1/2

@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.06"]
+[Round "22"]
+[White "stockfish-1500"]
+[Black "full-threats-v7-nnue"]
+[Result "0-1"]
+[Opening "startpos"]
+[SetUp "1"]
+[FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
+[Termination "black_win:checkmate"]
+
+1. e2e3 e7e5 2. d2d4 e5d4 3. g1f3 f8b4 4. b1d2 d4e3 5. c2c3 e3d2 6. d1d2 b4e7 7. d2c2 g8f6 8. h2h4 b8c6 9. f3g5 h7h6 10. f1d3 h6g5 11. f2f4 g5f4 12. c2a4 f4f3 13. h1h2 e7d6 14. c1f4 d8e7 15. e1d2 f6d5 16. f4g5 d6h2 17. g5e7 c6e7 18. d3e4 f3g2 19. e4d5 g2g1q 20. d5f7 e8f7 21. a4b3 f7e8 22. a1g1 h2g1 23. b3c2 h8h4 24. c2d1 g1h2 25. d2c2 d7d5 26. d1e2 h4h6 27. c2b1 c7c6 28. c3c4 d5c4 29. e2e1 c4c3 30. e1c3 h2f4 31. b2b4 c8f5 32. b1b2 h6h2 33. b2a3 f5e6 34. c3a1 f4c1 35. a3a4 a7a5 36. a1b2 b7b5 37. a4a3 c1b2 0-1

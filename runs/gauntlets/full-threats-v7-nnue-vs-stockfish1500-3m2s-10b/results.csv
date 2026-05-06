@@ -1,0 +1,11 @@
+game,opening,white,black,result,reason,plies,clean
+1,startpos,full-threats-v7-nnue,stockfish-1500,1-0,white_win:checkmate,31,true
+2,startpos,stockfish-1500,full-threats-v7-nnue,0-1,black_win:checkmate,110,true
+3,italian,full-threats-v7-nnue,stockfish-1500,1-0,white_win:checkmate,44,true
+4,italian,stockfish-1500,full-threats-v7-nnue,0-1,black_win:checkmate,89,true
+5,queens_gambit,full-threats-v7-nnue,stockfish-1500,0-1,black_win:checkmate,69,true
+6,queens_gambit,stockfish-1500,full-threats-v7-nnue,0-1,black_win:checkmate,139,true
+7,sicilian,full-threats-v7-nnue,stockfish-1500,1-0,white_win:checkmate,61,true
+8,sicilian,stockfish-1500,full-threats-v7-nnue,1/2-1/2,draw:threefold_repetition,131,true
+9,french,full-threats-v7-nnue,stockfish-1500,0-1,black_win:checkmate,140,true
+10,french,stockfish-1500,full-threats-v7-nnue,1-0,white_win:checkmate,43,true

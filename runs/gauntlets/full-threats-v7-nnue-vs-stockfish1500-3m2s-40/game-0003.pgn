@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.06"]
+[Round "3"]
+[White "full-threats-v7-nnue"]
+[Black "stockfish-1500"]
+[Result "1/2-1/2"]
+[Opening "italian"]
+[SetUp "1"]
+[FEN "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"]
+[Termination "draw:threefold_repetition"]
+
+1. f8c5 e1g1 2. h7h6 c2c3 3. c5b6 d2d4 4. d7d6 d4e5 5. c6e5 f3e5 6. d6e5 c4f7 7. e8e7 d1d8 8. e7d8 a2a4 9. a7a5 b1a3 10. g8f6 a3c4 11. f6d7 f7d5 12. c7c6 d5e6 13. b6c7 f1d1 14. d8e7 e6d7 15. c8d7 b2b3 16. e7e6 c1a3 17. h8d8 a3d6 18. c7d6 c4d6 19. b7b6 d6b7 20. d8f8 b7d6 21. b6b5 d6f5 22. a8a7 a4b5 23. c6b5 b3b4 24. g7g6 d1d6 25. e6f7 a1a5 26. a7a5 d6d7 27. f7e6 d7d6 28. e6f7 b4a5 29. g6f5 e4f5 30. f8c8 a5a6 31. b5b4 a6a7 32. b4c3 d6d7 33. f7g8 d7c7 34. c8c7 a7a8q 35. g8h7 a8e4 36. c3c2 f5f6 37. h7h8 e4a8 38. h8h7 a8e4 39. h7h8 e4a8 40. h8h7 a8e4 1/2-1/2

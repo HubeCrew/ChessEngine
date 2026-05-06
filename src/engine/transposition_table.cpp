@@ -46,7 +46,14 @@ const TranspositionEntry* TranspositionTable::probe(std::uint64_t key) const {
     return &entry;
 }
 
-void TranspositionTable::store(std::uint64_t key, int depth, int score, Bound bound, Move best_move) {
+void TranspositionTable::store(
+    std::uint64_t key,
+    int depth,
+    int score,
+    Bound bound,
+    Move best_move,
+    int static_eval
+) {
     if (entries_.empty()) {
         return;
     }
@@ -66,6 +73,7 @@ void TranspositionTable::store(std::uint64_t key, int depth, int score, Bound bo
         best_move,
         depth,
         score,
+        static_eval,
         bound,
         generation_,
         true,

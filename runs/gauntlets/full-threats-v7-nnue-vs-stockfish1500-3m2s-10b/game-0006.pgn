@@ -1,0 +1,13 @@
+[Event "ChessEngine Gauntlet"]
+[Site "local"]
+[Date "2026.05.06"]
+[Round "6"]
+[White "stockfish-1500"]
+[Black "full-threats-v7-nnue"]
+[Result "0-1"]
+[Opening "queens_gambit"]
+[SetUp "1"]
+[FEN "rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR b KQkq c3 0 2"]
+[Termination "black_win:checkmate"]
+
+1. d5c4 d1a4 2. c7c6 e2e3 3. b7b5 a4c2 4. b8a6 c1d2 5. e7e5 d4e5 6. a6b4 c2d1 7. c8f5 d2b4 8. f8b4 b1c3 9. d8a5 g1e2 10. a8d8 d1c1 11. g8e7 e2g3 12. a5b6 g3f5 13. e7f5 a2a4 14. e8g8 f1e2 15. f8e8 e2g4 16. e8e5 e1g1 17. f5e3 f2e3 18. e5e3 g1h1 19. b4c3 b2c3 20. d8e8 c1d2 21. b5a4 d2d7 22. e8e7 d7c8 23. e7e8 c8d7 24. e8e7 d7d2 25. e7e4 a1d1 26. h7h6 d2d7 27. e4e7 d7c8 28. e7e8 c8d7 29. e8e7 d7c8 30. e7e8 c8f5 31. e8e7 h2h4 32. b6c7 d1d4 33. a4a3 f5c2 34. c7g3 c2f5 35. g3c7 h4h5 36. a3a2 h1g1 37. e3e1 d4d1 38. c7b6 g1h1 39. e1d1 f1d1 40. e7e8 d1f1 41. b6c7 f5f2 42. c7e7 h1g1 43. e7e3 f2e3 44. e8e3 f1a1 45. e3g3 g4e2 46. g3c3 a1a2 47. c3c1 g1f2 48. c4c3 e2d3 49. c1d1 f2e3 50. g7g6 d3e2 51. d1d8 h5g6 52. f7g6 e2f3 53. d8d7 f3c6 54. d7d6 c6e4 55. a7a5 a2c2 56. a5a4 c2a2 57. d6e6 e3f4 58. e6a6 a2a3 59. g8g7 a3c3 60. a4a3 c3e3 61. a3a2 e3c3 62. a2a1q c3c6 63. g6g5 f4e3 64. a1e1 e3d3 65. a6a3 d3d4 66. a3a4 c6c4 67. a4c4 d4d3 68. e1e4 d3d2 69. c4c2 d2d1 70. e4e2 0-1
