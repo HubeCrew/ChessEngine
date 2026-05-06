@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated_at": "2026-05-06T11:09:04",
+  "updated_at": "2026-05-06T11:09:34",
   "total_games": 40,
   "engine_a": "full-threats-v7-nnue",
   "engine_b": "stockfish-1500",
@@ -42,16 +42,26 @@
       "b6b4",
       "e3a7",
       "g8f6",
-      "d3h3"
+      "d3h3",
+      "h8e8",
+      "d1d4",
+      "b4a5",
+      "d4a4",
+      "a5c7",
+      "h3e6",
+      "f6d7",
+      "a7e3",
+      "c7b8",
+      "h1d1"
     ],
-    "last_move": "d3h3",
-    "plies": 22,
+    "last_move": "h1d1",
+    "plies": 32,
     "side": "black",
     "outcome": "ongoing",
     "reason": "none",
     "clocks": {
-      "white": 201058,
-      "black": 57580
+      "white": 210579,
+      "black": 37611
     }
   },
   "results": [

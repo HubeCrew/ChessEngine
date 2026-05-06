@@ -1,8 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 #include "chess/core/move.h"
@@ -30,6 +30,8 @@ struct TranspositionEntry {
 
 class TranspositionTable {
 public:
+    static constexpr std::size_t kClusterSize = 4;
+
     explicit TranspositionTable(std::size_t megabytes = 64);
 
     void resize_mb(std::size_t megabytes);
@@ -50,11 +52,16 @@ public:
     [[nodiscard]] std::size_t entry_count() const;
 
 private:
-    std::vector<TranspositionEntry> entries_;
+    struct Cluster {
+        std::array<TranspositionEntry, kClusterSize> entries{};
+    };
+
+    std::vector<Cluster> clusters_;
     std::size_t size_mb_ = 0;
     std::uint8_t generation_ = 0;
 
-    [[nodiscard]] std::size_t index_for(std::uint64_t key) const;
+    [[nodiscard]] std::size_t cluster_index_for(std::uint64_t key) const;
+    [[nodiscard]] int generation_distance(std::uint8_t generation) const;
 };
 
 }  // namespace chess::engine

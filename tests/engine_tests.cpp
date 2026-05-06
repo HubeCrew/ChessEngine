@@ -408,6 +408,27 @@ TEST_CASE("transposition table stores and probes bounds") {
     REQUIRE(entry->score == 42);
 }
 
+TEST_CASE("transposition table keeps multiple colliding entries per cluster") {
+    chess::engine::TranspositionTable table{1};
+    const auto cluster_count = table.entry_count() / chess::engine::TranspositionTable::kClusterSize;
+    REQUIRE(cluster_count > 0);
+
+    const chess::Move move{chess::make_square(1, 0), chess::make_square(2, 2), chess::PieceType::None, chess::Quiet};
+    const std::uint64_t base_key = 0x9e3779b97f4a7c15ULL;
+
+    for (std::size_t index = 0; index < chess::engine::TranspositionTable::kClusterSize; ++index) {
+        const std::uint64_t key = base_key + index * cluster_count;
+        table.store(key, static_cast<int>(index + 1), static_cast<int>(100 + index), chess::engine::Bound::Lower, move);
+    }
+
+    for (std::size_t index = 0; index < chess::engine::TranspositionTable::kClusterSize; ++index) {
+        const std::uint64_t key = base_key + index * cluster_count;
+        const chess::engine::TranspositionEntry* entry = table.probe(key);
+        REQUIRE(entry != nullptr);
+        REQUIRE(entry->score == static_cast<int>(100 + index));
+    }
+}
+
 TEST_CASE("search returns legal moves and principal variation") {
     chess::Board board = chess::Board::start_position();
     chess::engine::Searcher searcher;
