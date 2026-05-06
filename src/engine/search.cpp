@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <atomic>
 #include <future>
+#include <limits>
 #include <memory>
 #include <new>
 #include <thread>
@@ -18,6 +19,7 @@
 #include "chess/core/movegen.h"
 #include "chess/engine/evaluation.h"
 #include "chess/engine/static_exchange.h"
+#include "chess/engine/tablebase.h"
 
 namespace chess::engine {
 
@@ -143,6 +145,12 @@ void add_search_diagnostics(SearchDiagnostics& lhs, const SearchDiagnostics& rhs
     ADD_DIAGNOSTIC(singular_extension_attempts);
     ADD_DIAGNOSTIC(singular_extensions);
     ADD_DIAGNOSTIC(correction_history_updates);
+    ADD_DIAGNOSTIC(tablebase_wdl_probes);
+    ADD_DIAGNOSTIC(tablebase_wdl_hits);
+    ADD_DIAGNOSTIC(tablebase_root_probes);
+    ADD_DIAGNOSTIC(tablebase_root_hits);
+    ADD_DIAGNOSTIC(book_probes);
+    ADD_DIAGNOSTIC(book_hits);
     ADD_DIAGNOSTIC(qsearch_in_check_nodes);
     ADD_DIAGNOSTIC(qsearch_stand_pat_nodes);
     ADD_DIAGNOSTIC(see_calls);
@@ -1176,12 +1184,40 @@ Searcher::Searcher() {
     nnue_ = std::make_shared<nnue::Network>();
     tt_ = std::make_shared<TranspositionTable>();
     stop_signal_ = std::make_shared<std::atomic_bool>(false);
+    opening_book_ = std::make_shared<book::OpeningBook>();
     continuation_history_ = std::make_unique<ContinuationHistoryStack>();
     clear();
 }
 
 SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     stop_signal_->store(false, std::memory_order_relaxed);
+
+    const int game_ply = std::max(0, (board.fullmove_number() - 1) * 2 + (board.side_to_move() == Color::Black ? 1 : 0));
+    if (own_book_ && opening_book_->loaded() && book_depth_ > 0 && game_ply < book_depth_) {
+        SearchDiagnostics book_diagnostics;
+        ++book_diagnostics.book_probes;
+        std::optional<book::ProbeMove> book_move = opening_book_->probe(
+            board,
+            limits.search_moves,
+            best_book_move_,
+            static_cast<std::uint16_t>(book_minimum_weight_)
+        );
+        if (book_move) {
+            ++book_diagnostics.book_hits;
+            SearchResult result;
+            result.best_move = book_move->move;
+            result.depth = 0;
+            result.nodes = 0;
+            result.qnodes = 0;
+            result.score_centipawns = 0;
+            result.elapsed = std::chrono::milliseconds{0};
+            result.principal_variation = {book_move->move};
+            result.lines.push_back(SearchResult::Line{1, book_move->move, 0, {book_move->move}});
+            result.diagnostics = book_diagnostics;
+            return result;
+        }
+    }
+
     tt_->new_search();
     age_history();
 
@@ -1210,6 +1246,12 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
         helper->time_manager_.set_config(time_manager_.config());
         helper->thread_count_ = 1;
         helper->multi_pv_ = multi_pv_;
+        helper->syzygy_probe_depth_ = syzygy_probe_depth_;
+        helper->own_book_ = false;
+        helper->best_book_move_ = best_book_move_;
+        helper->book_depth_ = book_depth_;
+        helper->book_minimum_weight_ = book_minimum_weight_;
+        helper->opening_book_ = opening_book_;
         helper->worker_index_ = worker;
         helper->history_ = history_;
         helper->low_ply_history_ = low_ply_history_;
@@ -1297,6 +1339,36 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
     }
 
     const int max_depth = std::min(std::max(1, limits.depth), kMaxPly - 1);
+    if (std::optional<tablebase::RootProbeResult> tb_root = tablebase::probe_root(board)) {
+        ++diagnostics_.tablebase_root_probes;
+        ++diagnostics_.tablebase_root_hits;
+        result.best_move = tb_root->best_move;
+        result.score_centipawns = tb_root->score;
+        result.depth = 1;
+        result.nodes = nodes_;
+        result.qnodes = qnodes_;
+        result.tt_hits = tt_hits_;
+        result.principal_variation = {result.best_move};
+        result.lines.clear();
+        const int pv_count = std::min<int>(std::max(1, multi_pv_), static_cast<int>(tb_root->moves.size()));
+        for (int index = 0; index < pv_count; ++index) {
+            const tablebase::RootMove& tb_move = tb_root->moves[static_cast<std::size_t>(index)];
+            result.lines.push_back(SearchResult::Line{
+                index + 1,
+                tb_move.move,
+                tb_move.score,
+                {tb_move.move},
+            });
+        }
+        result.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start_time_
+        );
+        result.diagnostics = diagnostics_;
+        return result;
+    } else if (tablebase::initialized() && tablebase::probeable(board, true)) {
+        ++diagnostics_.tablebase_root_probes;
+    }
+
     int stable_best_move_iterations = 0;
     int best_move_changes = 0;
     for (int depth = 1; depth <= max_depth; ++depth) {
@@ -1464,6 +1536,78 @@ void Searcher::set_multi_pv(int multi_pv) {
 
 int Searcher::multi_pv() const {
     return multi_pv_;
+}
+
+bool Searcher::set_syzygy_path(const std::filesystem::path& path, std::string* error) {
+    return tablebase::initialize(path, error);
+}
+
+std::filesystem::path Searcher::syzygy_path() const {
+    return tablebase::path();
+}
+
+unsigned Searcher::syzygy_largest() const {
+    return tablebase::largest();
+}
+
+void Searcher::set_syzygy_probe_depth(int depth) {
+    syzygy_probe_depth_ = std::clamp(depth, 0, kMaxPly - 1);
+}
+
+int Searcher::syzygy_probe_depth() const {
+    return syzygy_probe_depth_;
+}
+
+void Searcher::set_own_book(bool enabled) {
+    own_book_ = enabled;
+}
+
+bool Searcher::own_book() const {
+    return own_book_;
+}
+
+bool Searcher::load_book(const std::filesystem::path& path, std::string* error) {
+    return opening_book_->load(path, error);
+}
+
+void Searcher::clear_book() {
+    opening_book_->clear();
+}
+
+bool Searcher::book_loaded() const {
+    return opening_book_->loaded();
+}
+
+std::filesystem::path Searcher::book_path() const {
+    return opening_book_->path();
+}
+
+std::size_t Searcher::book_entry_count() const {
+    return opening_book_->entry_count();
+}
+
+void Searcher::set_best_book_move(bool enabled) {
+    best_book_move_ = enabled;
+}
+
+bool Searcher::best_book_move() const {
+    return best_book_move_;
+}
+
+void Searcher::set_book_depth(int depth) {
+    book_depth_ = std::clamp(depth, 0, 255);
+}
+
+int Searcher::book_depth() const {
+    return book_depth_;
+}
+
+void Searcher::set_book_minimum_weight(int weight) {
+    book_minimum_weight_ = std::clamp(weight, 0, static_cast<int>(std::numeric_limits<std::uint16_t>::max()));
+}
+
+int Searcher::book_minimum_weight() const {
+    return book_minimum_weight_;
 }
 
 void Searcher::stop() {
@@ -1801,6 +1945,18 @@ int Searcher::negamax(
     }
 
     const bool in_check = board.in_check(board.side_to_move());
+    if (!is_pv_node
+        && !is_excluded_node
+        && !in_check
+        && depth >= syzygy_probe_depth_
+        && tablebase::initialized()
+        && tablebase::probeable(board, false)) {
+        ++diagnostics_.tablebase_wdl_probes;
+        if (std::optional<tablebase::ProbeResult> tb = tablebase::probe_wdl(board)) {
+            ++diagnostics_.tablebase_wdl_hits;
+            return tb->score;
+        }
+    }
     Move tt_move;
     int tt_score = 0;
     int tt_static_eval = kNoTranspositionStaticEval;

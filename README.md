@@ -298,6 +298,14 @@ Run a local UCI gauntlet:
   --referee ./build-release/chess_referee \
   --games 20 \
   --movetime 100 \
+  --option-a SyzygyPath=runs/tablebases/syzygy/3-4-5 \
+  --option-a OwnBook=true \
+  --option-a BookFile=runs/opening-books/cerebellum/Cerebellum_Light_3Merge_200916/Cerebellum3Merge.bin \
+  --option-a BestBookMove=true \
+  --option-b SyzygyPath=runs/tablebases/syzygy/3-4-5 \
+  --option-b OwnBook=true \
+  --option-b BookFile=runs/opening-books/cerebellum/Cerebellum_Light_3Merge_200916/Cerebellum3Merge.bin \
+  --option-b BestBookMove=true \
   --csv
 ```
 
@@ -312,6 +320,10 @@ Run against Stockfish at its lowest built-in limited Elo:
   --referee ./build-release/chess_referee \
   --games 200 \
   --movetime 100 \
+  --option-a SyzygyPath=runs/tablebases/syzygy/3-4-5 \
+  --option-a OwnBook=true \
+  --option-a BookFile=runs/opening-books/cerebellum/Cerebellum_Light_3Merge_200916/Cerebellum3Merge.bin \
+  --option-a BestBookMove=true \
   --option-b UCI_LimitStrength=true \
   --option-b UCI_Elo=1320 \
   --csv
@@ -330,6 +342,10 @@ Run a clock-based gauntlet instead of fixed per-move time:
   --time 60000 \
   --increment 500 \
   --moves-to-go 30 \
+  --option-a SyzygyPath=runs/tablebases/syzygy/3-4-5 \
+  --option-a OwnBook=true \
+  --option-a BookFile=runs/opening-books/cerebellum/Cerebellum_Light_3Merge_200916/Cerebellum3Merge.bin \
+  --option-a BestBookMove=true \
   --option-b UCI_LimitStrength=true \
   --option-b UCI_Elo=1320 \
   --csv

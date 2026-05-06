@@ -13,9 +13,11 @@
 #include "chess/core/movegen.h"
 #include "chess/engine/evaluation.h"
 #include "chess/engine/nnue.h"
+#include "chess/engine/opening_book.h"
 #include "chess/engine/position_suite.h"
 #include "chess/engine/search.h"
 #include "chess/engine/static_exchange.h"
+#include "chess/engine/tablebase.h"
 #include "chess/engine/transposition_table.h"
 
 namespace {
@@ -42,6 +44,33 @@ chess::Move legal_move_by_uci(chess::Board& board, const std::string& uci) {
     });
     REQUIRE(found != moves.end());
     return *found;
+}
+
+void write_be16(std::ostream& output, std::uint16_t value) {
+    output.put(static_cast<char>((value >> 8) & 0xff));
+    output.put(static_cast<char>(value & 0xff));
+}
+
+void write_be32(std::ostream& output, std::uint32_t value) {
+    output.put(static_cast<char>((value >> 24) & 0xff));
+    output.put(static_cast<char>((value >> 16) & 0xff));
+    output.put(static_cast<char>((value >> 8) & 0xff));
+    output.put(static_cast<char>(value & 0xff));
+}
+
+void write_be64(std::ostream& output, std::uint64_t value) {
+    write_be32(output, static_cast<std::uint32_t>(value >> 32));
+    write_be32(output, static_cast<std::uint32_t>(value & 0xffffffffULL));
+}
+
+std::uint16_t polyglot_raw_move(chess::Square from, chess::Square to, int promotion = 0) {
+    return static_cast<std::uint16_t>(
+        chess::file_of(to)
+        | (chess::rank_of(to) << 3)
+        | (chess::file_of(from) << 6)
+        | (chess::rank_of(from) << 9)
+        | (promotion << 12)
+    );
 }
 
 bool trusted_move_gives_check(chess::Board board, const chess::Move& move) {
@@ -490,6 +519,21 @@ TEST_CASE("time-managed search accepts move overhead and slow mover configuratio
     REQUIRE(searcher.slow_mover() == 80);
     REQUIRE(result.depth >= 1);
     REQUIRE(is_legal_best_move(board, result.best_move));
+}
+
+TEST_CASE("Syzygy tablebase configuration is optional and safe without tables") {
+    chess::engine::Searcher searcher;
+    searcher.set_syzygy_probe_depth(3);
+    REQUIRE(searcher.syzygy_probe_depth() == 3);
+
+    std::string error;
+    const bool loaded = searcher.set_syzygy_path(std::filesystem::path{"/definitely/missing/syzygy"}, &error);
+    REQUIRE_FALSE(loaded);
+    REQUIRE_FALSE(error.empty());
+    REQUIRE(searcher.syzygy_largest() == 0);
+
+    chess::Board board = chess::board_from_fen("8/8/8/8/8/8/4K3/4k3 w - - 0 1");
+    REQUIRE_FALSE(chess::engine::tablebase::probe_wdl(board).has_value());
 }
 
 TEST_CASE("search keeps mate-in-one tactical behavior") {
@@ -1266,6 +1310,36 @@ TEST_CASE("EPD suite loader parses metadata, depth, and best moves") {
 
     REQUIRE(positions[2].expected_best_moves.empty());
     REQUIRE(positions[2].avoided_moves == std::vector<std::string>{"e1d2"});
+}
+
+TEST_CASE("Polyglot opening book hashes and serves legal best moves") {
+    chess::Board board = chess::Board::start_position();
+    REQUIRE(chess::engine::book::polyglot_hash(board) == 0x463b96181691fc9cULL);
+
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "chess_engine_polyglot_book_test.bin";
+    {
+        std::ofstream output(path, std::ios::binary);
+        const std::uint16_t e2e4 = polyglot_raw_move(chess::make_square(4, 1), chess::make_square(4, 3));
+        write_be64(output, chess::engine::book::polyglot_hash(board));
+        write_be16(output, e2e4);
+        write_be16(output, 100);
+        write_be32(output, 0);
+    }
+
+    chess::engine::Searcher searcher;
+    std::string error;
+    REQUIRE(searcher.load_book(path, &error));
+    REQUIRE(searcher.book_loaded());
+    REQUIRE(searcher.book_entry_count() == 1);
+
+    const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{4});
+    std::filesystem::remove(path);
+
+    REQUIRE(result.depth == 0);
+    REQUIRE(result.nodes == 0);
+    REQUIRE(chess::move_to_uci(result.best_move) == "e2e4");
+    REQUIRE(result.diagnostics.book_probes == 1);
+    REQUIRE(result.diagnostics.book_hits == 1);
 }
 
 TEST_CASE("tactical suite finds expected best moves") {

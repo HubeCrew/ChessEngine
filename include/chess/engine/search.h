@@ -12,6 +12,7 @@
 
 #include "chess/core/board.h"
 #include "chess/engine/evaluation.h"
+#include "chess/engine/opening_book.h"
 #include "chess/engine/transposition_table.h"
 
 namespace chess::engine {
@@ -84,6 +85,12 @@ struct SearchDiagnostics {
     std::uint64_t singular_extension_attempts = 0;
     std::uint64_t singular_extensions = 0;
     std::uint64_t correction_history_updates = 0;
+    std::uint64_t tablebase_wdl_probes = 0;
+    std::uint64_t tablebase_wdl_hits = 0;
+    std::uint64_t tablebase_root_probes = 0;
+    std::uint64_t tablebase_root_hits = 0;
+    std::uint64_t book_probes = 0;
+    std::uint64_t book_hits = 0;
     std::uint64_t qsearch_in_check_nodes = 0;
     std::uint64_t qsearch_stand_pat_nodes = 0;
     std::uint64_t see_calls = 0;
@@ -183,6 +190,24 @@ public:
     [[nodiscard]] int thread_count() const;
     void set_multi_pv(int multi_pv);
     [[nodiscard]] int multi_pv() const;
+    [[nodiscard]] bool set_syzygy_path(const std::filesystem::path& path, std::string* error = nullptr);
+    [[nodiscard]] std::filesystem::path syzygy_path() const;
+    [[nodiscard]] unsigned syzygy_largest() const;
+    void set_syzygy_probe_depth(int depth);
+    [[nodiscard]] int syzygy_probe_depth() const;
+    void set_own_book(bool enabled);
+    [[nodiscard]] bool own_book() const;
+    [[nodiscard]] bool load_book(const std::filesystem::path& path, std::string* error = nullptr);
+    void clear_book();
+    [[nodiscard]] bool book_loaded() const;
+    [[nodiscard]] std::filesystem::path book_path() const;
+    [[nodiscard]] std::size_t book_entry_count() const;
+    void set_best_book_move(bool enabled);
+    [[nodiscard]] bool best_book_move() const;
+    void set_book_depth(int depth);
+    [[nodiscard]] int book_depth() const;
+    void set_book_minimum_weight(int weight);
+    [[nodiscard]] int book_minimum_weight() const;
     void set_move_overhead(std::chrono::milliseconds overhead);
     [[nodiscard]] std::chrono::milliseconds move_overhead() const;
     void set_slow_mover(int slow_mover);
@@ -231,6 +256,12 @@ private:
     TimeManager time_manager_;
     int thread_count_ = 1;
     int multi_pv_ = 1;
+    int syzygy_probe_depth_ = 1;
+    bool own_book_ = true;
+    bool best_book_move_ = true;
+    int book_depth_ = 255;
+    int book_minimum_weight_ = 1;
+    std::shared_ptr<book::OpeningBook> opening_book_;
     int worker_index_ = 0;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
     HistoryTable history_{};
