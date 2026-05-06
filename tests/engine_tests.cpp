@@ -429,6 +429,22 @@ TEST_CASE("transposition table keeps multiple colliding entries per cluster") {
     }
 }
 
+TEST_CASE("transposition table preserves a useful move across no-move bound refreshes") {
+    chess::engine::TranspositionTable table{1};
+    const chess::Move move{chess::make_square(6, 0), chess::make_square(5, 2), chess::PieceType::None, chess::Quiet};
+    const std::uint64_t key = 0x0f0e0d0c0b0a0908ULL;
+
+    table.store(key, 8, 70, chess::engine::Bound::Lower, move, 12);
+    table.store(key, 9, 80, chess::engine::Bound::Lower, chess::Move{}, 20);
+
+    const chess::engine::TranspositionEntry* entry = table.probe(key);
+    REQUIRE(entry != nullptr);
+    REQUIRE(entry->depth == 9);
+    REQUIRE(entry->score == 80);
+    REQUIRE(entry->best_move == move);
+    REQUIRE(entry->static_eval == 20);
+}
+
 TEST_CASE("search returns legal moves and principal variation") {
     chess::Board board = chess::Board::start_position();
     chess::engine::Searcher searcher;

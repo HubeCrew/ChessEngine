@@ -8,19 +8,15 @@ namespace chess::engine {
 namespace {
 
 constexpr std::size_t kBytesPerMegabyte = 1024 * 1024;
-constexpr std::uint64_t kHashMultiplier = 11400714819323198485ULL;
 
-std::size_t floor_power_of_two(std::size_t value) {
-    std::size_t result = 1;
-    while (result <= value / 2) {
-        result *= 2;
-    }
-    return result;
+bool has_usable_move(const Move& move) {
+    return is_valid_square(move.from) && is_valid_square(move.to);
 }
 
 int replacement_score(const TranspositionEntry& entry, int age) {
-    const int bound_bonus = entry.bound == Bound::Exact ? 4 : 0;
-    return entry.depth + bound_bonus - age * 8;
+    const int bound_bonus = entry.bound == Bound::Exact ? 10 : (entry.bound == Bound::Lower ? 2 : 0);
+    const int move_bonus = has_usable_move(entry.best_move) ? 8 : -12;
+    return entry.depth * 2 + bound_bonus + move_bonus - age * 16;
 }
 
 }  // namespace
@@ -32,9 +28,8 @@ TranspositionTable::TranspositionTable(std::size_t megabytes) {
 void TranspositionTable::resize_mb(std::size_t megabytes) {
     size_mb_ = std::max<std::size_t>(1, megabytes);
     const std::size_t bytes = size_mb_ * kBytesPerMegabyte;
-    const std::size_t requested_clusters = std::max<std::size_t>(1, bytes / sizeof(Cluster));
-    const std::size_t cluster_count = floor_power_of_two(requested_clusters);
-    clusters_.assign(cluster_count, Cluster{});
+    const std::size_t clusters = std::max<std::size_t>(1, bytes / sizeof(Cluster));
+    clusters_.assign(clusters, Cluster{});
     generation_ = 0;
 }
 
@@ -77,6 +72,7 @@ void TranspositionTable::store(
     }
 
     Cluster& cluster = clusters_[cluster_index_for(key)];
+    const bool storing_move = has_usable_move(best_move);
     TranspositionEntry* victim = &cluster.entries.front();
     int victim_score = replacement_score(*victim, victim->occupied ? generation_distance(victim->generation) : 255);
 
@@ -87,7 +83,7 @@ void TranspositionTable::store(
                 || entry.generation != generation_;
             if (!replace_existing) {
                 entry.generation = generation_;
-                if (is_valid_square(best_move.from) && is_valid_square(best_move.to)) {
+                if (storing_move) {
                     entry.best_move = best_move;
                 }
                 if (static_eval != kNoTranspositionStaticEval) {
@@ -96,9 +92,10 @@ void TranspositionTable::store(
                 return;
             }
 
+            const Move retained_move = storing_move ? best_move : entry.best_move;
             entry = TranspositionEntry{
                 key,
-                best_move,
+                retained_move,
                 depth,
                 score,
                 static_eval,
@@ -122,6 +119,10 @@ void TranspositionTable::store(
         }
     }
 
+    if (!storing_move && victim->occupied && has_usable_move(victim->best_move) && victim->generation == generation_ && depth + 4 < victim->depth) {
+        return;
+    }
+
     *victim = TranspositionEntry{
         key,
         best_move,
@@ -143,7 +144,7 @@ std::size_t TranspositionTable::entry_count() const {
 }
 
 std::size_t TranspositionTable::cluster_index_for(std::uint64_t key) const {
-    return static_cast<std::size_t>((key * kHashMultiplier) & (clusters_.size() - 1));
+    return static_cast<std::size_t>(key % clusters_.size());
 }
 
 int TranspositionTable::generation_distance(std::uint8_t generation) const {

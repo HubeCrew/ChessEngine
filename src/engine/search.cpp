@@ -961,16 +961,19 @@ int Searcher::negamax(
             tt_static_eval = entry->static_eval;
             if (entry->depth >= depth) {
                 ++tt_hits_;
-                if (!is_pv_node && entry->bound == Bound::Exact) {
-                    return tt_score;
-                }
-                if (entry->bound == Bound::Lower) {
-                    alpha = std::max(alpha, tt_score);
-                } else if (entry->bound == Bound::Upper) {
-                    beta = std::min(beta, tt_score);
-                }
-                if (alpha >= beta) {
-                    return tt_score;
+                if (!is_pv_node) {
+                    const bool tt_has_move = is_valid_move_shape(entry->best_move);
+                    if (entry->bound == Bound::Exact) {
+                        return tt_score;
+                    }
+                    if (entry->bound == Bound::Lower
+                        && tt_score >= beta
+                        && (tt_has_move || entry->depth >= depth + 2)) {
+                        return tt_score;
+                    }
+                    if (entry->bound == Bound::Upper && tt_score <= alpha) {
+                        return tt_score;
+                    }
                 }
             }
         }
@@ -1293,13 +1296,11 @@ int Searcher::negamax(
     } else if (best_score >= original_beta) {
         bound = Bound::Lower;
     }
-    if (!in_check && raw_static_eval != kNoTranspositionStaticEval && !is_mate_score(best_score)) {
-        const bool useful_correction = bound == Bound::Exact
-            || (bound == Bound::Lower && best_score > static_eval)
-            || (bound == Bound::Upper && best_score < static_eval);
-        if (useful_correction) {
-            update_correction_history(board, board.side_to_move(), depth, raw_static_eval, best_score);
-        }
+    if (!in_check
+        && bound == Bound::Exact
+        && raw_static_eval != kNoTranspositionStaticEval
+        && !is_mate_score(best_score)) {
+        update_correction_history(board, board.side_to_move(), depth, raw_static_eval, best_score);
     }
     if (!is_excluded_node) {
         tt_.store(board.hash_key(), depth, score_to_tt(best_score, ply), bound, best_move, raw_static_eval);
