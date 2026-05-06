@@ -298,7 +298,9 @@ std::filesystem::path write_patterned_full_threats_sf_lite_nnue_model(std::uint3
 
 std::filesystem::path write_constant_full_threats_integer_dense_nnue_model(
     int side_to_move_centipawns,
-    std::uint32_t hidden_size = 4
+    std::uint32_t hidden_size = 4,
+    std::uint32_t l2_size = 1,
+    std::uint32_t l3_size = 1
 ) {
     const std::filesystem::path path = std::filesystem::temp_directory_path()
         / "chess_engine_constant_full_threats_integer_dense_test.nnue";
@@ -315,8 +317,6 @@ std::filesystem::path write_constant_full_threats_integer_dense_nnue_model(
     write_binary_value(output, chess::engine::nnue::kHalfKaV2HmLiteFeatureCount);
     write_binary_value(output, chess::engine::nnue::kFullThreatsFeatureCount);
 
-    const std::uint32_t l2_size = 1;
-    const std::uint32_t l3_size = 1;
     write_binary_value(output, l2_size);
     write_binary_value(output, l3_size);
     write_binary_value(output, chess::engine::nnue::kDefaultDenseActivationScale);
@@ -793,6 +793,20 @@ TEST_CASE("NNUE loader supports legacy models and v4/v5 SF-lite side-to-move per
     REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 93);
     REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1")) == -93);
     REQUIRE(std::filesystem::remove(integer_dense_path));
+
+    const std::filesystem::path specialized_integer_dense_path = write_constant_full_threats_integer_dense_nnue_model(94, 512, 64, 32);
+    REQUIRE(network.load(specialized_integer_dense_path, &error));
+    REQUIRE(network.loaded());
+    REQUIRE(network.info().format_version == chess::engine::nnue::kFormatVersionV7);
+    REQUIRE(network.info().feature_set == chess::engine::nnue::FeatureSet::HalfKaV2HmFullThreats);
+    REQUIRE(network.info().integer_dense);
+    REQUIRE(network.info().hidden_size == 512);
+    REQUIRE(network.info().l2_size == 64);
+    REQUIRE(network.info().l3_size == 32);
+    REQUIRE(network.supports_quantized_accumulator_stack());
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 94);
+    REQUIRE(network.evaluate_white_perspective(chess::board_from_fen("4k3/8/8/8/8/8/8/4K3 b - - 0 1")) == -94);
+    REQUIRE(std::filesystem::remove(specialized_integer_dense_path));
 }
 
 TEST_CASE("NNUE quantized accumulator stack updates placement and threat features incrementally") {

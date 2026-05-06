@@ -343,17 +343,21 @@ std::int64_t dot_product_i16_i16_avx2(const std::int16_t* lhs, const std::int16_
 }
 
 [[gnu::target("avx2")]]
-void dot_product_i16_i16_4x_avx2(
+void dot_product_i16_i16_8x_avx2(
     const std::int16_t* lhs,
     const std::int16_t* rhs,
     std::uint32_t row_stride,
     std::uint32_t count,
-    std::int64_t (&out)[4]
+    std::int64_t (&out)[8]
 ) {
     __m256i sum0 = _mm256_setzero_si256();
     __m256i sum1 = _mm256_setzero_si256();
     __m256i sum2 = _mm256_setzero_si256();
     __m256i sum3 = _mm256_setzero_si256();
+    __m256i sum4 = _mm256_setzero_si256();
+    __m256i sum5 = _mm256_setzero_si256();
+    __m256i sum6 = _mm256_setzero_si256();
+    __m256i sum7 = _mm256_setzero_si256();
     std::uint32_t index = 0;
     for (; index + 16 <= count; index += 16) {
         const __m256i input = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(lhs + index));
@@ -361,21 +365,37 @@ void dot_product_i16_i16_4x_avx2(
         const __m256i weights1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rhs + row_stride + index));
         const __m256i weights2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rhs + static_cast<std::size_t>(row_stride) * 2 + index));
         const __m256i weights3 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rhs + static_cast<std::size_t>(row_stride) * 3 + index));
+        const __m256i weights4 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rhs + static_cast<std::size_t>(row_stride) * 4 + index));
+        const __m256i weights5 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rhs + static_cast<std::size_t>(row_stride) * 5 + index));
+        const __m256i weights6 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rhs + static_cast<std::size_t>(row_stride) * 6 + index));
+        const __m256i weights7 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(rhs + static_cast<std::size_t>(row_stride) * 7 + index));
         sum0 = _mm256_add_epi32(sum0, _mm256_madd_epi16(input, weights0));
         sum1 = _mm256_add_epi32(sum1, _mm256_madd_epi16(input, weights1));
         sum2 = _mm256_add_epi32(sum2, _mm256_madd_epi16(input, weights2));
         sum3 = _mm256_add_epi32(sum3, _mm256_madd_epi16(input, weights3));
+        sum4 = _mm256_add_epi32(sum4, _mm256_madd_epi16(input, weights4));
+        sum5 = _mm256_add_epi32(sum5, _mm256_madd_epi16(input, weights5));
+        sum6 = _mm256_add_epi32(sum6, _mm256_madd_epi16(input, weights6));
+        sum7 = _mm256_add_epi32(sum7, _mm256_madd_epi16(input, weights7));
     }
     out[0] = horizontal_sum_i32x8(sum0);
     out[1] = horizontal_sum_i32x8(sum1);
     out[2] = horizontal_sum_i32x8(sum2);
     out[3] = horizontal_sum_i32x8(sum3);
+    out[4] = horizontal_sum_i32x8(sum4);
+    out[5] = horizontal_sum_i32x8(sum5);
+    out[6] = horizontal_sum_i32x8(sum6);
+    out[7] = horizontal_sum_i32x8(sum7);
     for (; index < count; ++index) {
         const std::int64_t input = lhs[index];
         out[0] += input * rhs[index];
         out[1] += input * rhs[row_stride + index];
         out[2] += input * rhs[static_cast<std::size_t>(row_stride) * 2 + index];
         out[3] += input * rhs[static_cast<std::size_t>(row_stride) * 3 + index];
+        out[4] += input * rhs[static_cast<std::size_t>(row_stride) * 4 + index];
+        out[5] += input * rhs[static_cast<std::size_t>(row_stride) * 5 + index];
+        out[6] += input * rhs[static_cast<std::size_t>(row_stride) * 6 + index];
+        out[7] += input * rhs[static_cast<std::size_t>(row_stride) * 7 + index];
     }
 }
 
@@ -517,6 +537,84 @@ int rounded_divide(std::int64_t value, std::int64_t scale) {
     }
     return static_cast<int>((value - scale / 2) / scale);
 }
+
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+[[gnu::target("avx2")]]
+int evaluate_integer_dense_512_64_32_avx2(
+    bool white_to_move,
+    const std::vector<int>& stm,
+    const std::vector<int>& nstm,
+    int accumulator_scale,
+    std::int64_t activation_scale,
+    std::int64_t weight_scale,
+    const std::vector<std::int16_t>& direct_weights,
+    std::int32_t direct_bias,
+    const std::vector<std::int16_t>& fc0_weights,
+    const std::vector<std::int32_t>& fc0_bias,
+    const std::vector<std::int16_t>& fc1_weights,
+    const std::vector<std::int32_t>& fc1_bias,
+    const std::vector<std::int16_t>& fc2_weights,
+    std::int32_t fc2_bias,
+    std::int32_t side_to_move_weight
+) {
+    constexpr std::uint32_t kHidden = 512;
+    constexpr std::uint32_t kInputCount = kHidden * 2;
+    constexpr std::uint32_t kL2 = 64;
+    constexpr std::uint32_t kL3 = 32;
+
+    thread_local std::array<std::int16_t, kInputCount> inputs{};
+    thread_local std::array<std::int16_t, kL2> fc0{};
+    thread_local std::array<std::int16_t, kL3> fc1{};
+
+    for (std::uint32_t index = 0; index < kHidden; ++index) {
+        inputs[index] = static_cast<std::int16_t>(std::clamp(stm[index], 0, accumulator_scale));
+        inputs[kHidden + index] = static_cast<std::int16_t>(std::clamp(nstm[index], 0, accumulator_scale));
+    }
+
+    const std::int64_t direct_sum = dot_product_i16_i16_avx2(inputs.data(), direct_weights.data(), kInputCount);
+    std::int64_t total = rounded_divide(direct_sum, accumulator_scale) + direct_bias;
+
+    for (std::uint32_t row = 0; row < kL2; row += 8) {
+        std::int64_t row_sums[8]{};
+        dot_product_i16_i16_8x_avx2(
+            inputs.data(),
+            fc0_weights.data() + static_cast<std::size_t>(row) * kInputCount,
+            kInputCount,
+            kInputCount,
+            row_sums
+        );
+        for (std::uint32_t lane = 0; lane < 8; ++lane) {
+            std::int64_t value = rounded_divide(row_sums[lane] * activation_scale, static_cast<std::int64_t>(accumulator_scale) * weight_scale);
+            value += fc0_bias[row + lane];
+            fc0[row + lane] = static_cast<std::int16_t>(std::clamp<std::int64_t>(value, 0, activation_scale));
+        }
+    }
+
+    for (std::uint32_t row = 0; row < kL3; ++row) {
+        const std::size_t row_offset = static_cast<std::size_t>(row) * kL2 * 2;
+        const std::int64_t square_sum = dot_product_square_i16_i16_scalar(
+            fc0.data(),
+            fc1_weights.data() + row_offset,
+            kL2
+        );
+        const std::int64_t linear_sum = dot_product_i16_i16_avx2(
+            fc0.data(),
+            fc1_weights.data() + row_offset + kL2,
+            kL2
+        );
+        std::int64_t value = fc1_bias[row];
+        value += rounded_divide(square_sum, activation_scale * weight_scale);
+        value += rounded_divide(linear_sum, weight_scale);
+        fc1[row] = static_cast<std::int16_t>(std::clamp<std::int64_t>(value, 0, activation_scale));
+    }
+
+    const std::int64_t output_sum = dot_product_i16_i16_avx2(fc1.data(), fc2_weights.data(), kL3);
+    total += rounded_divide(output_sum, activation_scale);
+    total += fc2_bias + side_to_move_weight;
+    const int side_to_move_score = rounded_divide(total, weight_scale);
+    return white_to_move ? side_to_move_score : -side_to_move_score;
+}
+#endif
 
 bool is_slider_for_direction(PieceType type, int df, int dr) {
     if (type == PieceType::Queen) {
@@ -1783,37 +1881,121 @@ int Network::evaluate_sf_lite_white_perspective_integer_dense(
     const std::int64_t activation_scale = static_cast<std::int64_t>(info_.dense_activation_scale);
     const std::int64_t weight_scale = static_cast<std::int64_t>(info_.dense_weight_scale);
 
-    thread_local std::vector<int> inputs;
+#if defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+    if (cpu_supports_avx2()
+        && info_.hidden_size == 512
+        && info_.l2_size == 64
+        && info_.l3_size == 32
+        && accumulator_scale <= std::numeric_limits<std::int16_t>::max()
+        && activation_scale <= std::numeric_limits<std::int16_t>::max()) {
+        const int score = evaluate_integer_dense_512_64_32_avx2(
+            white_to_move,
+            stm,
+            nstm,
+            accumulator_scale,
+            activation_scale,
+            weight_scale,
+            direct_weights_quantized_,
+            direct_bias_quantized_,
+            fc0_weights_quantized_,
+            fc0_bias_quantized_,
+            fc1_weights_quantized_,
+            fc1_bias_quantized_,
+            fc2_weights_quantized_,
+            fc2_bias_quantized_,
+            side_to_move_weight_quantized_
+        );
+        if (profile != nullptr) {
+            profile->dense_forward_ns += elapsed_ns_since(dense_start);
+        }
+        return score;
+    }
+#endif
+
+    if (accumulator_scale > std::numeric_limits<std::int16_t>::max()
+        || activation_scale > std::numeric_limits<std::int16_t>::max()) {
+        thread_local std::vector<int> wide_inputs;
+        wide_inputs.resize(static_cast<std::size_t>(info_.hidden_size) * 2);
+        for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
+            wide_inputs[index] = std::clamp(stm[index], 0, accumulator_scale);
+            wide_inputs[info_.hidden_size + index] = std::clamp(nstm[index], 0, accumulator_scale);
+        }
+
+        const std::uint32_t input_count = info_.hidden_size * 2;
+        const std::int64_t direct_sum = dot_product_i32_i16(wide_inputs.data(), direct_weights_quantized_.data(), input_count);
+        std::int64_t total = rounded_divide(direct_sum, accumulator_scale) + direct_bias_quantized_;
+
+        thread_local std::vector<int> wide_fc0;
+        thread_local std::vector<int> wide_fc1;
+        wide_fc0.assign(info_.l2_size, 0);
+        for (std::uint32_t row = 0; row < info_.l2_size; ++row) {
+            const std::size_t row_offset = static_cast<std::size_t>(row) * info_.hidden_size * 2;
+            const std::int64_t row_sum = dot_product_i32_i16(wide_inputs.data(), fc0_weights_quantized_.data() + row_offset, input_count);
+            std::int64_t value = rounded_divide(row_sum * activation_scale, static_cast<std::int64_t>(accumulator_scale) * weight_scale);
+            value += fc0_bias_quantized_[row];
+            wide_fc0[row] = static_cast<int>(std::clamp<std::int64_t>(value, 0, activation_scale));
+        }
+
+        wide_fc1.assign(info_.l3_size, 0);
+        for (std::uint32_t row = 0; row < info_.l3_size; ++row) {
+            const std::size_t row_offset = static_cast<std::size_t>(row) * info_.l2_size * 2;
+            const std::int64_t square_sum = dot_product_square_i32_i16(
+                wide_fc0.data(),
+                fc1_weights_quantized_.data() + row_offset,
+                info_.l2_size
+            );
+            const std::int64_t linear_sum = dot_product_i32_i16(
+                wide_fc0.data(),
+                fc1_weights_quantized_.data() + row_offset + info_.l2_size,
+                info_.l2_size
+            );
+            std::int64_t value = fc1_bias_quantized_[row];
+            value += rounded_divide(square_sum, activation_scale * weight_scale);
+            value += rounded_divide(linear_sum, weight_scale);
+            wide_fc1[row] = static_cast<int>(std::clamp<std::int64_t>(value, 0, activation_scale));
+        }
+
+        const std::int64_t output_sum = dot_product_i32_i16(wide_fc1.data(), fc2_weights_quantized_.data(), info_.l3_size);
+        total += rounded_divide(output_sum, activation_scale);
+        total += fc2_bias_quantized_ + side_to_move_weight_quantized_;
+        const int side_to_move_score = rounded_divide(total, weight_scale);
+        if (profile != nullptr) {
+            profile->dense_forward_ns += elapsed_ns_since(dense_start);
+        }
+        return white_to_move ? side_to_move_score : -side_to_move_score;
+    }
+
+    thread_local std::vector<std::int16_t> inputs;
     inputs.resize(static_cast<std::size_t>(info_.hidden_size) * 2);
     for (std::uint32_t index = 0; index < info_.hidden_size; ++index) {
-        inputs[index] = std::clamp(stm[index], 0, accumulator_scale);
-        inputs[info_.hidden_size + index] = std::clamp(nstm[index], 0, accumulator_scale);
+        inputs[index] = static_cast<std::int16_t>(std::clamp(stm[index], 0, accumulator_scale));
+        inputs[info_.hidden_size + index] = static_cast<std::int16_t>(std::clamp(nstm[index], 0, accumulator_scale));
     }
 
     const std::uint32_t input_count = info_.hidden_size * 2;
-    const std::int64_t direct_sum = dot_product_i32_i16(inputs.data(), direct_weights_quantized_.data(), input_count);
+    const std::int64_t direct_sum = dot_product_i16_i16(inputs.data(), direct_weights_quantized_.data(), input_count);
     std::int64_t total = rounded_divide(direct_sum, accumulator_scale) + direct_bias_quantized_;
 
-    thread_local std::vector<int> fc0;
-    thread_local std::vector<int> fc1;
+    thread_local std::vector<std::int16_t> fc0;
+    thread_local std::vector<std::int16_t> fc1;
     fc0.assign(info_.l2_size, 0);
     for (std::uint32_t row = 0; row < info_.l2_size; ++row) {
         const std::size_t row_offset = static_cast<std::size_t>(row) * info_.hidden_size * 2;
-        const std::int64_t row_sum = dot_product_i32_i16(inputs.data(), fc0_weights_quantized_.data() + row_offset, input_count);
+        const std::int64_t row_sum = dot_product_i16_i16(inputs.data(), fc0_weights_quantized_.data() + row_offset, input_count);
         std::int64_t value = rounded_divide(row_sum * activation_scale, static_cast<std::int64_t>(accumulator_scale) * weight_scale);
         value += fc0_bias_quantized_[row];
-        fc0[row] = static_cast<int>(std::clamp<std::int64_t>(value, 0, activation_scale));
+        fc0[row] = static_cast<std::int16_t>(std::clamp<std::int64_t>(value, 0, activation_scale));
     }
 
     fc1.assign(info_.l3_size, 0);
     for (std::uint32_t row = 0; row < info_.l3_size; ++row) {
         const std::size_t row_offset = static_cast<std::size_t>(row) * info_.l2_size * 2;
-        const std::int64_t square_sum = dot_product_square_i32_i16(
+        const std::int64_t square_sum = dot_product_square_i16_i16(
             fc0.data(),
             fc1_weights_quantized_.data() + row_offset,
             info_.l2_size
         );
-        const std::int64_t linear_sum = dot_product_i32_i16(
+        const std::int64_t linear_sum = dot_product_i16_i16(
             fc0.data(),
             fc1_weights_quantized_.data() + row_offset + info_.l2_size,
             info_.l2_size
@@ -1821,10 +2003,10 @@ int Network::evaluate_sf_lite_white_perspective_integer_dense(
         std::int64_t value = fc1_bias_quantized_[row];
         value += rounded_divide(square_sum, activation_scale * weight_scale);
         value += rounded_divide(linear_sum, weight_scale);
-        fc1[row] = static_cast<int>(std::clamp<std::int64_t>(value, 0, activation_scale));
+        fc1[row] = static_cast<std::int16_t>(std::clamp<std::int64_t>(value, 0, activation_scale));
     }
 
-    const std::int64_t output_sum = dot_product_i32_i16(fc1.data(), fc2_weights_quantized_.data(), info_.l3_size);
+    const std::int64_t output_sum = dot_product_i16_i16(fc1.data(), fc2_weights_quantized_.data(), info_.l3_size);
     total += rounded_divide(output_sum, activation_scale);
     total += fc2_bias_quantized_ + side_to_move_weight_quantized_;
     const int side_to_move_score = rounded_divide(total, weight_scale);
