@@ -460,6 +460,20 @@ TEST_CASE("search returns legal moves and principal variation") {
     REQUIRE(result.principal_variation.front() == result.best_move);
 }
 
+TEST_CASE("lazy SMP search returns legal moves and aggregates worker nodes") {
+    chess::Board board = chess::Board::start_position();
+    chess::engine::Searcher searcher;
+    searcher.set_hash_size_mb(4);
+    searcher.set_thread_count(2);
+
+    const chess::engine::SearchResult result = searcher.search(board, chess::engine::SearchLimits{3});
+
+    REQUIRE(result.depth == 3);
+    REQUIRE(result.nodes > 0);
+    REQUIRE(result.qnodes > 0);
+    REQUIRE(is_legal_best_move(board, result.best_move));
+}
+
 TEST_CASE("search keeps mate-in-one tactical behavior") {
     chess::Board board = chess::board_from_fen("6k1/6pp/8/2B5/8/8/6PP/5RK1 w - - 0 1");
     chess::engine::Searcher searcher;

@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <shared_mutex>
 #include <vector>
 
 #include "chess/core/move.h"
@@ -31,6 +33,7 @@ struct TranspositionEntry {
 class TranspositionTable {
 public:
     static constexpr std::size_t kClusterSize = 4;
+    static constexpr std::size_t kLockStripeCount = 4096;
 
     explicit TranspositionTable(std::size_t megabytes = 64);
 
@@ -39,6 +42,7 @@ public:
     void new_search();
 
     [[nodiscard]] const TranspositionEntry* probe(std::uint64_t key) const;
+    [[nodiscard]] std::optional<TranspositionEntry> probe_entry(std::uint64_t key) const;
     void store(
         std::uint64_t key,
         int depth,
@@ -59,8 +63,10 @@ private:
     std::vector<Cluster> clusters_;
     std::size_t size_mb_ = 0;
     std::uint8_t generation_ = 0;
+    mutable std::array<std::shared_mutex, kLockStripeCount> locks_;
 
     [[nodiscard]] std::size_t cluster_index_for(std::uint64_t key) const;
+    [[nodiscard]] std::shared_mutex& lock_for_cluster(std::size_t cluster_index) const;
     [[nodiscard]] int generation_distance(std::uint8_t generation) const;
 };
 

@@ -1,8 +1,11 @@
 #include <iostream>
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "chess/core/fen.h"
@@ -114,6 +117,8 @@ void apply_setoption(chess::engine::Searcher& searcher, std::istringstream& inpu
 
     if (name == "Hash" && !value.empty()) {
         searcher.set_hash_size_mb(static_cast<std::size_t>(std::stoul(value)));
+    } else if (name == "Threads" && !value.empty()) {
+        searcher.set_thread_count(std::stoi(value));
     } else if (name == "NullMovePruning" && !value.empty()) {
         searcher.set_null_move_pruning(parse_bool(value));
     } else if (name == "SearchExtensions" && !value.empty()) {
@@ -144,6 +149,20 @@ std::string pv_to_string(const std::vector<chess::Move>& principal_variation) {
         result += chess::move_to_uci(move);
     }
     return result;
+}
+
+void print_search_result(const chess::engine::SearchResult& result) {
+    std::cout << "info depth " << result.depth
+              << " score cp " << result.score_centipawns
+              << " nodes " << result.nodes
+              << " qnodes " << result.qnodes
+              << " nps " << result.nps
+              << " time " << result.elapsed.count();
+    if (!result.principal_variation.empty()) {
+        std::cout << " pv " << pv_to_string(result.principal_variation);
+    }
+    std::cout << '\n';
+    std::cout << "bestmove " << chess::move_to_uci(result.best_move) << '\n';
 }
 
 void print_eval_trace(const chess::Board& board, const chess::engine::Searcher& searcher) {
@@ -198,6 +217,41 @@ int main() {
 
     chess::Board board = chess::Board::start_position();
     chess::engine::Searcher searcher;
+    std::mutex output_mutex;
+    std::thread search_thread;
+    std::atomic_bool search_running = false;
+
+    const auto join_search = [&]() {
+        if (search_thread.joinable()) {
+            search_thread.join();
+        }
+        search_running.store(false, std::memory_order_relaxed);
+    };
+
+    const auto start_search = [&](chess::Board search_board, chess::engine::SearchLimits limits) {
+        if (search_running.load(std::memory_order_relaxed)) {
+            searcher.stop();
+            join_search();
+        } else if (search_thread.joinable()) {
+            join_search();
+        }
+        search_running.store(true, std::memory_order_relaxed);
+        search_thread = std::thread([&searcher, &output_mutex, search_board, limits, &search_running]() mutable {
+            const chess::engine::SearchResult result = searcher.search(search_board, limits);
+            {
+                std::lock_guard lock(output_mutex);
+                print_search_result(result);
+            }
+            search_running.store(false, std::memory_order_relaxed);
+        });
+    };
+
+    const auto ensure_no_search = [&]() {
+        if (search_running.load(std::memory_order_relaxed)) {
+            searcher.stop();
+        }
+        join_search();
+    };
 
     std::string line;
     while (std::getline(std::cin, line)) {
@@ -210,6 +264,7 @@ int main() {
                 std::cout << "id name ChessEngine 0.1\n";
                 std::cout << "id author HubeKnaepkens\n";
                 std::cout << "option name Hash type spin default 64 min 1 max 4096\n";
+                std::cout << "option name Threads type spin default 1 min 1 max 512\n";
                 std::cout << "option name NullMovePruning type check default true\n";
                 std::cout << "option name SearchExtensions type check default true\n";
                 std::cout << "option name EvalType type combo default classical var classical var nnue var hybrid\n";
@@ -218,14 +273,18 @@ int main() {
             } else if (command == "isready") {
                 std::cout << "readyok\n";
             } else if (command == "ucinewgame") {
+                ensure_no_search();
                 board = chess::Board::start_position();
                 searcher.clear();
             } else if (command == "setoption") {
+                ensure_no_search();
                 apply_setoption(searcher, input);
             } else if (command == "position") {
+                ensure_no_search();
                 board = parse_position(input);
             } else if (command == "go") {
                 chess::engine::SearchLimits limits;
+                limits.depth = 127;
                 std::vector<std::string> tokens;
                 std::string token;
                 while (input >> token) {
@@ -268,18 +327,10 @@ int main() {
                         }
                     }
                 }
-                const chess::engine::SearchResult result = searcher.search(board, limits);
-                std::cout << "info depth " << result.depth
-                          << " score cp " << result.score_centipawns
-                          << " nodes " << result.nodes
-                          << " qnodes " << result.qnodes
-                          << " nps " << result.nps
-                          << " time " << result.elapsed.count();
-                if (!result.principal_variation.empty()) {
-                    std::cout << " pv " << pv_to_string(result.principal_variation);
-                }
-                std::cout << '\n';
-                std::cout << "bestmove " << chess::move_to_uci(result.best_move) << '\n';
+                start_search(board, limits);
+            } else if (command == "stop") {
+                searcher.stop();
+                join_search();
             } else if (command == "d") {
                 std::cout << board.to_fen() << '\n';
             } else if (command == "eval") {
@@ -287,12 +338,15 @@ int main() {
             } else if (command == "see") {
                 print_static_exchange(board, input);
             } else if (command == "quit") {
+                ensure_no_search();
                 break;
             }
         } catch (const std::exception& error) {
             std::cout << "info string error: " << error.what() << '\n';
         }
     }
+
+    ensure_no_search();
 
     return 0;
 }

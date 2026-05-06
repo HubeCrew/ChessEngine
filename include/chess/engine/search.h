@@ -1,10 +1,12 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -122,6 +124,9 @@ public:
     [[nodiscard]] bool search_extensions() const;
     void set_profiling(bool enabled);
     [[nodiscard]] bool profiling() const;
+    void set_thread_count(int threads);
+    [[nodiscard]] int thread_count() const;
+    void stop();
     void set_eval_type(EvalType type);
     [[nodiscard]] EvalType eval_type() const;
     [[nodiscard]] bool load_nnue(const std::filesystem::path& path, std::string* error = nullptr);
@@ -151,14 +156,19 @@ private:
     std::uint64_t tt_hits_ = 0;
     std::chrono::steady_clock::time_point deadline_{};
     std::chrono::steady_clock::time_point start_time_{};
+    std::chrono::milliseconds optimum_time_{0};
+    std::chrono::milliseconds maximum_time_{0};
     bool use_deadline_ = false;
     bool null_move_pruning_ = true;
     bool search_extensions_ = true;
     bool profiling_ = false;
     EvalType eval_type_ = EvalType::Classical;
-    nnue::Network nnue_;
+    std::shared_ptr<nnue::Network> nnue_;
     SearchDiagnostics diagnostics_{};
-    TranspositionTable tt_;
+    std::shared_ptr<TranspositionTable> tt_;
+    std::shared_ptr<std::atomic_bool> stop_signal_;
+    int thread_count_ = 1;
+    int worker_index_ = 0;
     std::array<std::array<Move, 2>, kMaxPly> killer_moves_{};
     HistoryTable history_{};
     CaptureHistoryTable capture_history_{};
@@ -171,6 +181,14 @@ private:
     MoveList root_search_moves_;
     bool root_search_moves_constrained_ = false;
 
+    SearchResult search_single(Board& board, const SearchLimits& limits, bool prepare_shared_state);
+    [[nodiscard]] bool should_stop_after_iteration(
+        int depth,
+        const SearchResult& result,
+        const Move& previous_best_move,
+        int previous_score,
+        int stable_best_move_iterations
+    ) const;
     int negamax(
         Board& board,
         int depth,

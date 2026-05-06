@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <mutex>
 
 namespace chess::engine {
 
@@ -46,17 +47,37 @@ void TranspositionTable::new_search() {
 }
 
 const TranspositionEntry* TranspositionTable::probe(std::uint64_t key) const {
+    thread_local TranspositionEntry entry_copy;
     if (clusters_.empty()) {
         return nullptr;
     }
 
-    const Cluster& cluster = clusters_[cluster_index_for(key)];
+    const std::size_t cluster_index = cluster_index_for(key);
+    std::shared_lock lock(lock_for_cluster(cluster_index));
+    const Cluster& cluster = clusters_[cluster_index];
     for (const TranspositionEntry& entry : cluster.entries) {
         if (entry.occupied && entry.key == key) {
-            return &entry;
+            entry_copy = entry;
+            return &entry_copy;
         }
     }
     return nullptr;
+}
+
+std::optional<TranspositionEntry> TranspositionTable::probe_entry(std::uint64_t key) const {
+    if (clusters_.empty()) {
+        return std::nullopt;
+    }
+
+    const std::size_t cluster_index = cluster_index_for(key);
+    std::shared_lock lock(lock_for_cluster(cluster_index));
+    const Cluster& cluster = clusters_[cluster_index];
+    for (const TranspositionEntry& entry : cluster.entries) {
+        if (entry.occupied && entry.key == key) {
+            return entry;
+        }
+    }
+    return std::nullopt;
 }
 
 void TranspositionTable::store(
@@ -71,7 +92,9 @@ void TranspositionTable::store(
         return;
     }
 
-    Cluster& cluster = clusters_[cluster_index_for(key)];
+    const std::size_t cluster_index = cluster_index_for(key);
+    std::unique_lock lock(lock_for_cluster(cluster_index));
+    Cluster& cluster = clusters_[cluster_index];
     const bool storing_move = has_usable_move(best_move);
     TranspositionEntry* victim = &cluster.entries.front();
     int victim_score = replacement_score(*victim, victim->occupied ? generation_distance(victim->generation) : 255);
@@ -145,6 +168,10 @@ std::size_t TranspositionTable::entry_count() const {
 
 std::size_t TranspositionTable::cluster_index_for(std::uint64_t key) const {
     return static_cast<std::size_t>(key % clusters_.size());
+}
+
+std::shared_mutex& TranspositionTable::lock_for_cluster(std::size_t cluster_index) const {
+    return locks_[cluster_index % locks_.size()];
 }
 
 int TranspositionTable::generation_distance(std::uint8_t generation) const {

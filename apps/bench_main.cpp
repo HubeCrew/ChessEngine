@@ -29,6 +29,7 @@ struct Options {
     SuiteSelection suite = SuiteSelection::All;
     int depth_override = 0;
     std::size_t hash_mb = 64;
+    int threads = 1;
     bool csv = false;
     bool progress = false;
     bool diagnostics = false;
@@ -67,7 +68,7 @@ struct ProgressState {
 };
 
 void print_usage(std::ostream& out) {
-    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--eval-type classical|nnue|hybrid] [--nnue PATH] [--disable-null-move] [--disable-extensions] [--progress] [--diagnostics] [--profile] [--csv]\n";
+    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--threads N] [--eval-type classical|nnue|hybrid] [--nnue PATH] [--disable-null-move] [--disable-extensions] [--progress] [--diagnostics] [--profile] [--csv]\n";
 }
 
 SuiteSelection parse_suite(std::string_view value) {
@@ -156,6 +157,11 @@ Options parse_options(int argc, char** argv) {
                 throw std::invalid_argument("--hash must be positive");
             }
             options.hash_mb = static_cast<std::size_t>(hash);
+        } else if (arg == "--threads") {
+            if (++index >= argc) {
+                throw std::invalid_argument("--threads requires a value");
+            }
+            options.threads = std::max(1, std::stoi(argv[index]));
         } else {
             throw std::invalid_argument("unknown option: " + arg);
         }
@@ -507,6 +513,7 @@ int main(int argc, char** argv) {
         }
         chess::engine::Searcher searcher;
         searcher.set_hash_size_mb(options.hash_mb);
+        searcher.set_thread_count(options.threads);
         searcher.set_null_move_pruning(options.null_move_pruning);
         searcher.set_search_extensions(options.search_extensions);
         searcher.set_profiling(options.profile);

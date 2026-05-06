@@ -6,8 +6,11 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
+#include <future>
 #include <memory>
 #include <new>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -79,6 +82,71 @@ void merge_nnue_profile(SearchDiagnostics& diagnostics, const nnue::ProfileCount
     diagnostics.nnue_fallback_placement_feature += profile.fallback_placement_feature;
     diagnostics.nnue_fallback_dirty_overflow += profile.fallback_dirty_overflow;
     diagnostics.nnue_partial_refreshes += profile.partial_refreshes;
+}
+
+void add_search_diagnostics(SearchDiagnostics& lhs, const SearchDiagnostics& rhs) {
+#define ADD_DIAGNOSTIC(field) lhs.field += rhs.field
+    ADD_DIAGNOSTIC(evaluations);
+    ADD_DIAGNOSTIC(evaluation_ns);
+    ADD_DIAGNOSTIC(nnue_stack_evaluations);
+    ADD_DIAGNOSTIC(nnue_stack_evaluation_ns);
+    ADD_DIAGNOSTIC(classical_evaluations);
+    ADD_DIAGNOSTIC(classical_evaluation_ns);
+    ADD_DIAGNOSTIC(nnue_accumulator_refreshes);
+    ADD_DIAGNOSTIC(nnue_accumulator_refresh_ns);
+    ADD_DIAGNOSTIC(nnue_accumulator_update_attempts);
+    ADD_DIAGNOSTIC(nnue_accumulator_update_successes);
+    ADD_DIAGNOSTIC(nnue_accumulator_update_fallbacks);
+    ADD_DIAGNOSTIC(nnue_accumulator_update_ns);
+    ADD_DIAGNOSTIC(nnue_accumulator_null_copies);
+    ADD_DIAGNOSTIC(nnue_refresh_placement_ns);
+    ADD_DIAGNOSTIC(nnue_refresh_threat_ns);
+    ADD_DIAGNOSTIC(nnue_update_placement_ns);
+    ADD_DIAGNOSTIC(nnue_update_threat_ns);
+    ADD_DIAGNOSTIC(nnue_dense_convert_ns);
+    ADD_DIAGNOSTIC(nnue_dense_forward_ns);
+    ADD_DIAGNOSTIC(nnue_dirty_squares);
+    ADD_DIAGNOSTIC(nnue_dirty_attackers_before);
+    ADD_DIAGNOSTIC(nnue_dirty_attackers_after);
+    ADD_DIAGNOSTIC(nnue_dirty_threat_removed);
+    ADD_DIAGNOSTIC(nnue_dirty_threat_added);
+    ADD_DIAGNOSTIC(nnue_dirty_threat_unchanged);
+    ADD_DIAGNOSTIC(nnue_fallback_parent_invalid);
+    ADD_DIAGNOSTIC(nnue_fallback_unsupported);
+    ADD_DIAGNOSTIC(nnue_fallback_invalid_move);
+    ADD_DIAGNOSTIC(nnue_fallback_missing_king);
+    ADD_DIAGNOSTIC(nnue_fallback_moving_king);
+    ADD_DIAGNOSTIC(nnue_fallback_placement_feature);
+    ADD_DIAGNOSTIC(nnue_fallback_dirty_overflow);
+    ADD_DIAGNOSTIC(nnue_partial_refreshes);
+    ADD_DIAGNOSTIC(move_picker_pv_picks);
+    ADD_DIAGNOSTIC(move_picker_tt_picks);
+    ADD_DIAGNOSTIC(move_picker_scored_moves);
+    ADD_DIAGNOSTIC(move_picker_searched_moves);
+    ADD_DIAGNOSTIC(move_picker_tactical_picks);
+    ADD_DIAGNOSTIC(move_picker_killer_picks);
+    ADD_DIAGNOSTIC(move_picker_quiet_picks);
+    ADD_DIAGNOSTIC(beta_cutoffs);
+    ADD_DIAGNOSTIC(beta_cutoff_move_index_sum);
+    ADD_DIAGNOSTIC(illegal_pseudo_moves);
+    ADD_DIAGNOSTIC(null_move_attempts);
+    ADD_DIAGNOSTIC(null_move_cutoffs);
+    ADD_DIAGNOSTIC(reverse_futility_prunes);
+    ADD_DIAGNOSTIC(razoring_prunes);
+    ADD_DIAGNOSTIC(probcut_attempts);
+    ADD_DIAGNOSTIC(probcut_cutoffs);
+    ADD_DIAGNOSTIC(futility_prunes);
+    ADD_DIAGNOSTIC(late_move_prunes);
+    ADD_DIAGNOSTIC(lmr_reductions);
+    ADD_DIAGNOSTIC(lmr_researches);
+    ADD_DIAGNOSTIC(singular_extension_attempts);
+    ADD_DIAGNOSTIC(singular_extensions);
+    ADD_DIAGNOSTIC(correction_history_updates);
+    ADD_DIAGNOSTIC(qsearch_in_check_nodes);
+    ADD_DIAGNOSTIC(qsearch_stand_pat_nodes);
+    ADD_DIAGNOSTIC(see_calls);
+    ADD_DIAGNOSTIC(move_gives_check_calls);
+#undef ADD_DIAGNOSTIC
 }
 
 int color_index(Color color) {
@@ -698,20 +766,103 @@ std::chrono::milliseconds allocated_time(const Board& board, const SearchLimits&
 }  // namespace
 
 Searcher::Searcher() {
+    nnue_ = std::make_shared<nnue::Network>();
+    tt_ = std::make_shared<TranspositionTable>();
+    stop_signal_ = std::make_shared<std::atomic_bool>(false);
     clear();
 }
 
 SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
+    stop_signal_->store(false, std::memory_order_relaxed);
+    tt_->new_search();
+    age_history();
+
+    const int workers = std::clamp(thread_count_, 1, 512);
+    if (workers == 1 || !limits.search_moves.empty()) {
+        return search_single(board, limits, false);
+    }
+
+    std::vector<std::future<SearchResult>> futures;
+    futures.reserve(static_cast<std::size_t>(workers - 1));
+    for (int worker = 1; worker < workers; ++worker) {
+        Board worker_board = board;
+        Searcher helper;
+        helper.nnue_ = nnue_;
+        helper.tt_ = tt_;
+        helper.stop_signal_ = stop_signal_;
+        helper.null_move_pruning_ = null_move_pruning_;
+        helper.search_extensions_ = search_extensions_;
+        helper.profiling_ = profiling_;
+        helper.eval_type_ = eval_type_;
+        helper.thread_count_ = 1;
+        helper.worker_index_ = worker;
+        helper.history_ = history_;
+        helper.capture_history_ = capture_history_;
+        helper.counter_moves_ = counter_moves_;
+        helper.continuation_history_ = continuation_history_;
+        helper.correction_history_ = correction_history_;
+        futures.push_back(std::async(std::launch::async, [helper = std::move(helper), worker_board, limits]() mutable {
+            return helper.search_single(worker_board, limits, false);
+        }));
+    }
+
+    SearchResult best = search_single(board, limits, false);
+    SearchDiagnostics total_diagnostics = best.diagnostics;
+    for (auto& future : futures) {
+        SearchResult candidate = future.get();
+        add_search_diagnostics(total_diagnostics, candidate.diagnostics);
+        const bool candidate_is_better = is_valid_move_shape(candidate.best_move)
+            && (candidate.depth > best.depth
+                || (candidate.depth == best.depth && candidate.nodes > best.nodes));
+        const std::uint64_t previous_best_nodes = best.nodes;
+        const std::uint64_t previous_best_qnodes = best.qnodes;
+        const std::uint64_t previous_best_tt_hits = best.tt_hits;
+        best.nodes += candidate.nodes;
+        best.qnodes += candidate.qnodes;
+        best.tt_hits += candidate.tt_hits;
+        if (candidate_is_better) {
+            const std::uint64_t total_nodes = previous_best_nodes + candidate.nodes;
+            const std::uint64_t total_qnodes = previous_best_qnodes + candidate.qnodes;
+            const std::uint64_t total_tt_hits = previous_best_tt_hits + candidate.tt_hits;
+            candidate.nodes = total_nodes;
+            candidate.qnodes = total_qnodes;
+            candidate.tt_hits = total_tt_hits;
+            best = std::move(candidate);
+        }
+    }
+    best.diagnostics = total_diagnostics;
+
+    if (best.elapsed.count() <= 0) {
+        best.elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start_time_
+        );
+    }
+    const auto elapsed_ms = std::max<std::int64_t>(1, best.elapsed.count());
+    best.nps = best.nodes * 1000ULL / static_cast<std::uint64_t>(elapsed_ms);
+    return best;
+}
+
+SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, bool prepare_shared_state) {
     nodes_ = 0;
     qnodes_ = 0;
     tt_hits_ = 0;
     diagnostics_ = {};
-    const std::chrono::milliseconds effective_move_time = allocated_time(board, limits);
-    use_deadline_ = effective_move_time.count() > 0;
+    if (prepare_shared_state) {
+        stop_signal_->store(false, std::memory_order_relaxed);
+        tt_->new_search();
+        age_history();
+    }
+    optimum_time_ = allocated_time(board, limits);
+    if (limits.move_time.count() > 0) {
+        maximum_time_ = limits.move_time;
+    } else if (optimum_time_.count() > 0) {
+        maximum_time_ = std::max(optimum_time_ * 2, optimum_time_ + std::chrono::milliseconds{50});
+    } else {
+        maximum_time_ = std::chrono::milliseconds{0};
+    }
+    use_deadline_ = maximum_time_.count() > 0;
     start_time_ = std::chrono::steady_clock::now();
-    deadline_ = start_time_ + effective_move_time;
-    tt_.new_search();
-    age_history();
+    deadline_ = start_time_ + maximum_time_;
     previous_iteration_pv_.clear();
     refresh_nnue_accumulator(board, 0);
 
@@ -728,6 +879,12 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     } else {
         root_search_moves_ = legal_moves;
     }
+    if (worker_index_ > 0 && root_search_moves_.size() > 1) {
+        const auto offset = static_cast<std::ptrdiff_t>(
+            static_cast<std::size_t>(worker_index_) % root_search_moves_.size()
+        );
+        std::rotate(root_search_moves_.begin(), root_search_moves_.begin() + offset, root_search_moves_.end());
+    }
 
     if (root_search_moves_.empty()) {
         result.best_move = Move{};
@@ -739,12 +896,15 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     }
 
     const int max_depth = std::min(std::max(1, limits.depth), kMaxPly - 1);
+    int stable_best_move_iterations = 0;
     for (int depth = 1; depth <= max_depth; ++depth) {
         if (should_stop()) {
             break;
         }
 
         previous_iteration_pv_ = result.principal_variation;
+        const Move previous_best_move = result.best_move;
+        const int previous_score = result.score_centipawns;
 
         int alpha = -kInfinity;
         int beta = kInfinity;
@@ -776,8 +936,8 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
         }
 
         if (!should_stop()) {
-            const TranspositionEntry* root_entry = tt_.probe(board.hash_key());
-            if (root_entry != nullptr && is_valid_move_shape(root_entry->best_move)) {
+            const std::optional<TranspositionEntry> root_entry = tt_->probe_entry(board.hash_key());
+            if (root_entry.has_value() && is_valid_move_shape(root_entry->best_move)) {
                 result.best_move = root_entry->best_move;
             } else if (!is_valid_move_shape(result.best_move)) {
                 result.best_move = root_search_moves_.front();
@@ -793,6 +953,13 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
                 result.best_move = result.principal_variation.front();
             }
             previous_iteration_pv_ = result.principal_variation;
+            stable_best_move_iterations = same_move_identity(result.best_move, previous_best_move)
+                ? stable_best_move_iterations + 1
+                : 0;
+            if (should_stop_after_iteration(depth, result, previous_best_move, previous_score, stable_best_move_iterations)) {
+                stop_signal_->store(true, std::memory_order_relaxed);
+                break;
+            }
         }
     }
 
@@ -810,11 +977,11 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
 }
 
 void Searcher::set_hash_size_mb(std::size_t megabytes) {
-    tt_.resize_mb(megabytes);
+    tt_->resize_mb(megabytes);
 }
 
 std::size_t Searcher::hash_size_mb() const {
-    return tt_.size_mb();
+    return tt_->size_mb();
 }
 
 void Searcher::set_null_move_pruning(bool enabled) {
@@ -841,6 +1008,18 @@ bool Searcher::profiling() const {
     return profiling_;
 }
 
+void Searcher::set_thread_count(int threads) {
+    thread_count_ = std::clamp(threads, 1, 512);
+}
+
+int Searcher::thread_count() const {
+    return thread_count_;
+}
+
+void Searcher::stop() {
+    stop_signal_->store(true, std::memory_order_relaxed);
+}
+
 void Searcher::set_eval_type(EvalType type) {
     eval_type_ = type;
 }
@@ -850,38 +1029,38 @@ EvalType Searcher::eval_type() const {
 }
 
 bool Searcher::load_nnue(const std::filesystem::path& path, std::string* error) {
-    return nnue_.load(path, error);
+    return nnue_->load(path, error);
 }
 
 void Searcher::clear_nnue() {
-    nnue_.clear();
+    nnue_->clear();
 }
 
 bool Searcher::nnue_loaded() const {
-    return nnue_.loaded();
+    return nnue_->loaded();
 }
 
 const nnue::ModelInfo& Searcher::nnue_info() const {
-    return nnue_.info();
+    return nnue_->info();
 }
 
 int Searcher::evaluate_nnue_white_perspective(const Board& board) const {
-    if (!nnue_.loaded()) {
+    if (!nnue_->loaded()) {
         return chess::engine::evaluate_white_perspective(board);
     }
-    return nnue_.evaluate_white_perspective(board);
+    return nnue_->evaluate_white_perspective(board);
 }
 
 int Searcher::evaluate_white_perspective(const Board& board) const {
-    return chess::engine::evaluate_white_perspective(board, EvaluationConfig{eval_type_, &nnue_, 50});
+    return chess::engine::evaluate_white_perspective(board, EvaluationConfig{eval_type_, nnue_.get(), 50});
 }
 
 int Searcher::evaluate_side_to_move(const Board& board) const {
-    return evaluate(board, EvaluationConfig{eval_type_, &nnue_, 50});
+    return evaluate(board, EvaluationConfig{eval_type_, nnue_.get(), 50});
 }
 
 void Searcher::clear() {
-    tt_.clear();
+    tt_->clear();
     for (auto& ply_killers : killer_moves_) {
         ply_killers = {Move{}, Move{}};
     }
@@ -952,8 +1131,8 @@ int Searcher::negamax(
     int tt_depth = -1;
     const bool use_tt_entry = !is_excluded_node && !(is_root && root_search_moves_constrained_);
     if (use_tt_entry) {
-        const TranspositionEntry* entry = tt_.probe(board.hash_key());
-        if (entry != nullptr) {
+        const std::optional<TranspositionEntry> entry = tt_->probe_entry(board.hash_key());
+        if (entry.has_value()) {
             tt_move = entry->best_move;
             tt_depth = entry->depth;
             tt_score = score_from_tt(entry->score, ply);
@@ -1034,7 +1213,7 @@ int Searcher::negamax(
         }
         if (score >= beta) {
             ++diagnostics_.null_move_cutoffs;
-            tt_.store(board.hash_key(), depth, score_to_tt(beta, ply), Bound::Lower, Move{}, raw_static_eval);
+            tt_->store(board.hash_key(), depth, score_to_tt(beta, ply), Bound::Lower, Move{}, raw_static_eval);
             return beta;
         }
     }
@@ -1085,7 +1264,7 @@ int Searcher::negamax(
             board.unmake_move(undo);
             if (score >= probcut_beta) {
                 ++diagnostics_.probcut_cutoffs;
-                tt_.store(board.hash_key(), depth - 3, score_to_tt(score, ply), Bound::Lower, move, raw_static_eval);
+                tt_->store(board.hash_key(), depth - 3, score_to_tt(score, ply), Bound::Lower, move, raw_static_eval);
                 return score;
             }
         }
@@ -1303,7 +1482,7 @@ int Searcher::negamax(
         update_correction_history(board, board.side_to_move(), depth, raw_static_eval, best_score);
     }
     if (!is_excluded_node) {
-        tt_.store(board.hash_key(), depth, score_to_tt(best_score, ply), bound, best_move, raw_static_eval);
+        tt_->store(board.hash_key(), depth, score_to_tt(best_score, ply), bound, best_move, raw_static_eval);
     }
     return best_score;
 }
@@ -1330,7 +1509,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
     }
 
     Move tt_move;
-    if (const TranspositionEntry* entry = tt_.probe(board.hash_key())) {
+    if (const std::optional<TranspositionEntry> entry = tt_->probe_entry(board.hash_key())) {
         tt_move = entry->best_move;
     }
 
@@ -1421,10 +1600,10 @@ int Searcher::evaluate_with_diagnostics(const Board& board, int ply) {
         }
         return score;
     };
-    if (eval_type_ == EvalType::Nnue && nnue_.supports_quantized_accumulator_stack() && ply >= 0 && ply < kMaxPly) {
+    if (eval_type_ == EvalType::Nnue && nnue_->supports_quantized_accumulator_stack() && ply >= 0 && ply < kMaxPly) {
         const auto nnue_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
         nnue::ProfileCounters nnue_profile;
-        const int white_perspective = nnue_.evaluate_white_perspective(
+        const int white_perspective = nnue_->evaluate_white_perspective(
             board,
             nnue_accumulator_stack_[ply],
             profiling_ ? &nnue_profile : nullptr
@@ -1436,7 +1615,7 @@ int Searcher::evaluate_with_diagnostics(const Board& board, int ply) {
         }
         return finish(board.side_to_move() == Color::White ? white_perspective : -white_perspective);
     }
-    if (eval_type_ == EvalType::Hybrid && nnue_.supports_quantized_accumulator_stack() && ply >= 0 && ply < kMaxPly) {
+    if (eval_type_ == EvalType::Hybrid && nnue_->supports_quantized_accumulator_stack() && ply >= 0 && ply < kMaxPly) {
         const auto classical_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
         const int classical = chess::engine::evaluate_white_perspective(board);
         if (profiling_) {
@@ -1445,7 +1624,7 @@ int Searcher::evaluate_with_diagnostics(const Board& board, int ply) {
         }
         const auto nnue_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
         nnue::ProfileCounters nnue_profile;
-        const int nnue = nnue_.evaluate_white_perspective(
+        const int nnue = nnue_->evaluate_white_perspective(
             board,
             nnue_accumulator_stack_[ply],
             profiling_ ? &nnue_profile : nullptr
@@ -1472,10 +1651,10 @@ void Searcher::refresh_nnue_accumulator(Board& board, int ply) {
         return;
     }
     nnue_accumulator_stack_[ply].valid = false;
-    if (nnue_.supports_quantized_accumulator_stack()) {
+    if (nnue_->supports_quantized_accumulator_stack()) {
         const auto start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
         nnue::ProfileCounters nnue_profile;
-        nnue_.refresh_quantized_accumulator_pair(
+        nnue_->refresh_quantized_accumulator_pair(
             board,
             nnue_accumulator_stack_[ply],
             profiling_ ? &nnue_profile : nullptr
@@ -1494,12 +1673,12 @@ void Searcher::update_nnue_accumulator_after_move(
     int parent_ply,
     int child_ply
 ) {
-    if (!nnue_.supports_quantized_accumulator_stack() || parent_ply < 0 || parent_ply >= kMaxPly || child_ply < 0 || child_ply >= kMaxPly) {
+    if (!nnue_->supports_quantized_accumulator_stack() || parent_ply < 0 || parent_ply >= kMaxPly || child_ply < 0 || child_ply >= kMaxPly) {
         return;
     }
     const auto start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
     nnue::ProfileCounters update_profile;
-    const bool updated = nnue_.update_quantized_accumulator_pair_after_move(
+    const bool updated = nnue_->update_quantized_accumulator_pair_after_move(
             board,
             undo,
             nnue_accumulator_stack_[parent_ply],
@@ -1517,7 +1696,7 @@ void Searcher::update_nnue_accumulator_after_move(
         }
         const auto refresh_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};
         nnue::ProfileCounters refresh_profile;
-        nnue_.refresh_quantized_accumulator_pair(
+        nnue_->refresh_quantized_accumulator_pair(
             board,
             nnue_accumulator_stack_[child_ply],
             profiling_ ? &refresh_profile : nullptr
@@ -1533,7 +1712,7 @@ void Searcher::update_nnue_accumulator_after_move(
 }
 
 void Searcher::update_nnue_accumulator_after_null_move(int parent_ply, int child_ply) {
-    if (!nnue_.supports_quantized_accumulator_stack() || parent_ply < 0 || parent_ply >= kMaxPly || child_ply < 0 || child_ply >= kMaxPly) {
+    if (!nnue_->supports_quantized_accumulator_stack() || parent_ply < 0 || parent_ply >= kMaxPly || child_ply < 0 || child_ply >= kMaxPly) {
         return;
     }
     nnue_accumulator_stack_[child_ply] = nnue_accumulator_stack_[parent_ply];
@@ -1665,8 +1844,8 @@ std::vector<Move> Searcher::extract_principal_variation(Board& board, int depth)
 
     Board copy = board;
     for (int ply = 0; ply < depth; ++ply) {
-        const TranspositionEntry* entry = tt_.probe(copy.hash_key());
-        if (entry == nullptr || !is_valid_move_shape(entry->best_move)) {
+        const std::optional<TranspositionEntry> entry = tt_->probe_entry(copy.hash_key());
+        if (!entry.has_value() || !is_valid_move_shape(entry->best_move)) {
             break;
         }
 
@@ -1687,7 +1866,48 @@ std::vector<Move> Searcher::extract_principal_variation(Board& board, int depth)
 }
 
 bool Searcher::should_stop() const {
-    return use_deadline_ && std::chrono::steady_clock::now() >= deadline_;
+    return stop_signal_->load(std::memory_order_relaxed)
+        || (use_deadline_ && std::chrono::steady_clock::now() >= deadline_);
+}
+
+bool Searcher::should_stop_after_iteration(
+    int depth,
+    const SearchResult& result,
+    const Move& previous_best_move,
+    int previous_score,
+    int stable_best_move_iterations
+) const {
+    if (!use_deadline_ || depth <= 1 || optimum_time_.count() <= 0) {
+        return false;
+    }
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start_time_
+    );
+    if (elapsed >= maximum_time_) {
+        return true;
+    }
+
+    const bool best_move_changed = is_valid_move_shape(previous_best_move)
+        && !same_move_identity(result.best_move, previous_best_move);
+    const int score_drop = previous_score - result.score_centipawns;
+    double multiplier = 1.0;
+    if (best_move_changed) {
+        multiplier += 0.75;
+    }
+    if (score_drop > 35) {
+        multiplier += std::min(0.75, static_cast<double>(score_drop) / 220.0);
+    }
+    multiplier -= std::min(0.35, 0.08 * static_cast<double>(stable_best_move_iterations));
+
+    const auto adjusted_optimum = std::chrono::milliseconds{
+        std::clamp<std::int64_t>(
+            static_cast<std::int64_t>(static_cast<double>(optimum_time_.count()) * multiplier),
+            std::max<std::int64_t>(1, optimum_time_.count() / 2),
+            maximum_time_.count()
+        )
+    };
+    return elapsed >= adjusted_optimum;
 }
 
 }  // namespace chess::engine
