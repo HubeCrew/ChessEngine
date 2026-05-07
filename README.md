@@ -85,6 +85,22 @@ eval
 The custom `eval` command prints white-perspective components for material, piece-square tables, mobility, safe mobility, king safety, threats, pawn structure, outposts, rook files, space, center control, bishop quality, pawn dynamics, development, trade context, classical total, NNUE total when loaded, selected evaluator, and total score.
 The custom `see <uci-move>` command prints static exchange evaluation for a legal move in the current position, which is useful for checking whether a capture is tactically profitable before deeper search context is considered.
 
+Run the browser playing surface:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+In another shell, start the local UCI bridge:
+
+```bash
+.venv/bin/python tools/play_server.py
+```
+
+Open the Vite URL, usually `http://127.0.0.1:5173`. The bridge defaults to `build-release/chess_uci`, validates human moves with `python-chess`, and exposes the engine's UCI options for hash, threads, MultiPV, Syzygy, opening books, timing overhead, pruning, EvalType, and NNUE files. To serve a production build directly from the bridge, run `npm run build` in `frontend/` and then open `http://127.0.0.1:8787`.
+
 Run with an exported NNUE network:
 
 ```text
