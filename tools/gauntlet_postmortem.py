@@ -4,17 +4,21 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import queue
 import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
 
 try:
     import chess
+    import chess.polyglot
 except ImportError as error:  # pragma: no cover - exercised by users without the tool venv.
     print(
         "missing dependency: python-chess. Install with "
@@ -118,6 +122,18 @@ class MoveRecord:
     reference_played_pv: str = ""
     reference_delta_cp: int | None = None
     reference_avoid: bool = False
+    reference_scan_depth: int = 0
+    reference_scan_movetime_ms: int = 0
+    first_reference_blunder: bool = False
+    in_book: bool = False
+    played_book_move: bool = False
+    book_bestmove: str = ""
+    book_move_count: int = 0
+    book_total_weight: int = 0
+    book_played_weight: int = 0
+    legal_moves: int = 0
+    piece_count: int = 0
+    phase: str = ""
 
 
 @dataclass(frozen=True)
@@ -128,10 +144,16 @@ class SearchResult:
 
 
 class UciTraceEngine:
-    def __init__(self, command: str, timeout: float) -> None:
+    def __init__(self, command: str, timeout: float, options: Iterable[tuple[str, str]] = ()) -> None:
         self.command = shlex.split(command)
         self.timeout = timeout
+        self.options = list(options)
         self.process: subprocess.Popen[str] | None = None
+        self.lines: queue.Queue[str | None] = queue.Queue()
+        self.reader: threading.Thread | None = None
+        self.stderr_reader: threading.Thread | None = None
+        self.stdout_tail: deque[str] = deque(maxlen=80)
+        self.stderr_tail: deque[str] = deque(maxlen=120)
         self.cache: dict[str, dict[str, int]] = {}
         self.search_cache: dict[tuple[str, int, int, tuple[str, ...]], SearchResult] = {}
         self.see_cache: dict[tuple[str, str], int] = {}
@@ -145,8 +167,17 @@ class UciTraceEngine:
             text=True,
             bufsize=1,
         )
+        if self.process.stdout is None or self.process.stdin is None:
+            raise RuntimeError("failed to open engine pipes")
+        self.reader = threading.Thread(target=self._read_stdout, daemon=True)
+        self.reader.start()
+        if self.process.stderr is not None:
+            self.stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
+            self.stderr_reader.start()
         self._send("uci")
         self._read_until("uciok")
+        for name, value in self.options:
+            self._send(f"setoption name {name} value {value}")
         self._send("isready")
         self._read_until("readyok")
         return self
@@ -243,7 +274,7 @@ class UciTraceEngine:
 
     def _send(self, command: str) -> None:
         if self.process is None or self.process.stdin is None or self.process.poll() is not None:
-            raise RuntimeError("engine is not running")
+            raise self._engine_error("engine is not running")
         self.process.stdin.write(command + "\n")
         self.process.stdin.flush()
 
@@ -253,19 +284,46 @@ class UciTraceEngine:
             pass
 
     def _readline(self, deadline: float) -> str:
-        if self.process is None or self.process.stdout is None:
-            raise RuntimeError("engine is not running")
+        if self.process is None:
+            raise self._engine_error("engine is not running")
+        if self.process.poll() is not None:
+            raise self._engine_error(f"engine exited with code {self.process.returncode}")
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("engine protocol timeout")
-        while time.monotonic() < deadline:
-            line = self.process.stdout.readline()
-            if line:
-                return line.strip()
-            if self.process.poll() is not None:
-                stderr = self.process.stderr.read() if self.process.stderr is not None else ""
-                raise RuntimeError(f"engine exited with code {self.process.returncode}: {stderr}")
-        raise TimeoutError("engine protocol timeout")
+            raise self._engine_error("engine protocol timeout")
+        try:
+            line = self.lines.get(timeout=remaining)
+        except queue.Empty:
+            raise self._engine_error("engine protocol timeout")
+        if line is None:
+            raise self._engine_error("engine closed stdout")
+        return line
+
+    def _read_stdout(self) -> None:
+        assert self.process is not None
+        assert self.process.stdout is not None
+        for line in self.process.stdout:
+            stripped = line.strip()
+            self.stdout_tail.append(stripped)
+            self.lines.put(stripped)
+        self.lines.put(None)
+
+    def _read_stderr(self) -> None:
+        assert self.process is not None
+        assert self.process.stderr is not None
+        for line in self.process.stderr:
+            self.stderr_tail.append(line.rstrip())
+
+    def _engine_error(self, message: str) -> RuntimeError:
+        exit_code = None if self.process is None else self.process.poll()
+        details = [message]
+        if exit_code is not None:
+            details.append(f"exit_code={exit_code}")
+        if self.stderr_tail:
+            details.append("stderr_tail=" + " | ".join(self.stderr_tail))
+        if self.stdout_tail:
+            details.append("stdout_tail=" + " | ".join(self.stdout_tail))
+        return RuntimeError("; ".join(details))
 
 
 def parse_trace_line(line: str) -> dict[str, int]:
@@ -355,6 +413,24 @@ def engine_lost(result: str, side: chess.Color) -> bool:
 
 def material_value(piece: chess.Piece | None) -> int:
     return 0 if piece is None else PIECE_VALUES[piece.piece_type]
+
+
+def piece_count(board: chess.Board) -> int:
+    return sum(1 for _square, _piece in board.piece_map().items())
+
+
+def game_phase(board: chess.Board) -> str:
+    pieces = piece_count(board)
+    queens = len(board.pieces(chess.QUEEN, chess.WHITE)) + len(board.pieces(chess.QUEEN, chess.BLACK))
+    minor_major = sum(
+        len(board.pieces(piece_type, chess.WHITE)) + len(board.pieces(piece_type, chess.BLACK))
+        for piece_type in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN)
+    )
+    if pieces <= 10 or (queens == 0 and minor_major <= 6):
+        return "endgame"
+    if pieces <= 22 or queens == 0:
+        return "middlegame/endgame"
+    return "opening/middlegame"
 
 
 def captured_piece_for(board: chess.Board, move: chess.Move) -> chess.Piece | None:
@@ -467,6 +543,9 @@ def analyze_game(
         gives_check = board.gives_check(move)
         is_castling = board.is_castling(move)
         is_promotion = move.promotion is not None
+        legal_moves_before = board.legal_moves.count()
+        piece_count_before = piece_count(board)
+        phase_before = game_phase(board)
         recaptures_previous_engine_move = (
             not should_analyze
             and previous_engine_record is not None
@@ -538,6 +617,9 @@ def analyze_game(
                 captured_piece=captured_piece.symbol().upper() if captured_piece is not None else "",
                 capture_value=material_value(captured_piece),
                 moving_value=material_value(moving_piece),
+                legal_moves=legal_moves_before,
+                piece_count=piece_count_before,
+                phase=phase_before,
                 is_capture=is_capture,
                 is_promotion=is_promotion,
                 gives_check=gives_check,
@@ -648,6 +730,13 @@ def summarize(records: list[MoveRecord], events: list[MoveRecord], engine_name: 
         "engine_can_avoid_negative_see": sum(
             1 for event in events if "engine-can-avoid-negative-see" in event.categories
         ),
+        "reference_scored_moves": sum(1 for record in records if record.reference_delta_cp is not None),
+        "reference_blunders": sum(1 for record in records if "reference-blunder" in record.categories),
+        "reference_inaccuracies": sum(1 for record in records if "reference-inaccuracy" in record.categories),
+        "first_reference_blunders": sum(1 for record in records if record.first_reference_blunder),
+        "book_positions": sum(1 for record in records if record.in_book),
+        "book_deviations": sum(1 for record in records if "book-deviation" in record.categories),
+        "book_weaker_lines": sum(1 for record in records if "book-chose-weaker-line" in record.categories),
     }
 
 
@@ -700,6 +789,18 @@ def write_csv(path: Path, events: list[MoveRecord]) -> None:
         "reference_played_pv",
         "reference_delta_cp",
         "reference_avoid",
+        "reference_scan_depth",
+        "reference_scan_movetime_ms",
+        "first_reference_blunder",
+        "in_book",
+        "played_book_move",
+        "book_bestmove",
+        "book_move_count",
+        "book_total_weight",
+        "book_played_weight",
+        "legal_moves",
+        "piece_count",
+        "phase",
         "fen_before",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -710,6 +811,65 @@ def write_csv(path: Path, events: list[MoveRecord]) -> None:
             row["categories"] = "|".join(event.categories)
             row["engine_recaptures_available"] = "|".join(event.engine_recaptures_available)
             writer.writerow(row)
+
+
+def write_game_summary_csv(path: Path, records: list[MoveRecord]) -> None:
+    fields = [
+        "game",
+        "opening",
+        "result",
+        "termination",
+        "engine_side",
+        "engine_moves",
+        "worst_eval_delta_cp",
+        "worst_eval_ply",
+        "worst_eval_move",
+        "worst_reference_delta_cp",
+        "worst_reference_ply",
+        "worst_reference_move",
+        "first_reference_blunder_ply",
+        "first_reference_blunder_move",
+        "first_reference_blunder_delta_cp",
+        "book_positions",
+        "book_deviations",
+        "first_out_of_book_ply",
+    ]
+    grouped: dict[int, list[MoveRecord]] = {}
+    for record in records:
+        grouped.setdefault(record.game, []).append(record)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for game, game_records in sorted(grouped.items()):
+            game_records.sort(key=lambda record: record.ply)
+            worst_eval = min(game_records, key=lambda record: record.delta_cp)
+            ref_scored = [record for record in game_records if record.reference_delta_cp is not None]
+            worst_ref = max(ref_scored, key=lambda record: record.reference_delta_cp or 0) if ref_scored else None
+            first_ref = next((record for record in game_records if record.first_reference_blunder), None)
+            first_out_of_book = next((record for record in game_records if not record.in_book), None)
+            first = game_records[0]
+            writer.writerow(
+                {
+                    "game": game,
+                    "opening": first.opening,
+                    "result": first.result,
+                    "termination": first.termination,
+                    "engine_side": ",".join(sorted({record.side for record in game_records})),
+                    "engine_moves": len(game_records),
+                    "worst_eval_delta_cp": worst_eval.delta_cp,
+                    "worst_eval_ply": worst_eval.ply,
+                    "worst_eval_move": worst_eval.uci,
+                    "worst_reference_delta_cp": "" if worst_ref is None else worst_ref.reference_delta_cp,
+                    "worst_reference_ply": "" if worst_ref is None else worst_ref.ply,
+                    "worst_reference_move": "" if worst_ref is None else worst_ref.uci,
+                    "first_reference_blunder_ply": "" if first_ref is None else first_ref.ply,
+                    "first_reference_blunder_move": "" if first_ref is None else first_ref.uci,
+                    "first_reference_blunder_delta_cp": "" if first_ref is None else first_ref.reference_delta_cp,
+                    "book_positions": sum(1 for record in game_records if record.in_book),
+                    "book_deviations": sum(1 for record in game_records if "book-deviation" in record.categories),
+                    "first_out_of_book_ply": "" if first_out_of_book is None else first_out_of_book.ply,
+                }
+            )
 
 
 def write_epd(path: Path, events: list[MoveRecord]) -> None:
@@ -778,6 +938,13 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
                     ),
                     f"- Material: `{event.moving_piece}` captures `{event.captured_piece or '-'}` "
                     f"for `{event.capture_value}` cp",
+                    f"- Position: `{event.phase}`, pieces `{event.piece_count}`, legal moves `{event.legal_moves}`",
+                    (
+                        f"- Book: in book, played `{event.uci}` weight `{event.book_played_weight}`, "
+                        f"best `{event.book_bestmove}`, choices `{event.book_move_count}`"
+                        if event.in_book
+                        else "- Book: out of book"
+                    ),
                     f"- Component movement: {format_trace_delta(event)}",
                     f"- Result: `{event.result}` `{event.termination}`",
                     f"- FEN before: `{event.fen_before}`",
@@ -839,6 +1006,21 @@ def write_markdown(path: Path, summary: dict[str, object], events: list[MoveReco
     append_event_list(
         "Negative SEE Capture Audit",
         [event for event in events if "played-negative-see" in event.categories],
+        25,
+    )
+    append_event_list(
+        "First Reference Blunder By Game",
+        [event for event in events if event.first_reference_blunder],
+        25,
+    )
+    append_event_list(
+        "Reference Blunder Scan",
+        [event for event in events if "reference-blunder" in event.categories],
+        25,
+    )
+    append_event_list(
+        "Book Exit And Book Deviation Watchlist",
+        [event for event in events if "book-deviation" in event.categories or "book-chose-weaker-line" in event.categories],
         25,
     )
     append_event_list(
@@ -910,6 +1092,55 @@ def add_engine_diagnostic_categories(events: list[MoveRecord]) -> None:
             add_category(event, "engine-can-avoid-negative-see", 60)
 
 
+def add_reference_diagnostic_categories(records: list[MoveRecord], min_delta_cp: int) -> None:
+    first_by_game: dict[int, MoveRecord] = {}
+    for record in records:
+        if record.reference_delta_cp is None:
+            continue
+        if record.reference_avoid:
+            add_category(record, "reference-blunder", 150 + min(500, record.reference_delta_cp))
+            first_by_game.setdefault(record.game, record)
+        elif record.reference_delta_cp >= max(50, min_delta_cp // 2):
+            add_category(record, "reference-inaccuracy", 60 + min(240, record.reference_delta_cp))
+    for record in first_by_game.values():
+        record.first_reference_blunder = True
+        add_category(record, "first-reference-blunder", 250)
+
+
+def annotate_book(
+    records: list[MoveRecord],
+    book_file: Path | None,
+    minimum_weight: int,
+    book_depth: int,
+) -> None:
+    if book_file is None:
+        return
+    if not book_file.exists():
+        raise FileNotFoundError(f"book file not found: {book_file}")
+    with chess.polyglot.open_reader(str(book_file)) as reader:
+        for record in records:
+            if book_depth >= 0 and record.ply > book_depth:
+                continue
+            board = chess.Board(record.fen_before)
+            entries = [entry for entry in reader.find_all(board) if entry.weight >= minimum_weight]
+            if not entries:
+                continue
+            entries.sort(key=lambda entry: (entry.weight, entry.learn), reverse=True)
+            record.in_book = True
+            record.book_move_count = len(entries)
+            record.book_total_weight = sum(entry.weight for entry in entries)
+            record.book_bestmove = entries[0].move.uci()
+            for entry in entries:
+                if entry.move.uci() == record.uci:
+                    record.played_book_move = True
+                    record.book_played_weight = entry.weight
+                    break
+            if not record.played_book_move:
+                add_category(record, "book-deviation", 40)
+            elif record.reference_avoid and record.book_bestmove != record.uci:
+                add_category(record, "book-chose-weaker-line", 60)
+
+
 def add_reference_bestmoves(
     events: list[MoveRecord],
     engine: UciTraceEngine,
@@ -926,6 +1157,8 @@ def add_reference_bestmoves(
             event.reference_bestmove = best.bestmove
             event.reference_score_cp = best.score_cp
             event.reference_pv = format_pv(best.pv)
+            event.reference_scan_depth = depth
+            event.reference_scan_movetime_ms = movetime_ms
         if best.bestmove == "0000" or best.bestmove == event.uci or best.score_cp is None:
             continue
 
@@ -985,6 +1218,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze gauntlet PGNs for bad trades and evaluation swings.")
     parser.add_argument("--pgn-dir", required=True, type=Path, help="Gauntlet output directory or one PGN file.")
     parser.add_argument("--engine", default="./build-release/chess_uci", help="Engine command used for eval traces.")
+    parser.add_argument(
+        "--engine-option",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="UCI option for --engine. Repeatable.",
+    )
     parser.add_argument("--engine-name", required=True, help="Engine name as it appears in PGN White/Black headers.")
     parser.add_argument("--output-dir", type=Path, default=Path("runs/postmortems/latest"))
     parser.add_argument("--max-events", type=int, default=80)
@@ -992,6 +1232,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trade-drop-threshold", type=int, default=50)
     parser.add_argument("--engine-depth", type=int, default=0, help="Optional depth for bestmove re-search on flagged events.")
     parser.add_argument("--reference-engine", default="", help="Optional UCI engine command used to annotate EPD bm moves.")
+    parser.add_argument(
+        "--reference-option",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="UCI option for --reference-engine. Repeatable.",
+    )
     parser.add_argument("--reference-depth", type=int, default=0, help="Reference-engine depth for EPD bm annotation.")
     parser.add_argument(
         "--reference-confirm-depth",
@@ -1006,13 +1253,45 @@ def parse_args() -> argparse.Namespace:
         default=120,
         help="Only emit an EPD am move when the reference best move is at least this many cp better.",
     )
+    parser.add_argument(
+        "--reference-scan",
+        choices=("all", "events", "none"),
+        default="all",
+        help=(
+            "How much to score with the reference engine. all scans every analyzed move before event selection; "
+            "events scores only preselected events; none disables reference scoring."
+        ),
+    )
+    parser.add_argument("--book-file", type=Path, default=None, help="Optional Polyglot book used to annotate book exits.")
+    parser.add_argument("--book-depth", type=int, default=255, help="Maximum ply for book annotations. Use -1 for unlimited.")
+    parser.add_argument("--book-minimum-weight", type=int, default=1)
     parser.add_argument("--both-sides", action="store_true", help="Analyze both players instead of only --engine-name moves.")
     parser.add_argument("--protocol-timeout", type=float, default=10.0)
     return parser.parse_args()
 
 
+def parse_option_assignments(raw_options: Iterable[str]) -> list[tuple[str, str]]:
+    parsed: list[tuple[str, str]] = []
+    for raw in raw_options:
+        if "=" not in raw:
+            raise ValueError(f"invalid UCI option {raw!r}; expected NAME=VALUE")
+        name, value = raw.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if not name:
+            raise ValueError(f"invalid UCI option {raw!r}; option name is empty")
+        parsed.append((name, value))
+    return parsed
+
+
 def main() -> int:
     args = parse_args()
+    try:
+        engine_options = parse_option_assignments(args.engine_option)
+        reference_options = parse_option_assignments(args.reference_option)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     paths = pgn_paths(args.pgn_dir)
     if not paths:
         print(f"no PGN files found in {args.pgn_dir}", file=sys.stderr)
@@ -1023,7 +1302,7 @@ def main() -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     records: list[MoveRecord] = []
-    with UciTraceEngine(args.engine, args.protocol_timeout) as trace_engine:
+    with UciTraceEngine(args.engine, args.protocol_timeout, engine_options) as trace_engine:
         for path in paths:
             game = parse_pgn(path)
             records.extend(
@@ -1036,16 +1315,38 @@ def main() -> int:
                     args.both_sides,
                 )
             )
-        events = select_events(records, args.max_events)
+
+    if args.reference_engine and args.reference_scan == "all":
+        reference_depth = args.reference_depth
+        if reference_depth <= 0 and args.reference_movetime_ms <= 0:
+            reference_depth = 12
+        reference_confirm_depth = max(0, args.reference_confirm_depth)
+        with UciTraceEngine(args.reference_engine, args.protocol_timeout, reference_options) as reference_engine:
+            add_reference_bestmoves(
+                records,
+                reference_engine,
+                reference_depth,
+                args.reference_movetime_ms,
+                args.reference_min_delta_cp,
+                reference_confirm_depth,
+            )
+        add_reference_diagnostic_categories(records, args.reference_min_delta_cp)
+
+    annotate_book(records, args.book_file, args.book_minimum_weight, args.book_depth)
+
+    events = select_events(records, args.max_events)
+
+    with UciTraceEngine(args.engine, args.protocol_timeout, engine_options) as trace_engine:
         add_engine_bestmoves(events, trace_engine, args.engine_depth)
-    if args.reference_engine:
+
+    if args.reference_engine and args.reference_scan == "events":
         reference_depth = args.reference_depth
         if reference_depth <= 0 and args.reference_movetime_ms <= 0:
             reference_depth = 12
         reference_confirm_depth = args.reference_confirm_depth
         if reference_confirm_depth <= 0 and reference_depth > 0 and args.reference_movetime_ms <= 0:
             reference_confirm_depth = reference_depth + 2
-        with UciTraceEngine(args.reference_engine, args.protocol_timeout) as reference_engine:
+        with UciTraceEngine(args.reference_engine, args.protocol_timeout, reference_options) as reference_engine:
             add_reference_bestmoves(
                 events,
                 reference_engine,
@@ -1054,14 +1355,18 @@ def main() -> int:
                 args.reference_min_delta_cp,
                 reference_confirm_depth,
             )
+        add_reference_diagnostic_categories(events, args.reference_min_delta_cp)
+
     if args.engine_depth > 0 and any(event.reference_bestmove for event in events):
-        with UciTraceEngine(args.engine, args.protocol_timeout) as trace_engine:
+        with UciTraceEngine(args.engine, args.protocol_timeout, engine_options) as trace_engine:
             add_engine_reference_scores(events, trace_engine, args.engine_depth)
     add_engine_diagnostic_categories(events)
 
     summary = summarize(records, events, args.engine_name)
     write_json(args.output_dir / "postmortem.json", summary, events)
+    write_csv(args.output_dir / "moves.csv", records)
     write_csv(args.output_dir / "events.csv", events)
+    write_game_summary_csv(args.output_dir / "games.csv", records)
     write_epd(args.output_dir / "positions.epd", events)
     write_markdown(args.output_dir / "report.md", summary, events)
 
@@ -1070,6 +1375,8 @@ def main() -> int:
     print(f"flagged_events {summary['flagged_events']}")
     print(f"report {args.output_dir / 'report.md'}")
     print(f"events {args.output_dir / 'events.csv'}")
+    print(f"moves {args.output_dir / 'moves.csv'}")
+    print(f"games {args.output_dir / 'games.csv'}")
     print(f"positions {args.output_dir / 'positions.epd'}")
     return 0
 

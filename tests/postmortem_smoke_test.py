@@ -80,6 +80,8 @@ def main() -> int:
         report = (output_dir / "report.md").read_text(encoding="utf-8")
         payload = json.loads((output_dir / "postmortem.json").read_text(encoding="utf-8"))
         rows = list(csv.DictReader((output_dir / "events.csv").read_text(encoding="utf-8").splitlines()))
+        moves = list(csv.DictReader((output_dir / "moves.csv").read_text(encoding="utf-8").splitlines()))
+        games = list(csv.DictReader((output_dir / "games.csv").read_text(encoding="utf-8").splitlines()))
         positions = (output_dir / "positions.epd").read_text(encoding="utf-8")
 
         if payload["summary"]["games_seen"] != 1 or payload["summary"]["flagged_events"] <= 0:
@@ -94,8 +96,17 @@ def main() -> int:
         if "engine_prefers_negative_see" not in payload["summary"]:
             print(f"missing SEE preference summary: {payload['summary']}", file=sys.stderr)
             return 1
+        if "reference_scored_moves" not in payload["summary"]:
+            print(f"missing reference scan summary: {payload['summary']}", file=sys.stderr)
+            return 1
+        if "first_reference_blunders" not in payload["summary"]:
+            print(f"missing first-blunder summary: {payload['summary']}", file=sys.stderr)
+            return 1
         if not rows:
             print("expected at least one CSV event", file=sys.stderr)
+            return 1
+        if not moves or not games:
+            print("expected moves.csv and games.csv output", file=sys.stderr)
             return 1
         required_csv_fields = {
             "engine_played_score_cp",
@@ -105,11 +116,20 @@ def main() -> int:
             "engine_reference_see_cp",
             "engine_reference_delta_cp",
             "engine_reference_pv",
+            "first_reference_blunder",
+            "in_book",
+            "phase",
         }
         if not required_csv_fields.issubset(rows[0].keys()):
             print(f"missing CSV fields: {required_csv_fields - set(rows[0].keys())}", file=sys.stderr)
             return 1
+        if "first_reference_blunder_ply" not in games[0]:
+            print(f"missing game summary fields: {games[0].keys()}", file=sys.stderr)
+            return 1
         if "bad-trade-sequence" not in report or "Sequence after reply" not in report:
+            print(report, file=sys.stderr)
+            return 1
+        if "Reference Blunder Scan" not in report or "First Reference Blunder By Game" not in report:
             print(report, file=sys.stderr)
             return 1
         if "Engine played-move constrained score" not in report:
