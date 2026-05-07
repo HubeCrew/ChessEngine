@@ -1211,6 +1211,21 @@ TEST_CASE("search prefers winning free queen material") {
     REQUIRE(chess::move_to_uci(result.best_move) == "h1h7");
 }
 
+TEST_CASE("root search avoids unstable negative SEE queen capture") {
+    chess::Board board = chess::board_from_fen("2b2rk1/4bpp1/rqp2n1p/p2pN3/2pPP3/P1N4P/2P2PP1/1RBQR1K1 b - - 3 19");
+    chess::engine::SearchLimits limits;
+    limits.depth = 1;
+    limits.search_moves.push_back(legal_move_by_uci(board, "b6b1"));
+    limits.search_moves.push_back(legal_move_by_uci(board, "b6a7"));
+    limits.search_moves.push_back(legal_move_by_uci(board, "b6d8"));
+
+    chess::engine::Searcher searcher;
+    const chess::engine::SearchResult result = searcher.search(board, limits);
+
+    REQUIRE(chess::engine::static_exchange_eval(board, legal_move_by_uci(board, "b6b1")) < 0);
+    REQUIRE(chess::move_to_uci(result.best_move) != "b6b1");
+}
+
 TEST_CASE("search can be constrained to explicit legal root moves") {
     chess::Board board = chess::Board::start_position();
     chess::engine::SearchLimits limits;

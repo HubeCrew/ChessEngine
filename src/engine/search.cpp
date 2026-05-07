@@ -155,6 +155,9 @@ void add_search_diagnostics(SearchDiagnostics& lhs, const SearchDiagnostics& rhs
     ADD_DIAGNOSTIC(qsearch_stand_pat_nodes);
     ADD_DIAGNOSTIC(see_calls);
     ADD_DIAGNOSTIC(move_gives_check_calls);
+    ADD_DIAGNOSTIC(lazy_smp_helper_results);
+    ADD_DIAGNOSTIC(lazy_smp_helper_fallbacks);
+    ADD_DIAGNOSTIC(bad_capture_root_filter);
 #undef ADD_DIAGNOSTIC
 }
 
@@ -278,6 +281,18 @@ bool is_quiet_history_move(const Move& move) {
 
 bool is_mate_score(int score) {
     return std::abs(score) > kMateScore - kMateWindow;
+}
+
+bool is_decisive_score(int score) {
+    return std::abs(score) > 2'000 || is_mate_score(score);
+}
+
+int root_order_score(const RootMoveInfo& root_move) {
+    if (!root_move.bad_capture || is_decisive_score(root_move.score)) {
+        return root_move.score;
+    }
+    const int see_loss = std::max(0, -root_move.see_score);
+    return root_move.score - std::min(700, 120 + see_loss);
 }
 
 int non_pawn_material(const Board& board, Color side) {
@@ -897,7 +912,10 @@ private:
         }
 
         if (state.move.is_capture()) {
-            const bool see_needed = use_see_for_ordering_ && needs_see_for_loss_detection(board_, state.move);
+            const bool see_needed = use_see_for_ordering_
+                && (((state.move.flags & EnPassant) != 0)
+                    || needs_see_for_loss_detection(board_, state.move)
+                    || capture_target_is_defended(board_, state.move));
             const int exchange_score = see_needed
                 ? see(board_, state.move)
                 : cheap_capture_exchange_score(board_, state.move);
@@ -1279,16 +1297,17 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
         SearchResult candidate = helper_search.future.get();
         merge_history_from(*helper_search.helper, workers);
         add_search_diagnostics(total_diagnostics, candidate.diagnostics);
-        const bool candidate_is_better = is_valid_move_shape(candidate.best_move)
-            && (candidate.depth > best.depth
-                || (candidate.depth == best.depth && candidate.nodes > best.nodes));
+        ++total_diagnostics.lazy_smp_helper_results;
+        const bool candidate_is_fallback = !is_valid_move_shape(best.best_move)
+            && is_valid_move_shape(candidate.best_move);
         const std::uint64_t previous_best_nodes = best.nodes;
         const std::uint64_t previous_best_qnodes = best.qnodes;
         const std::uint64_t previous_best_tt_hits = best.tt_hits;
         best.nodes += candidate.nodes;
         best.qnodes += candidate.qnodes;
         best.tt_hits += candidate.tt_hits;
-        if (candidate_is_better) {
+        if (candidate_is_fallback) {
+            ++total_diagnostics.lazy_smp_helper_fallbacks;
             const std::uint64_t total_nodes = previous_best_nodes + candidate.nodes;
             const std::uint64_t total_qnodes = previous_best_qnodes + candidate.qnodes;
             const std::uint64_t total_tt_hits = previous_best_tt_hits + candidate.tt_hits;
@@ -1796,15 +1815,36 @@ void Searcher::finish_root_iteration() {
             ? root_move.score
             : (root_move.average_score * 3 + root_move.score) / 4;
     }
+    const auto raw_best = std::max_element(root_moves_.begin(), root_moves_.end(), [](const RootMoveInfo& lhs, const RootMoveInfo& rhs) {
+        if (lhs.searched != rhs.searched) {
+            return !lhs.searched && rhs.searched;
+        }
+        return lhs.score < rhs.score;
+    });
+    const Move raw_best_move = raw_best != root_moves_.end() ? raw_best->move : Move{};
+    const bool raw_best_bad_capture = raw_best != root_moves_.end() && raw_best->searched && raw_best->bad_capture;
     std::stable_sort(root_moves_.begin(), root_moves_.end(), [](const RootMoveInfo& lhs, const RootMoveInfo& rhs) {
         if (lhs.searched != rhs.searched) {
             return lhs.searched;
+        }
+        const int lhs_order_score = root_order_score(lhs);
+        const int rhs_order_score = root_order_score(rhs);
+        if (lhs_order_score != rhs_order_score) {
+            return lhs_order_score > rhs_order_score;
+        }
+        if (lhs.bad_capture != rhs.bad_capture) {
+            return !lhs.bad_capture;
         }
         if (lhs.score != rhs.score) {
             return lhs.score > rhs.score;
         }
         return lhs.effort > rhs.effort;
     });
+    if (raw_best_bad_capture
+        && !root_moves_.empty()
+        && !same_move_identity(raw_best_move, root_moves_.front().move)) {
+        ++diagnostics_.bad_capture_root_filter;
+    }
     sync_root_move_list();
 }
 
@@ -1831,6 +1871,10 @@ int Searcher::root_search(Board& board, int depth, int alpha, int beta) {
         const Color moving_side = board.side_to_move();
         const Piece moved_piece = board.piece_at(move.from);
         const Piece captured_piece = captured_piece_for(board, move);
+        root_move.see_score = move.is_capture() && !move.is_promotion()
+            ? static_exchange_with_diagnostics(board, move)
+            : 0;
+        root_move.bad_capture = move.is_capture() && !move.is_promotion() && root_move.see_score < 0;
         const UndoState undo = board.make_move(move);
         if (!move_is_legal_after_make(board, moving_side)) {
             ++diagnostics_.illegal_pseudo_moves;
@@ -2423,7 +2467,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
         Move{},
         continuation_contexts,
         ply,
-        false,
+        true,
         history_,
         low_ply_history_,
         capture_history_,
@@ -2445,6 +2489,7 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
             const bool capture_needs_check_status = move.is_capture()
                 && !move.is_promotion()
                 && (stand_pat + immediate_capture_gain(board, move) + kDeltaPruningMargin <= alpha
+                    || picked.see_known
                     || needs_see_for_loss_detection(board, move));
             if (capture_needs_check_status) {
                 ++diagnostics_.move_gives_check_calls;
@@ -2455,7 +2500,6 @@ int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
                     continue;
                 }
                 if (!gives_check
-                    && needs_see_for_loss_detection(board, move)
                     && (picked.see_known ? picked.see_score : static_exchange_with_diagnostics(board, move)) < 0) {
                     continue;
                 }

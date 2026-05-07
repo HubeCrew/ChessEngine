@@ -395,6 +395,9 @@ chess::engine::SearchDiagnostics add_diagnostics(
     lhs.qsearch_stand_pat_nodes += rhs.qsearch_stand_pat_nodes;
     lhs.see_calls += rhs.see_calls;
     lhs.move_gives_check_calls += rhs.move_gives_check_calls;
+    lhs.lazy_smp_helper_results += rhs.lazy_smp_helper_results;
+    lhs.lazy_smp_helper_fallbacks += rhs.lazy_smp_helper_fallbacks;
+    lhs.bad_capture_root_filter += rhs.bad_capture_root_filter;
     return lhs;
 }
 
@@ -431,7 +434,10 @@ void print_diagnostics_summary(const chess::engine::SearchDiagnostics& diagnosti
         << "  qsearch_in_check_nodes " << diagnostics.qsearch_in_check_nodes << '\n'
         << "  qsearch_stand_pat_nodes " << diagnostics.qsearch_stand_pat_nodes << '\n'
         << "  see_calls " << diagnostics.see_calls << '\n'
-        << "  move_gives_check_calls " << diagnostics.move_gives_check_calls << '\n';
+        << "  move_gives_check_calls " << diagnostics.move_gives_check_calls << '\n'
+        << "  lazy_smp_helper_results " << diagnostics.lazy_smp_helper_results << '\n'
+        << "  lazy_smp_helper_fallbacks " << diagnostics.lazy_smp_helper_fallbacks << '\n'
+        << "  bad_capture_root_filter " << diagnostics.bad_capture_root_filter << '\n';
 }
 
 double ns_to_ms(std::uint64_t ns) {
@@ -483,7 +489,10 @@ void print_profile_summary(const chess::engine::SearchDiagnostics& diagnostics, 
         << " lmp=" << diagnostics.late_move_prunes
         << " lmr=" << diagnostics.lmr_reductions
         << " singular=" << diagnostics.singular_extensions << '/' << diagnostics.singular_extension_attempts
-        << " correction_updates=" << diagnostics.correction_history_updates << '\n'
+        << " correction_updates=" << diagnostics.correction_history_updates
+        << " bad_capture_root_filter=" << diagnostics.bad_capture_root_filter
+        << " lazy_smp_helpers=" << diagnostics.lazy_smp_helper_results
+        << " lazy_smp_fallbacks=" << diagnostics.lazy_smp_helper_fallbacks << '\n'
         << "  dirty_squares_avg " << average_ns(diagnostics.nnue_dirty_squares, diagnostics.nnue_accumulator_update_attempts)
         << " attackers_before_avg " << average_ns(diagnostics.nnue_dirty_attackers_before, diagnostics.nnue_accumulator_update_attempts)
         << " attackers_after_avg " << average_ns(diagnostics.nnue_dirty_attackers_after, diagnostics.nnue_accumulator_update_attempts) << '\n'

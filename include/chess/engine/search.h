@@ -95,6 +95,9 @@ struct SearchDiagnostics {
     std::uint64_t qsearch_stand_pat_nodes = 0;
     std::uint64_t see_calls = 0;
     std::uint64_t move_gives_check_calls = 0;
+    std::uint64_t lazy_smp_helper_results = 0;
+    std::uint64_t lazy_smp_helper_fallbacks = 0;
+    std::uint64_t bad_capture_root_filter = 0;
 };
 
 struct SearchResult {
@@ -126,6 +129,8 @@ struct RootMoveInfo {
     std::uint64_t nodes = 0;
     std::uint64_t effort = 0;
     bool searched = false;
+    bool bad_capture = false;
+    int see_score = 0;
     std::vector<Move> principal_variation;
 };
 
