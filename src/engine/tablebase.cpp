@@ -212,9 +212,12 @@ void clear() {
 #ifdef CHESSENGINE_HAS_FATHOM
     std::lock_guard lock(g_tablebase_mutex);
     tb_free();
-#endif
     g_initialized = false;
     g_path.clear();
+#else
+    g_initialized = false;
+    g_path.clear();
+#endif
 }
 
 bool probeable(const Board& board, bool root_probe) {

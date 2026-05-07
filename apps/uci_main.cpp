@@ -1,7 +1,7 @@
-#include <iostream>
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
+#include <iostream>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -290,10 +290,26 @@ int main() {
         }
         search_running.store(true, std::memory_order_relaxed);
         search_thread = std::thread([&searcher, &output_mutex, search_board, limits, &search_running]() mutable {
-            const chess::engine::SearchResult result = searcher.search(search_board, limits);
-            {
-                std::lock_guard lock(output_mutex);
-                print_search_result(result);
+            try {
+                const chess::engine::SearchResult result = searcher.search(search_board, limits);
+                {
+                    std::lock_guard lock(output_mutex);
+                    print_search_result(result);
+                }
+            } catch (const std::exception& error) {
+                {
+                    std::lock_guard lock(output_mutex);
+                    std::cout << "info string search error: " << error.what() << '\n';
+                    std::cout << "bestmove 0000\n";
+                }
+                std::cerr << "search error: " << error.what() << '\n';
+            } catch (...) {
+                {
+                    std::lock_guard lock(output_mutex);
+                    std::cout << "info string search error: non-standard exception\n";
+                    std::cout << "bestmove 0000\n";
+                }
+                std::cerr << "search error: non-standard exception\n";
             }
             search_running.store(false, std::memory_order_relaxed);
         });

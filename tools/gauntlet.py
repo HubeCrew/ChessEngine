@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -72,13 +73,16 @@ class UciEngine:
         self.process: subprocess.Popen[str] | None = None
         self.lines: queue.Queue[str | None] = queue.Queue()
         self.reader: threading.Thread | None = None
+        self.stderr_reader: threading.Thread | None = None
+        self.stdout_tail: deque[str] = deque(maxlen=80)
+        self.stderr_tail: deque[str] = deque(maxlen=120)
 
     def start(self) -> None:
         self.process = subprocess.Popen(
             self.config.command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
         )
@@ -86,6 +90,9 @@ class UciEngine:
             raise UciError(f"{self.config.name}: failed to open engine pipes")
         self.reader = threading.Thread(target=self._read_stdout, daemon=True)
         self.reader.start()
+        if self.process.stderr is not None:
+            self.stderr_reader = threading.Thread(target=self._read_stderr, daemon=True)
+            self.stderr_reader.start()
         self._send("uci")
         self._read_until("uciok", self.protocol_timeout)
         if self.config.hash_mb > 0:
@@ -160,7 +167,7 @@ class UciEngine:
 
     def _send(self, command: str) -> None:
         if self.process is None or self.process.stdin is None or self.process.poll() is not None:
-            raise UciError(f"{self.config.name}: engine is not running")
+            raise self._engine_error("engine is not running")
         self.process.stdin.write(command + "\n")
         self.process.stdin.flush()
 
@@ -173,27 +180,46 @@ class UciEngine:
 
     def _readline(self, deadline: float) -> str:
         if self.process is None:
-            raise UciError(f"{self.config.name}: engine is not running")
+            raise self._engine_error("engine is not running")
         if self.process.poll() is not None:
-            raise UciError(f"{self.config.name}: engine exited with code {self.process.returncode}")
+            raise self._engine_error(f"engine exited with code {self.process.returncode}")
 
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise UciError(f"{self.config.name}: protocol timeout")
+            raise self._engine_error("protocol timeout")
         try:
             line = self.lines.get(timeout=remaining)
         except queue.Empty:
-            raise UciError(f"{self.config.name}: protocol timeout")
+            raise self._engine_error("protocol timeout")
         if line is None:
-            raise UciError(f"{self.config.name}: engine closed stdout")
+            raise self._engine_error("engine closed stdout")
         return line
 
     def _read_stdout(self) -> None:
         assert self.process is not None
         assert self.process.stdout is not None
         for line in self.process.stdout:
-            self.lines.put(line.strip())
+            stripped = line.strip()
+            self.stdout_tail.append(stripped)
+            self.lines.put(stripped)
         self.lines.put(None)
+
+    def _read_stderr(self) -> None:
+        assert self.process is not None
+        assert self.process.stderr is not None
+        for line in self.process.stderr:
+            self.stderr_tail.append(line.rstrip())
+
+    def _engine_error(self, message: str) -> UciError:
+        exit_code = None if self.process is None else self.process.poll()
+        details = [f"{self.config.name}: {message}"]
+        if exit_code is not None:
+            details.append(f"exit_code={exit_code}")
+        if self.stderr_tail:
+            details.append("stderr_tail=" + " | ".join(self.stderr_tail))
+        if self.stdout_tail:
+            details.append("stdout_tail=" + " | ".join(self.stdout_tail))
+        return UciError("; ".join(details))
 
 
 def parse_command(value: str) -> list[str]:

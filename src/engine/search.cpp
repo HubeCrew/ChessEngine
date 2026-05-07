@@ -1246,7 +1246,10 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
         helper->time_manager_.set_config(time_manager_.config());
         helper->thread_count_ = 1;
         helper->multi_pv_ = multi_pv_;
-        helper->syzygy_probe_depth_ = syzygy_probe_depth_;
+        // Fathom owns process-global probing state. Keep Syzygy probing on the
+        // main worker only; helper threads still benefit from root/TT results
+        // without contending on tablebase state during lazy SMP search.
+        helper->syzygy_probe_depth_ = kMaxPly;
         helper->own_book_ = false;
         helper->best_book_move_ = best_book_move_;
         helper->book_depth_ = book_depth_;
@@ -1339,7 +1342,11 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
     }
 
     const int max_depth = std::min(std::max(1, limits.depth), kMaxPly - 1);
-    if (std::optional<tablebase::RootProbeResult> tb_root = tablebase::probe_root(board)) {
+    const bool main_worker = worker_index_ == 0;
+    const std::optional<tablebase::RootProbeResult> tb_root = main_worker
+        ? tablebase::probe_root(board)
+        : std::nullopt;
+    if (tb_root) {
         ++diagnostics_.tablebase_root_probes;
         ++diagnostics_.tablebase_root_hits;
         result.best_move = tb_root->best_move;
@@ -1365,7 +1372,7 @@ SearchResult Searcher::search_single(Board& board, const SearchLimits& limits, b
         );
         result.diagnostics = diagnostics_;
         return result;
-    } else if (tablebase::initialized() && tablebase::probeable(board, true)) {
+    } else if (main_worker && tablebase::initialized() && tablebase::probeable(board, true)) {
         ++diagnostics_.tablebase_root_probes;
     }
 
@@ -2352,6 +2359,9 @@ int Searcher::negamax(
 }
 
 int Searcher::quiescence(Board& board, int ply, int alpha, int beta, int qply) {
+    if (ply >= kMaxPly - 1) {
+        return evaluate_with_diagnostics(board, kMaxPly - 1);
+    }
     if (should_stop()) {
         return evaluate_with_diagnostics(board, ply);
     }
