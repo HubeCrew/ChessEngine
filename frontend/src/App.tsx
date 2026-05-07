@@ -22,6 +22,14 @@ type Piece = {
   code: string;
   color: Color;
   label: string;
+  kind: PieceKind;
+};
+
+type PieceKind = "p" | "n" | "b" | "r" | "q" | "k";
+
+type MaterialSide = {
+  total: number;
+  captured: PieceKind[];
 };
 
 type SetupForm = {
@@ -48,6 +56,35 @@ const pieceNames: Record<string, string> = {
   q: "Q",
   k: "K"
 };
+
+const pieceAltNames: Record<PieceKind, string> = {
+  p: "pawn",
+  n: "knight",
+  b: "bishop",
+  r: "rook",
+  q: "queen",
+  k: "king"
+};
+
+const pieceValues: Record<PieceKind, number> = {
+  p: 1,
+  n: 3,
+  b: 3,
+  r: 5,
+  q: 9,
+  k: 0
+};
+
+const startingPieces: Record<PieceKind, number> = {
+  p: 8,
+  n: 2,
+  b: 2,
+  r: 2,
+  q: 1,
+  k: 1
+};
+
+const materialOrder: PieceKind[] = ["q", "r", "b", "n", "p"];
 
 const optionGroups = [
   {
@@ -119,6 +156,7 @@ function App() {
 
   const form = useSetupForm(state);
   const boardPieces = useMemo(() => parseFen(state?.fen ?? ""), [state?.fen]);
+  const material = useMemo(() => calculateMaterial(boardPieces), [boardPieces]);
   const lastMove = state?.moves.at(-1);
   const humanTurn = state?.status === "playing" && state.turn === state.humanColor && !state.engineSearching;
 
@@ -222,6 +260,7 @@ function App() {
           <BoardPanel
             state={state}
             pieces={boardPieces}
+            material={material}
             flipped={flipped}
             selected={selected}
             lastMove={lastMove?.uci}
@@ -286,6 +325,7 @@ function Header({
 function BoardPanel({
   state,
   pieces,
+  material,
   flipped,
   selected,
   lastMove,
@@ -295,6 +335,7 @@ function BoardPanel({
 }: {
   state: GameState | null;
   pieces: Map<string, Piece>;
+  material: { white: MaterialSide; black: MaterialSide; diff: number };
   flipped: boolean;
   selected: string | null;
   lastMove?: string;
@@ -309,7 +350,8 @@ function BoardPanel({
         <PlayerClock label="Black" active={state?.turn === "black"} clock={state?.blackClockMs ?? 0} side="black" engine={state?.engineColor === "black"} />
         <PlayerClock label="White" active={state?.turn === "white"} clock={state?.whiteClockMs ?? 0} side="white" engine={state?.engineColor === "white"} />
       </div>
-      <div className="grid aspect-square w-full grid-cols-8 overflow-hidden rounded-lg border border-coal/20 bg-coal/20">
+      <MaterialPanel material={material} />
+      <div className="mt-4 grid aspect-square w-full grid-cols-8 grid-rows-[repeat(8,minmax(0,1fr))] overflow-hidden rounded-lg border border-coal/20 bg-coal/20">
         {squares.map((square) => {
           const piece = pieces.get(square);
           const isLight = squareIsLight(square);
@@ -355,7 +397,14 @@ function BoardPanel({
 }
 
 function PieceView({ piece }: { piece: Piece }) {
-  return <span className={`piece-disc piece-${piece.color}`}>{piece.label}</span>;
+  return (
+    <img
+      className="piece-art"
+      src={pieceAsset(piece)}
+      alt={`${piece.color} ${pieceAltNames[piece.kind]}`}
+      draggable={false}
+    />
+  );
 }
 
 function Coordinate({ square, flipped }: { square: string; flipped: boolean }) {
@@ -379,6 +428,47 @@ function PlayerClock({ label, clock, active, side, engine }: { label: string; cl
         <div className="text-xs uppercase tracking-[0.12em] text-coal/48">{engine ? "Engine" : "Human"} {side}</div>
       </div>
       <div className="font-mono text-xl font-bold tabular-nums text-ink">{formatClock(clock)}</div>
+    </div>
+  );
+}
+
+function MaterialPanel({ material }: { material: { white: MaterialSide; black: MaterialSide; diff: number } }) {
+  return (
+    <div className="grid gap-2 rounded-md border border-line bg-paper/72 px-3 py-3">
+      <div className="grid grid-cols-[1fr_auto] items-center gap-3">
+        <div className="text-xs font-bold uppercase tracking-[0.14em] text-coal/48">Material</div>
+        <div className="font-mono text-sm font-bold tabular-nums text-ink">
+          {material.diff === 0 ? "Equal" : `${material.diff > 0 ? "White" : "Black"} +${Math.abs(material.diff)}`}
+        </div>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <CapturedLine label="White has" color="black" pieces={material.white.captured} total={material.white.total} />
+        <CapturedLine label="Black has" color="white" pieces={material.black.captured} total={material.black.total} />
+      </div>
+    </div>
+  );
+}
+
+function CapturedLine({ label, color, pieces, total }: { label: string; color: Color; pieces: PieceKind[]; total: number }) {
+  return (
+    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2 rounded border border-line/70 bg-white/54 px-2 py-2">
+      <div className="text-xs font-semibold text-coal/56">{label}</div>
+      <div className="flex min-h-7 flex-wrap items-center gap-1">
+        {pieces.length ? (
+          pieces.map((kind, index) => (
+            <img
+              key={`${kind}-${index}`}
+              className="h-6 w-6 object-contain drop-shadow-sm"
+              src={pieceAsset({ code: color === "white" ? kind.toUpperCase() : kind, color, kind, label: pieceNames[kind] })}
+              alt={`captured ${color} ${pieceAltNames[kind]}`}
+              draggable={false}
+            />
+          ))
+        ) : (
+          <span className="font-mono text-xs text-coal/38">none</span>
+        )}
+      </div>
+      <div className="font-mono text-xs font-bold tabular-nums text-ink">{total}</div>
     </div>
   );
 }
@@ -576,7 +666,12 @@ function PromotionDialog({ color, moves, onPick, onCancel }: { color: Color; mov
               onClick={() => onPick(moves.find((move) => move.endsWith(piece))!)}
               className="grid aspect-square place-items-center rounded-md border border-line bg-white transition duration-200 active:scale-[0.98]"
             >
-              <span className={`piece-disc piece-${color}`}>{pieceNames[piece]}</span>
+              <img
+                className="piece-art"
+                src={pieceAsset({ code: color === "white" ? piece.toUpperCase() : piece, color, kind: piece as PieceKind, label: pieceNames[piece] })}
+                alt={`${color} ${pieceAltNames[piece as PieceKind]}`}
+                draggable={false}
+              />
             </button>
           ))}
         </div>
@@ -782,15 +877,52 @@ function parseFen(fen: string): Map<string, Piece> {
       }
       const file = String.fromCharCode(97 + fileIndex);
       const lower = char.toLowerCase();
+      const kind = lower as PieceKind;
       pieces.set(`${file}${rank}`, {
         code: char,
         color: char === lower ? "black" : "white",
-        label: pieceNames[lower] ?? lower.toUpperCase()
+        label: pieceNames[lower] ?? lower.toUpperCase(),
+        kind
       });
       fileIndex += 1;
     }
   }
   return pieces;
+}
+
+function calculateMaterial(pieces: Map<string, Piece>): { white: MaterialSide; black: MaterialSide; diff: number } {
+  const counts: Record<Color, Record<PieceKind, number>> = {
+    white: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 },
+    black: { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 }
+  };
+  for (const piece of pieces.values()) {
+    counts[piece.color][piece.kind] += 1;
+  }
+  const whiteTotal = materialTotal(counts.white);
+  const blackTotal = materialTotal(counts.black);
+  return {
+    white: {
+      total: whiteTotal,
+      captured: capturedPieces(counts.black)
+    },
+    black: {
+      total: blackTotal,
+      captured: capturedPieces(counts.white)
+    },
+    diff: whiteTotal - blackTotal
+  };
+}
+
+function materialTotal(counts: Record<PieceKind, number>): number {
+  return materialOrder.reduce((total, kind) => total + counts[kind] * pieceValues[kind], 0);
+}
+
+function capturedPieces(counts: Record<PieceKind, number>): PieceKind[] {
+  return materialOrder.flatMap((kind) => Array(Math.max(0, startingPieces[kind] - counts[kind])).fill(kind) as PieceKind[]);
+}
+
+function pieceAsset(piece: Piece): string {
+  return `/pieces/${piece.color === "white" ? "w" : "b"}${piece.kind}.svg`;
 }
 
 function boardSquares(flipped: boolean): string[] {
