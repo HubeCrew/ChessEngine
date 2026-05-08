@@ -283,16 +283,8 @@ bool is_mate_score(int score) {
     return std::abs(score) > kMateScore - kMateWindow;
 }
 
-bool is_decisive_score(int score) {
-    return std::abs(score) > 2'000 || is_mate_score(score);
-}
-
 int root_order_score(const RootMoveInfo& root_move) {
-    if (!root_move.bad_capture || is_decisive_score(root_move.score)) {
-        return root_move.score;
-    }
-    const int see_loss = std::max(0, -root_move.see_score);
-    return root_move.score - std::min(700, 120 + see_loss);
+    return root_move.score;
 }
 
 int non_pawn_material(const Board& board, Color side) {
@@ -1261,6 +1253,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
         helper->search_extensions_ = search_extensions_;
         helper->profiling_ = profiling_;
         helper->eval_type_ = eval_type_;
+        helper->hybrid_nnue_weight_percent_ = hybrid_nnue_weight_percent_;
         helper->time_manager_.set_config(time_manager_.config());
         helper->thread_count_ = 1;
         helper->multi_pv_ = multi_pv_;
@@ -1648,6 +1641,14 @@ EvalType Searcher::eval_type() const {
     return eval_type_;
 }
 
+void Searcher::set_hybrid_nnue_weight(int weight_percent) {
+    hybrid_nnue_weight_percent_ = std::clamp(weight_percent, 0, 100);
+}
+
+int Searcher::hybrid_nnue_weight() const {
+    return hybrid_nnue_weight_percent_;
+}
+
 bool Searcher::load_nnue(const std::filesystem::path& path, std::string* error) {
     return nnue_->load(path, error);
 }
@@ -1672,11 +1673,11 @@ int Searcher::evaluate_nnue_white_perspective(const Board& board) const {
 }
 
 int Searcher::evaluate_white_perspective(const Board& board) const {
-    return chess::engine::evaluate_white_perspective(board, EvaluationConfig{eval_type_, nnue_.get(), 50});
+    return chess::engine::evaluate_white_perspective(board, EvaluationConfig{eval_type_, nnue_.get(), hybrid_nnue_weight_percent_});
 }
 
 int Searcher::evaluate_side_to_move(const Board& board) const {
-    return evaluate(board, EvaluationConfig{eval_type_, nnue_.get(), 50});
+    return evaluate(board, EvaluationConfig{eval_type_, nnue_.get(), hybrid_nnue_weight_percent_});
 }
 
 void Searcher::set_move_overhead(std::chrono::milliseconds overhead) {
@@ -2579,7 +2580,8 @@ int Searcher::evaluate_with_diagnostics(const Board& board, int ply) {
             diagnostics_.nnue_stack_evaluation_ns += elapsed_ns_since(nnue_start);
             merge_nnue_profile(diagnostics_, nnue_profile);
         }
-        const int blended = (classical + nnue) / 2;
+        const int nnue_weight = std::clamp(hybrid_nnue_weight_percent_, 0, 100);
+        const int blended = (classical * (100 - nnue_weight) + nnue * nnue_weight) / 100;
         return finish(board.side_to_move() == Color::White ? blended : -blended);
     }
     const auto fallback_start = profiling_ ? ProfileClock::now() : ProfileClock::time_point{};

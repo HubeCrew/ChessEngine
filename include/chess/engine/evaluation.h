@@ -14,7 +14,7 @@ enum class EvalType {
 struct EvaluationConfig {
     EvalType type = EvalType::Classical;
     const nnue::Network* nnue = nullptr;
-    int hybrid_nnue_weight_percent = 50;
+    int hybrid_nnue_weight_percent = 25;
 };
 
 struct EvalTrace {

@@ -65,6 +65,7 @@ def main() -> int:
         "id name ChessEngine 0.1",
         "option name Hash type spin default 64 min 1 max 4096",
         "option name SearchExtensions type check default true",
+        "option name HybridNnueWeight type spin default 25 min 0 max 100",
         "option name SyzygyPath type string default <empty>",
         "option name SyzygyProbeDepth type spin default 1 min 0 max 127",
         "option name OwnBook type check default true",

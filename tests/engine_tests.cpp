@@ -810,6 +810,8 @@ TEST_CASE("NNUE model loading and opt-in searcher evaluation are safe") {
     REQUIRE(searcher.nnue_loaded());
     REQUIRE(searcher.evaluate_white_perspective(board) == -75);
     searcher.set_eval_type(chess::engine::EvalType::Hybrid);
+    REQUIRE(searcher.evaluate_white_perspective(board) == (classical * 75 - 75 * 25) / 100);
+    searcher.set_hybrid_nnue_weight(50);
     REQUIRE(searcher.evaluate_white_perspective(board) == (classical - 75) / 2);
     REQUIRE(std::filesystem::remove(second_path));
 }

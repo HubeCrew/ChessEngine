@@ -220,6 +220,8 @@ public:
     void stop();
     void set_eval_type(EvalType type);
     [[nodiscard]] EvalType eval_type() const;
+    void set_hybrid_nnue_weight(int weight_percent);
+    [[nodiscard]] int hybrid_nnue_weight() const;
     [[nodiscard]] bool load_nnue(const std::filesystem::path& path, std::string* error = nullptr);
     void clear_nnue();
     [[nodiscard]] bool nnue_loaded() const;
@@ -254,6 +256,7 @@ private:
     bool search_extensions_ = true;
     bool profiling_ = false;
     EvalType eval_type_ = EvalType::Classical;
+    int hybrid_nnue_weight_percent_ = 25;
     std::shared_ptr<nnue::Network> nnue_;
     SearchDiagnostics diagnostics_{};
     std::shared_ptr<TranspositionTable> tt_;

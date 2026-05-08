@@ -40,6 +40,7 @@ ENGINE_OPTIONS: dict[str, dict[str, Any]] = {
     "NullMovePruning": {"type": "check", "default": True},
     "SearchExtensions": {"type": "check", "default": True},
     "EvalType": {"type": "combo", "default": "classical", "vars": ["classical", "nnue", "hybrid"]},
+    "HybridNnueWeight": {"type": "spin", "default": 25, "min": 0, "max": 100},
     "NnueFile": {"type": "string", "default": ""},
 }
 

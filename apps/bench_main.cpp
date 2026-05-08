@@ -37,6 +37,7 @@ struct Options {
     bool null_move_pruning = true;
     bool search_extensions = true;
     chess::engine::EvalType eval_type = chess::engine::EvalType::Classical;
+    int hybrid_nnue_weight = 25;
     std::filesystem::path nnue_path;
     std::vector<std::filesystem::path> epd_paths;
 };
@@ -68,7 +69,7 @@ struct ProgressState {
 };
 
 void print_usage(std::ostream& out) {
-    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--threads N] [--eval-type classical|nnue|hybrid] [--nnue PATH] [--disable-null-move] [--disable-extensions] [--progress] [--diagnostics] [--profile] [--csv]\n";
+    out << "usage: chess_bench [--suite bench|tactics|all|epd] [--epd PATH] [--depth N] [--hash MB] [--threads N] [--eval-type classical|nnue|hybrid] [--hybrid-nnue-weight 0..100] [--nnue PATH] [--disable-null-move] [--disable-extensions] [--progress] [--diagnostics] [--profile] [--csv]\n";
 }
 
 SuiteSelection parse_suite(std::string_view value) {
@@ -140,6 +141,14 @@ Options parse_options(int argc, char** argv) {
                 throw std::invalid_argument("--eval-type requires a value");
             }
             options.eval_type = parse_eval_type(argv[index]);
+        } else if (arg == "--hybrid-nnue-weight") {
+            if (++index >= argc) {
+                throw std::invalid_argument("--hybrid-nnue-weight requires a value");
+            }
+            options.hybrid_nnue_weight = std::stoi(argv[index]);
+            if (options.hybrid_nnue_weight < 0 || options.hybrid_nnue_weight > 100) {
+                throw std::invalid_argument("--hybrid-nnue-weight must be between 0 and 100");
+            }
         } else if (arg == "--depth") {
             if (++index >= argc) {
                 throw std::invalid_argument("--depth requires a value");
@@ -527,6 +536,7 @@ int main(int argc, char** argv) {
         searcher.set_search_extensions(options.search_extensions);
         searcher.set_profiling(options.profile);
         searcher.set_eval_type(options.eval_type);
+        searcher.set_hybrid_nnue_weight(options.hybrid_nnue_weight);
         if (!options.nnue_path.empty()) {
             std::string error;
             if (!searcher.load_nnue(options.nnue_path, &error)) {

@@ -165,6 +165,8 @@ void apply_setoption(chess::engine::Searcher& searcher, std::istringstream& inpu
         searcher.set_search_extensions(parse_bool(value));
     } else if (name == "EvalType" && !value.empty()) {
         searcher.set_eval_type(parse_eval_type(value));
+    } else if (name == "HybridNnueWeight" && !value.empty()) {
+        searcher.set_hybrid_nnue_weight(std::stoi(value));
     } else if (name == "NnueFile") {
         if (value.empty()) {
             searcher.clear_nnue();
@@ -347,6 +349,7 @@ int main() {
                 std::cout << "option name NullMovePruning type check default true\n";
                 std::cout << "option name SearchExtensions type check default true\n";
                 std::cout << "option name EvalType type combo default classical var classical var nnue var hybrid\n";
+                std::cout << "option name HybridNnueWeight type spin default 25 min 0 max 100\n";
                 std::cout << "option name NnueFile type string default <empty>\n";
                 std::cout << "uciok\n";
             } else if (command == "isready") {

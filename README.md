@@ -113,7 +113,7 @@ position startpos
 go depth 4
 ```
 
-`EvalType` supports `classical`, `nnue`, and `hybrid`. Classical remains the default. If `nnue` or `hybrid` is selected without a successfully loaded network, the engine falls back to the classical evaluator.
+`EvalType` supports `classical`, `nnue`, and `hybrid`. Classical remains the default. If `nnue` or `hybrid` is selected without a successfully loaded network, the engine falls back to the classical evaluator. `HybridNnueWeight` controls the NNUE share of the hybrid score from `0` to `100`; the default is `25`.
 
 Create and export a first large local NNUE model:
 
@@ -417,7 +417,8 @@ python3 tools/build_stockfish_tuning_suite.py \
   --epd runs/benchmarks/stockfish-tuning/full-threats-1024-stockfish1850.epd \
   --depth 5 \
   --hash 64 \
-  --eval-type nnue \
+  --eval-type hybrid \
+  --hybrid-nnue-weight 25 \
   --nnue runs/nnue/kaggle/v7-halfka-v2-hm-full-threats-1024x31x32-001/best.nnue \
   --threads 1 \
   --csv \
