@@ -402,6 +402,31 @@ python3 tools/extract_postmortem_suite.py \
 
 This is the preferred way to turn repeated gauntlet failure classes into cheap local experiments. Keep generated focus suites outside the repo unless they are deliberately promoted to stable test data.
 
+Build a broader Stockfish-reference tuning suite from a completed postmortem:
+
+```bash
+python3 tools/build_stockfish_tuning_suite.py \
+  --events runs/postmortems/full-threats-1024-vs-stockfish1850-depth16-confirm20/events.csv \
+  --positions runs/postmortems/full-threats-1024-vs-stockfish1850-depth16-confirm20/positions.epd \
+  --output-dir runs/benchmarks/stockfish-tuning \
+  --suite-name full-threats-1024-stockfish1850 \
+  --min-reference-delta 120 \
+  --max-positions 160
+./build-release/chess_bench \
+  --suite epd \
+  --epd runs/benchmarks/stockfish-tuning/full-threats-1024-stockfish1850.epd \
+  --depth 5 \
+  --hash 64 \
+  --eval-type nnue \
+  --nnue runs/nnue/kaggle/v7-halfka-v2-hm-full-threats-1024x31x32-001/best.nnue \
+  --threads 1 \
+  --csv \
+  --progress > runs/benchmarks/stockfish-tuning/full-threats-1024-stockfish1850-depth5.csv
+```
+
+The generated strict suite writes `bm` as the Stockfish/reference move and `am` as the played gauntlet move to avoid. It also writes an `-avoid.epd` suite that checks only whether the engine stops replaying the gauntlet blunder. Bucket-specific EPD files such as `engine-can-avoid`, `engine-prefers-played`, `negative-see`, and `bad-trade-sequence`, plus an index CSV and Markdown report, help target move-ordering, LMR, pruning, or eval changes without running a new gauntlet for every minor patch.
+`chess_bench` returns non-zero while any `bm`/`am` expectation fails, so keep the CSV output and treat the match count as the signal during tuning.
+
 Watch a gauntlet live in the browser:
 
 ```bash
