@@ -170,6 +170,14 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:chess_uci>
         )
         add_test(
+            NAME nnue_pairwise_ranker_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/nnue_pairwise_ranker_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/build_nnue_feature_cache.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/train_nnue.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/build_nnue_pairwise_dataset.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/train_nnue_ranker.py
+        )
+        add_test(
             NAME gauntlet_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/gauntlet_smoke_test.py
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/gauntlet.py

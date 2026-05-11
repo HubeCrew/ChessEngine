@@ -334,6 +334,64 @@ After training v9, compare it without a gauntlet:
   --progress > runs/benchmarks/stockfish-tuning/v9-20m-tactics-depth5.csv
 ```
 
+Fine-tune v9 for move choice instead of only static centipawn regression:
+
+```bash
+.venv/bin/python tools/build_nnue_pairwise_dataset.py \
+  --epd runs/benchmarks/stockfish-tuning/full-threats-1024-stockfish1850.epd \
+  --benchmark-results runs/benchmarks/stockfish-tuning/current-v9-20m-epoch54-strict-depth5.csv \
+  --output runs/nnue/lichess-v9-20m/tactical_pairs_train.csv \
+  --validation-output runs/nnue/lichess-v9-20m/tactical_pairs_validation.csv \
+  --validation-fraction 0.10 \
+  --extra-legal-negatives 2 \
+  --min-margin-cp 80 \
+  --max-margin-cp 3000 \
+  --seed 1
+
+.venv/bin/python tools/train_nnue_ranker.py \
+  --checkpoint runs/nnue/current.pt \
+  --pairs runs/nnue/lichess-v9-20m/tactical_pairs_train.csv \
+  --validation-pairs runs/nnue/lichess-v9-20m/tactical_pairs_validation.csv \
+  --output runs/nnue/lichess-v9-20m/v10-rank-ft-001.pt \
+  --export runs/nnue/lichess-v9-20m/v10-rank-ft-001.nnue \
+  --epochs 8 \
+  --batch-size 128 \
+  --learning-rate 0.00003 \
+  --ranking-weight 1.0 \
+  --value-weight 0.05 \
+  --margin-scale 1.0
+```
+
+`build_nnue_pairwise_dataset.py` converts EPD `bm`/`am` operations into child-position pairs: the `bm` child must score higher than each negative child from the side that made the move. Passing a `chess_bench --csv` file through `--benchmark-results` adds the engine's own missed `bestmove` as a hard negative, which targets the wrong moves the current model actually prefers. Margins are sharper than the clipped value labels: the tool derives them from `ref_delta`/`severity` comments when present and clamps them with `--min-margin-cp`/`--max-margin-cp`.
+
+For a non-test tactical training split, build pairs from generated postmortem or Lichess puzzle EPD files that are not the guardrail files you will score against. Use `--exclude-epd data/suites/lichess_tactics_250.epd` when the source may overlap a held-out suite. Fine-tune from `runs/nnue/current.pt` or the latest v9 `best.pt`; do not train the ranker from scratch.
+
+Evaluate a rank-fine-tuned candidate:
+
+```bash
+./build-release/chess_bench \
+  --suite epd \
+  --epd runs/benchmarks/stockfish-tuning/full-threats-1024-stockfish1850.epd \
+  --depth 5 \
+  --hash 64 \
+  --eval-type nnue \
+  --nnue runs/nnue/lichess-v9-20m/v10-rank-ft-001.nnue \
+  --threads 1 \
+  --csv \
+  --progress > runs/benchmarks/stockfish-tuning/v10-rank-ft-001-strict-depth5.csv
+
+./build-release/chess_bench \
+  --suite epd \
+  --epd data/suites/lichess_tactics_250.epd \
+  --depth 5 \
+  --hash 64 \
+  --eval-type nnue \
+  --nnue runs/nnue/lichess-v9-20m/v10-rank-ft-001.nnue \
+  --threads 1 \
+  --csv \
+  --progress > runs/benchmarks/stockfish-tuning/v10-rank-ft-001-lichess-tactics-250-depth5.csv
+```
+
 For apples-to-apples comparison against the older one-layer NNUE baseline:
 
 ```bash
