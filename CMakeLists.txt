@@ -141,6 +141,11 @@ if(BUILD_TESTING)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/import_kaggle_stockfish_nnue.py
         )
         add_test(
+            NAME import_lichess_evaluations_smoke
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/import_lichess_evaluations_smoke_test.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/import_lichess_evaluations.py
+        )
+        add_test(
             NAME nnue_feature_cache_smoke
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/nnue_feature_cache_smoke_test.py
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/build_nnue_feature_cache.py

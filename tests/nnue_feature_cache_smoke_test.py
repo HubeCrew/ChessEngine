@@ -53,7 +53,7 @@ def main() -> int:
         validation_csv = root / "validation.csv"
         write_dataset(train_csv, POSITIONS[:4])
         write_dataset(validation_csv, POSITIONS[4:])
-        train_cache = root / "train_cache.pt"
+        train_cache = root / "train_cache.json"
         validation_cache = root / "validation_cache.pt"
         checkpoint = root / "model.pt"
         commands = [
@@ -66,6 +66,14 @@ def main() -> int:
                 str(train_cache),
                 "--progress-every",
                 "1",
+                "--feature-set",
+                "halfka-v2-hm-full-threats",
+                "--workers",
+                "2",
+                "--chunk-size",
+                "2",
+                "--shard-rows",
+                "2",
             ],
             [
                 sys.executable,
@@ -75,6 +83,12 @@ def main() -> int:
                 "--output",
                 str(validation_cache),
                 "--progress-every",
+                "1",
+                "--feature-set",
+                "halfka-v2-hm-full-threats",
+                "--workers",
+                "2",
+                "--chunk-size",
                 "1",
             ],
             [

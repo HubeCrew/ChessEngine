@@ -128,6 +128,38 @@ class CachedNnueDataset(Dataset):
         )
 
 
+def load_cache_manifest(path: Path) -> dict[str, object] | None:
+    if path.suffix.lower() != ".json":
+        return None
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("format") != "chessengine.nnue_feature_cache_shards":
+        return None
+    if not isinstance(manifest.get("shards"), list) or not manifest["shards"]:
+        raise ValueError(f"sharded cache manifest {path} has no shards")
+    return manifest
+
+
+def manifest_shard_paths(manifest_path: Path, manifest: dict[str, object]) -> list[Path]:
+    paths: list[Path] = []
+    for shard in manifest["shards"]:  # type: ignore[index]
+        if not isinstance(shard, dict) or "path" not in shard:
+            raise ValueError(f"invalid shard entry in {manifest_path}")
+        path = Path(str(shard["path"]))
+        if not path.is_absolute() and not path.exists():
+            path = manifest_path.parent / path
+        paths.append(path)
+    return paths
+
+
+def manifest_shard_rows(manifest: dict[str, object]) -> list[int]:
+    rows: list[int] = []
+    for shard in manifest["shards"]:  # type: ignore[index]
+        if not isinstance(shard, dict) or "rows" not in shard:
+            raise ValueError("invalid shard entry missing rows")
+        rows.append(int(shard["rows"]))
+    return rows
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a small HalfKP-style NNUE model from labeled CSV positions.")
     parser.add_argument("--resume", type=Path, help="Resume from a run checkpoint, usually <run-dir>/last.pt.")
@@ -563,6 +595,60 @@ def evaluate(
     }
 
 
+def train_one_loader(
+    model: NnueModel,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    loss_fn: nn.SmoothL1Loss,
+    args: argparse.Namespace,
+    epoch: int,
+    batch_offset: int,
+    batch_count: int,
+    row_offset: int,
+    train_rows_total: int,
+) -> tuple[float, int, int, int]:
+    total_loss = 0.0
+    total = 0
+    batches = 0
+    for local_batch_index, batch in enumerate(loader, start=1):
+        batch_index = batch_offset + local_batch_index
+        optimizer.zero_grad(set_to_none=True)
+        prediction = model(
+            batch.white,
+            batch.white_mask,
+            batch.black,
+            batch.black_mask,
+            batch.side_to_move,
+            batch.white_threat,
+            batch.white_threat_mask,
+            batch.black_threat,
+            batch.black_threat_mask,
+        )
+        loss = objective_loss(
+            prediction,
+            batch.target,
+            loss_fn,
+            args.loss_mode,
+            args.target_scale,
+            args.shaped_weight,
+        )
+        loss.backward()
+        optimizer.step()
+        batch_size = int(batch.target.numel())
+        total_loss += float(loss.detach()) * batch_size
+        total += batch_size
+        batches += 1
+        rows_done = row_offset + total
+        if batch_index % args.batch_progress_every == 0 or batch_index == batch_count:
+            print(
+                f"[train] epoch={epoch}/{args.epochs} batch={batch_index}/{batch_count} "
+                f"rows={rows_done}/{train_rows_total} loss={total_loss / max(1, total):.3f}",
+                file=sys.stderr,
+                flush=True,
+            )
+    return total_loss, total, batches, row_offset + total
+
+
 def main() -> int:
     args = parse_args()
     provided = provided_options(sys.argv[1:])
@@ -679,36 +765,60 @@ def main() -> int:
             "feature_count": feature_count_for(args.feature_set),
         }
     else:
-        train_dataset = CachedNnueDataset(args.train_cache, args.max_train_rows)
-        validation_dataset = CachedNnueDataset(args.validation_cache, args.max_validation_rows)
-        if train_dataset.feature_set != validation_dataset.feature_set:
+        train_manifest = load_cache_manifest(args.train_cache)
+        train_shard_paths: list[Path] = []
+        train_shard_rows: list[int] = []
+        if train_manifest is not None:
+            train_shard_paths = manifest_shard_paths(args.train_cache, train_manifest)
+            train_shard_rows = manifest_shard_rows(train_manifest)
+            train_feature_set = str(train_manifest.get("feature_set", FEATURE_SET_HALFKP))
+            train_feature_count = int(train_manifest.get("feature_count", feature_count_for(train_feature_set)))
+            train_rows_total = sum(train_shard_rows)
+            if args.max_train_rows > 0:
+                train_rows_total = min(train_rows_total, args.max_train_rows)
             print(
-                f"cache feature-set mismatch: train={train_dataset.feature_set} "
+                f"[train] using sharded train_cache={args.train_cache} shards={len(train_shard_paths)} "
+                f"rows={train_rows_total} feature_set={train_feature_set} feature_count={train_feature_count}",
+                file=sys.stderr,
+                flush=True,
+            )
+            train_dataset = None
+        else:
+            train_dataset = CachedNnueDataset(args.train_cache, args.max_train_rows)
+            train_feature_set = train_dataset.feature_set
+            train_feature_count = train_dataset.feature_count
+            train_rows_total = len(train_dataset)
+        validation_dataset = CachedNnueDataset(args.validation_cache, args.max_validation_rows)
+        if train_feature_set != validation_dataset.feature_set:
+            print(
+                f"cache feature-set mismatch: train={train_feature_set} "
                 f"validation={validation_dataset.feature_set}",
                 file=sys.stderr,
             )
             return 2
-        if train_dataset.feature_count != validation_dataset.feature_count:
+        if train_feature_count != validation_dataset.feature_count:
             print(
-                f"cache feature-count mismatch: train={train_dataset.feature_count} "
+                f"cache feature-count mismatch: train={train_feature_count} "
                 f"validation={validation_dataset.feature_count}",
                 file=sys.stderr,
             )
             return 2
         if args.feature_set is None:
-            args.feature_set = train_dataset.feature_set
-        elif args.feature_set != train_dataset.feature_set:
+            args.feature_set = train_feature_set
+        elif args.feature_set != train_feature_set:
             print(
-                f"--feature-set {args.feature_set} does not match cache feature_set {train_dataset.feature_set}",
+                f"--feature-set {args.feature_set} does not match cache feature_set {train_feature_set}",
                 file=sys.stderr,
             )
             return 2
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=lambda batch: collate_cache(batch, device),
-        )
+        train_loader = None
+        if train_dataset is not None:
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=args.batch_size,
+                shuffle=True,
+                collate_fn=lambda batch: collate_cache(batch, device),
+            )
         validation_loader = DataLoader(
             validation_dataset,
             batch_size=args.batch_size,
@@ -718,7 +828,8 @@ def main() -> int:
         dataset_metadata = {
             "train_cache": str(args.train_cache),
             "validation_cache": str(args.validation_cache),
-            "train_rows": len(train_dataset),
+            "train_rows": train_rows_total,
+            "train_shards": len(train_shard_paths),
             "validation_rows": len(validation_dataset),
             "feature_set": args.feature_set,
             "feature_count": feature_count_for(args.feature_set),
@@ -736,7 +847,7 @@ def main() -> int:
         (run_dir / "config.json").write_text(json.dumps(json_ready(training_config), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     print(
-        f"[train] device={device} train={len(train_dataset)} validation={len(validation_dataset)} "
+        f"[train] device={device} train={len(train_dataset) if csv_mode or train_dataset is not None else train_rows_total} validation={len(validation_dataset)} "
         f"hidden={args.hidden_size} batch={args.batch_size} epochs={args.epochs} "
         f"architecture={args.architecture} l2={args.l2_size} l3={args.l3_size} "
         f"feature_set={args.feature_set} feature_count={feature_count_for(args.feature_set)} "
@@ -813,40 +924,64 @@ def main() -> int:
         model.train()
         total_loss = 0.0
         total = 0
-        batch_count = len(train_loader)
-        for batch_index, batch in enumerate(train_loader, start=1):
-            optimizer.zero_grad(set_to_none=True)
-            prediction = model(
-                batch.white,
-                batch.white_mask,
-                batch.black,
-                batch.black_mask,
-                batch.side_to_move,
-                batch.white_threat,
-                batch.white_threat_mask,
-                batch.black_threat,
-                batch.black_threat_mask,
-            )
-            loss = objective_loss(
-                prediction,
-                batch.target,
+        if not cache_mode or train_loader is not None:
+            assert train_loader is not None
+            train_rows_for_epoch = len(train_dataset)
+            batch_count = len(train_loader)
+            loader_loss, loader_total, _, _ = train_one_loader(
+                model,
+                train_loader,
+                optimizer,
                 loss_fn,
-                args.loss_mode,
-                args.target_scale,
-                args.shaped_weight,
+                args,
+                epoch,
+                0,
+                batch_count,
+                0,
+                train_rows_for_epoch,
             )
-            loss.backward()
-            optimizer.step()
-            batch_size = int(batch.target.numel())
-            total_loss += float(loss.detach()) * batch_size
-            total += batch_size
-            if batch_index % args.batch_progress_every == 0 or batch_index == batch_count:
-                print(
-                    f"[train] epoch={epoch}/{args.epochs} batch={batch_index}/{batch_count} "
-                    f"rows={total}/{len(train_dataset)} loss={total_loss / max(1, total):.3f}",
-                    file=sys.stderr,
-                    flush=True,
+            total_loss += loader_loss
+            total += loader_total
+        else:
+            shard_order = list(range(len(train_shard_paths)))
+            random.shuffle(shard_order)
+            capped_rows = train_rows_total
+            if args.max_train_rows > 0:
+                capped_rows = min(capped_rows, args.max_train_rows)
+            batch_count = max(1, (capped_rows + args.batch_size - 1) // args.batch_size)
+            batch_offset = 0
+            row_offset = 0
+            remaining_rows = capped_rows
+            for shard_index in shard_order:
+                if remaining_rows <= 0:
+                    break
+                shard_path = train_shard_paths[shard_index]
+                shard_limit = min(remaining_rows, train_shard_rows[shard_index])
+                shard_dataset = CachedNnueDataset(shard_path, shard_limit)
+                shard_loader = DataLoader(
+                    shard_dataset,
+                    batch_size=args.batch_size,
+                    shuffle=True,
+                    collate_fn=lambda batch: collate_cache(batch, device),
                 )
+                loader_loss, loader_total, loader_batches, row_offset = train_one_loader(
+                    model,
+                    shard_loader,
+                    optimizer,
+                    loss_fn,
+                    args,
+                    epoch,
+                    batch_offset,
+                    batch_count,
+                    row_offset,
+                    capped_rows,
+                )
+                total_loss += loader_loss
+                total += loader_total
+                batch_offset += loader_batches
+                remaining_rows -= loader_total
+                del shard_loader
+                del shard_dataset
         train_loss = total_loss / max(1, total)
         validation = evaluate(
             model,

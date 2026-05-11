@@ -248,6 +248,92 @@ python3 tools/train_nnue.py \
 
 Managed runs write `config.json`, `metrics.csv`, `metrics.jsonl`, `last.pt`, `best.pt`, `best.nnue`, `holdout_report.txt`, `holdout_metrics.json`, and `parity_report.txt` inside `--run-dir`. `best.pt` is selected by validation MAE; holdout is reported after training and is not used to choose the best checkpoint.
 
+Import a 20M-row combined dataset from the public Lichess Stockfish evaluation dump plus the existing canonical Kaggle rows:
+
+```bash
+mkdir -p data/raw/lichess_evals
+curl -L \
+  -o data/raw/lichess_evals/lichess_db_eval.jsonl.zst \
+  https://database.lichess.org/lichess_db_eval.jsonl.zst
+
+.venv/bin/python tools/import_lichess_evaluations.py \
+  --input data/raw/lichess_evals/lichess_db_eval.jsonl.zst \
+  --seed-dataset runs/nnue/kaggle/train.csv \
+  --seed-dataset runs/nnue/kaggle/validation.csv \
+  --seed-dataset runs/nnue/kaggle/holdout.csv \
+  --output-dir runs/nnue/lichess-v9-20m \
+  --target-total-rows 20000000 \
+  --min-depth 12 \
+  --clip-cp 1500 \
+  --validation-fraction 0.05 \
+  --holdout-fraction 0.05 \
+  --stratify phase-score-sign \
+  --progress-every 100000
+
+.venv/bin/python tools/analyze_nnue_dataset.py \
+  --dataset runs/nnue/lichess-v9-20m/train.csv \
+  --workers 8
+
+.venv/bin/python tools/build_nnue_feature_cache.py \
+  --dataset runs/nnue/lichess-v9-20m/train.csv \
+  --output runs/nnue/lichess-v9-20m/train_cache_halfka_v2_hm_full_threats.json \
+  --feature-set halfka-v2-hm-full-threats \
+  --progress-every 100000 \
+  --workers 8 \
+  --chunk-size 10000 \
+  --shard-rows 250000
+
+.venv/bin/python tools/build_nnue_feature_cache.py \
+  --dataset runs/nnue/lichess-v9-20m/validation.csv \
+  --output runs/nnue/lichess-v9-20m/validation_cache_halfka_v2_hm_full_threats.pt \
+  --feature-set halfka-v2-hm-full-threats \
+  --progress-every 100000 \
+  --workers 4 \
+  --chunk-size 10000
+
+.venv/bin/python tools/train_nnue.py \
+  --train-cache runs/nnue/lichess-v9-20m/train_cache_halfka_v2_hm_full_threats.json \
+  --validation-cache runs/nnue/lichess-v9-20m/validation_cache_halfka_v2_hm_full_threats.pt \
+  --run-dir runs/nnue/lichess-v9-20m/v9-halfka-v2-hm-full-threats-1024x31x32-001 \
+  --epochs 48 \
+  --batch-size 4096 \
+  --hidden-size 1024 \
+  --architecture sf-lite \
+  --l2-size 31 \
+  --l3-size 32 \
+  --holdout-dataset runs/nnue/lichess-v9-20m/holdout.csv \
+  --export-best \
+  --parity-engine ./build-release/chess_uci \
+  --parity-limit 256
+```
+
+The Lichess importer reads `.zst` through `zstdcat`, `pzstd`, or the Python `zstandard` package. By default it rejects nonstandard material positions, including bad king counts, more than 32 pieces, too many pieces for one side, too many pawns, pawns on back ranks, and adjacent kings. The default `phase-score-sign` stratifier balances phase, score magnitude, and positive/negative labels. The 20M full-threats train cache must be sharded under typical desktop RAM limits; the JSON manifest points to per-shard `.pt` files, and the trainer streams those shards one at a time.
+
+After training v9, compare it without a gauntlet:
+
+```bash
+./build-release/chess_bench \
+  --suite epd \
+  --epd runs/benchmarks/stockfish-tuning/full-threats-1024-stockfish1850.epd \
+  --depth 5 \
+  --hash 64 \
+  --eval-type nnue \
+  --nnue runs/nnue/lichess-v9-20m/v9-halfka-v2-hm-full-threats-1024x31x32-001/best.nnue \
+  --threads 1 \
+  --csv \
+  --progress > runs/benchmarks/stockfish-tuning/v9-20m-strict-depth5.csv
+
+./build-release/chess_bench \
+  --suite tactics \
+  --depth 5 \
+  --hash 64 \
+  --eval-type nnue \
+  --nnue runs/nnue/lichess-v9-20m/v9-halfka-v2-hm-full-threats-1024x31x32-001/best.nnue \
+  --threads 1 \
+  --csv \
+  --progress > runs/benchmarks/stockfish-tuning/v9-20m-tactics-depth5.csv
+```
+
 For apples-to-apples comparison against the older one-layer NNUE baseline:
 
 ```bash
